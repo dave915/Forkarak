@@ -38,6 +38,11 @@ fn main() {
             ui::bind_keys(cx);
             gpui_kit::open_window(
                 WindowOptions {
+                    titlebar: Some(TitlebarOptions {
+                        title: None,
+                        appears_transparent: true,
+                        traffic_light_position: Some(point(px(15.), px(18.))),
+                    }),
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                         None,
                         size(px(1440.), px(900.)),

@@ -997,16 +997,15 @@ impl Pokarak {
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "저장소를 선택하세요".into());
-        div()
+        let content = div()
             .h(px(52.))
+            .w_full()
             .flex_none()
             .px_4()
             .flex()
             .items_center()
             .gap_2()
             .bg(rgb(SIDE))
-            .border_b_1()
-            .border_color(rgb(LINE))
             .child(
                 Icon::new(IconName::Utensils)
                     .data(include_bytes!("../../../assets/icons/spork.svg").as_slice())
@@ -1065,10 +1064,16 @@ impl Pokarak {
             .child(
                 Button::new("open")
                     .icon(IconName::FolderOpen)
-                    .label("저장소 열기")
+                    .label("프로젝트 열기")
                     .small()
                     .on_click(cx.listener(|this, _, w, cx| this.choose_repository(w, cx))),
-            )
+            );
+        gpui_kit::component::TitleBar::new()
+            .h(px(52.))
+            .pl(px(90.))
+            .bg(rgb(SIDE))
+            .border_b_0()
+            .child(content)
             .into_any_element()
     }
 

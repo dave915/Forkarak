@@ -4,6 +4,8 @@
 //! bounded by a deadline and output limits. Credentials/SSH configuration are
 //! inherited. Explicit writes honor configured Git hooks; submodule operations
 //! are not recursive.
+pub mod workflow;
+
 use anyhow::{Context, Result, bail, ensure};
 use std::{
     io::{self, Read},

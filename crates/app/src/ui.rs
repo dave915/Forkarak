@@ -1,6 +1,7 @@
 mod analysis_feedback;
 mod file_icons;
 mod git_actions;
+mod git_history;
 mod git_workflow;
 mod reader_navigation;
 use analysis_feedback::AnalysisFeedback;
@@ -60,6 +61,7 @@ actions!(
         OpenSettings,
         OpenGitActions,
         OpenGitWorkflow,
+        OpenGitHistory,
         CloseFile,
         CloseProject,
         CloseAllProjects,
@@ -96,7 +98,10 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("프로젝트 닫기", CloseProject),
             MenuItem::action("모든 프로젝트 닫기", CloseAllProjects),
         ]),
-        Menu::new("Git").items([MenuItem::action("Git 작업 및 저장소 설정…", OpenGitActions)]),
+        Menu::new("Git").items([
+            MenuItem::action("Git 작업 및 저장소 설정…", OpenGitActions),
+            MenuItem::action("커밋 그래프 / 기록…", OpenGitHistory),
+        ]),
         Menu::new("탐색").items([
             MenuItem::action("파일 찾기", FindFile),
             MenuItem::action("본문 검색", FindText),
@@ -112,6 +117,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-shift-g", OpenGitWorkflow, None),
+        KeyBinding::new("cmd-alt-h", OpenGitHistory, None),
         KeyBinding::new("cmd-w", CloseFile, None),
         KeyBinding::new("cmd-shift-w", CloseProject, None),
         KeyBinding::new("cmd-alt-down", NextWorktree, None),
@@ -179,6 +185,7 @@ struct FileRow {
 }
 
 pub struct Pokarak {
+    git_history: git_history::HistoryUi,
     workflow: git_workflow::WorkflowUi,
     focus: FocusHandle,
     prefs: Preferences,
@@ -598,6 +605,7 @@ impl Pokarak {
         }));
         let mut this = Self {
             workflow: git_workflow::WorkflowUi::default(),
+            git_history: git_history::HistoryUi::default(),
             focus: cx.focus_handle(),
             prefs,
             current: None,
@@ -3029,6 +3037,7 @@ impl Render for Pokarak {
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
         div().id("pokarak").key_context("Pokarak").track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
+            .on_action(cx.listener(|this,_:&OpenGitHistory,w,cx|this.open_git_history(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitWorkflow,w,cx|this.open_git_workflow(w,cx)))
             .on_action(cx.listener(|this,_:&OpenSettings,w,cx|this.open_settings(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitActions,w,cx|this.open_git_actions(w,cx)))
@@ -3045,8 +3054,8 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&Forward,w,cx|this.navigate_history(false,w,cx)))
             .on_action(cx.listener(|this,_:&FindFile,w,cx|this.focus_search(false,w,cx)))
             .on_action(cx.listener(|this,_:&FindText,w,cx|this.focus_search(true,w,cx)))
-            .on_action(cx.listener(|this,_:&FindReferences,w,cx|this.request_navigation(NavigationKind::References,None,w,cx)))
-            .on_action(cx.listener(|this,_:&FindDefinition,w,cx|this.request_navigation(NavigationKind::Definition,None,w,cx)))
+            .on_action(cx.listener(|this,_:&FindReferences,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::References,None,w,cx)}}))
+            .on_action(cx.listener(|this,_:&FindDefinition,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::Definition,None,w,cx)}}))
             .on_action(cx.listener(|this,_:&ToggleCode,_,cx|{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}))
             .child(self.render_toolbar(cx))
             .when(!self.projects.is_empty(),|d|d.child(self.render_projects(cx)))

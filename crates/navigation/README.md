@@ -1,0 +1,112 @@
+# Pokarak navigation
+
+A synchronous, read-only stdio LSP client. The app must obtain project trust **before creating a Navigator**, run all navigation, refresh, and shutdown calls on a background thread, and associate every pending UI operation with its worktree/generation. Switching worktrees must discard old UI responses. A Navigator never changes roots or shares a process/document cache with another instance.
+
+The scaffold contracts are unchanged:
+
+```rust,ignore
+let mut navigator = Navigator::new(worktree_root, default_configs());
+let result = navigator.navigate(&file, line0, column_utf16, NavigationKind::Definition)?;
+let status = navigator.status();
+navigator.shutdown();
+```
+
+`References` includes declarations; `Implementation` uses `targetSelectionRange` for LocationLink results. Locations use absolute filesystem paths, zero-based lines, and UTF-16 columns. A completed empty LSP response is semantic with no matches. Missing servers, unsupported methods, crashes, timeouts, malformed responses, and source changes during a request return errors, never fabricated semantic results. There is no text-search fallback.
+
+## Server configuration
+
+`default_configs()` discovers executables on absolute entries of the inherited PATH without executing them. It returns entries for:
+
+| Family | File extensions | Default executable and argv |
+| --- | --- | --- |
+| TypeScript / JavaScript | ts, mts, cts, tsx, js, mjs, cjs, jsx | `typescript-language-server`, `['--stdio']` |
+| Java | java | `jdtls`, `['-data', '{workspace}', '-configuration', '{workspace}/configuration']` |
+| Kotlin | kt, kts | `kotlin-language-server`, `[]` |
+
+An unavailable executable remains in the configuration so navigation can explain what is missing. Discovery does not search project node_modules or run npx. Executables are launched with `Command::new(program).args(args)`, with no shell interpolation. Programs must be absolute paths or bare names on PATH; `~`, `$VARIABLE`, wildcards, and relative executable paths are not expanded. A GUI launch may have a smaller PATH than a terminal: use absolute paths when needed.
+
+`Navigator::new` loads `~/.config/pokarak/language-servers.json` and merges its `servers` into the supplied configurations by normalized language ID. Exact IDs override the family entry. Malformed configuration makes `status()` and navigation report a setup error; it is never silently ignored. Missing files are fine. The default configuration location intentionally uses HOME, not the inspected repository.
+
+Schema (all fields shown; `servers` and `allowProjectImports` are optional):
+
+```json
+{
+  "servers": [
+    {
+      "language": "typescript",
+      "program": "/absolute/path/to/typescript-language-server",
+      "args": ["--stdio"]
+    },
+    {
+      "language": "java",
+      "program": "/absolute/path/to/jdk/bin/java",
+      "args": [
+        "-Declipse.application=org.eclipse.jdt.ls.core.id1",
+        "-Dosgi.bundles.defaultStartLevel=4",
+        "-Declipse.product=org.eclipse.jdt.ls.core.product",
+        "--add-modules=ALL-SYSTEM",
+        "--add-opens", "java.base/java.util=ALL-UNNAMED",
+        "--add-opens", "java.base/java.lang=ALL-UNNAMED",
+        "-jar", "/absolute/path/to/jdtls/plugins/org.eclipse.equinox.launcher_VERSION.jar",
+        "-configuration", "/absolute/path/to/jdtls/config_mac",
+        "-data", "{workspace}"
+      ]
+    },
+    {
+      "language": "kotlin",
+      "program": "/absolute/path/to/kotlin-language-server",
+      "args": []
+    }
+  ],
+  "allowProjectImports": false
+}
+```
+
+Each server requires exactly `language: string`, `program: string`, and `args: string[]`. Unknown fields and languages are errors. Supported IDs are `typescript`, `typescriptreact`, `javascript`, `javascriptreact`, `java`, and `kotlin`; aliases `ts`, `tsx`, `js`, `jsx`, `kt`, `kts`, and `js/ts` are accepted. A `typescript` entry covers the entire JS/TS family. Identical family/program/argv configurations share a server only **within** that Navigator.
+
+Literal `{root}` and `{workspace}` tokens in argv are replaced with the canonical worktree path and an instance-specific temporary state directory. They remain single argv values, including paths containing spaces. Java `-data` is always set to an isolated directory (supplied `-data` paths are replaced); it is added if absent. State/log directories are outside the repository and removed after process cleanup. The default JDT wrapper also receives its own `-configuration` directory. With a custom Java launcher, supply the appropriate installed platform configuration yourself. Avoid launcher flags that write project outputs.
+
+Java and Kotlin server runtimes are distinct from a project's language level. A Java 17 project does not mean a current JDT server can run on Java 17. The [JDT upstream requirements](https://github.com/eclipse-jdtls/eclipse.jdt.ls#requirements) currently specify Java 25 for the latest server; check the requirement of the version you installed. An explicit JDK executable in the configuration avoids changing the project's JDK. Startup errors include exit status, a bounded stderr tail, and runtime guidance. This crate never installs or upgrades a JDK. JVM semantic behavior has **not** been validated on this machine.
+
+Kotlin's default entry supports the existing fwcd stdio server; alternative installed servers can be configured with their own program/argv. The [fwcd server documentation](https://github.com/fwcd/kotlin-language-server#figuring-out-the-dependencies) describes automatic Maven/Gradle and classpath-script execution during initialization. Kotlin startup is therefore blocked until `allowProjectImports: true` or `NavigatorOptions::allow_project_imports = true` is explicitly enabled. That opt-in also enables JDT Maven/Gradle imports. It is separate from ordinary project trust and may let the configured server run project tools or resolve dependencies. No imports were enabled during the tests here.
+
+Without that opt-in, JDT gets disabled Maven/Gradle imports, disabled automatic build-configuration updates, and disabled autobuild. The TS server receives `disableAutomaticTypingAcquisition: true` and `tsserver.useSyntaxServer: "never"`; the latter prevents early definition requests from being answered by the adapter's partial syntax-only project. Its logs are directed outside the repository. Pokarak never sends build/install/execute-command requests, rejects server-initiated workspace edits and unsupported commands, and never executes project setup commands. External language servers are trusted executables, not sandboxed processes; a custom server is responsible for respecting these settings.
+
+## Lifecycle and boundaries
+
+- Construction only resolves the root and configuration. A server starts lazily on the first navigation for its configuration. No indexing is needed to view a file.
+- Roots resolve symlinks and ascend to the nearest `.git` directory **or file**, preserving linked-worktree boundaries. For non-Git directories the supplied canonical directory remains the root.
+- Requests use one `rootUri`/workspace folder and a root-specific process cwd. Relative source paths resolve against that root. Arbitrary external request paths are rejected; dependency sources returned by this Navigator can subsequently be navigated.
+- Dependency locations outside the root are accepted. Results and requests in another worktree sharing the same Git common directory are rejected, including symlink aliases. Non-file URIs such as `jdt:`/`jar:` are skipped with an explicit result-status explanation; archive source extraction is not implemented.
+- URI encoding handles spaces, percent signs, hashes, Unicode, and supplementary characters. Input columns are validated as UTF-16 boundaries. Only UTF-16 position encoding is negotiated.
+- `didOpen` sends disk text once. Before each request, all previously opened documents are reread and changed text gets a versioned `didChange`, using full text or a whole-document incremental range according to server capabilities. Deleted documents get `didClose`. `refresh()` is an additive API for the app's external-change notification path; there is no autonomous filesystem watcher. The server remains responsible for unopened files and project/configuration-file watching. Restart analysis if those project inputs change without a server watcher.
+- Disk changes while a request is outstanding invalidate its result. This does not resolve historical diffs against a different worktree; callers must request live source positions only.
+- Initialize defaults to 30 seconds, navigation to 10 seconds, and graceful shutdown to 2 seconds per server. `Navigator::with_options` accepts `NavigatorOptions` to change these bounds and optionally disable user overrides with `config_file: None`.
+- Framed JSON-RPC handles fragmented reads, interleaved notifications, unrelated IDs, and server requests for configuration, workspace folders, progress, and message choices. Unsupported client methods receive `-32601`; workspace edits receive `applied: false`. Dynamic registration and custom server commands are not supported.
+- Header/body limits are 8 KiB/16 MiB, source files 8 MiB, and stderr capture retains the last 16 KiB per process. Bounded writer acknowledgments prevent a server which stops consuming stdin from blocking navigation indefinitely. Timeout/error sessions are killed and discarded; a later explicit request can start afresh.
+- Explicit `shutdown()` and Drop attempt `shutdown`/`exit`, then kill and reap the direct child. On Unix, a dedicated process group also cleans up tsserver and other descendants. Detached process groups are outside this guarantee. Worker-thread joins are bounded. Windows descendant cleanup is not implemented (macOS is the target).
+- `root()`, `refresh()`, `stderr()`, `path_to_uri()`, `uri_to_path()`, `discover_program()`, and `with_options()` are additive APIs. `status()` checks child exit state even between requests.
+
+## Verification
+
+Run from the repository with Cargo on PATH. In Herdr use `hc run --bg` and `hc wait` as required by the project instructions.
+
+```sh
+PATH=/Users/han/.cargo/bin:$PATH cargo test -p pokarak-navigation --features test-server
+PATH=/Users/han/.cargo/bin:$PATH cargo clippy -p pokarak-navigation --all-targets --features test-server -- -D warnings
+```
+
+The feature builds a deterministic Rust mock stdio peer used by integration tests. It is not part of a normal application build. Tests create isolated temporary Git repositories; no user repository is used as a test fixture. Coverage includes framing, UTF-16/URI handling, lifecycle, full/incremental disk synchronization, Location/LocationLink, references, server requests/errors/exits/timeouts, configuration, dependency sources, actual linked worktrees, and shutdown/descendant cleanup.
+
+The ignored real TypeScript test installs nothing. To run it, explicitly install tools in a **separate temporary tools folder**, then supply the installed executable:
+
+```sh
+tools_dir=$(mktemp -d /tmp/pokarak-ts-tools.XXXXXX)
+npm install --prefix "$tools_dir" --ignore-scripts --no-audit --no-fund typescript-language-server typescript@6
+PATH=/Users/han/.cargo/bin:$PATH POKARAK_TS_SERVER="$tools_dir/node_modules/.bin/typescript-language-server" \
+  cargo test -p pokarak-navigation --test typescript -- --ignored --nocapture
+```
+
+Use the TypeScript 6 compatibility release for this adapter (the TypeScript 7 package no longer supplies the tsserver.js it expects). Node must also be on the child process PATH. The test checks real TS definition/references/implementation, TSX/JSX imports, a UTF-16 callsite, edits to an open imported file, and independent roots. It verifies that no node_modules, tsserver logs, or compiler outputs appear in its fixture repositories. It provides no JVM validation claim.
+
+Protocol reference: [Language Server Protocol 3.17](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/). TypeScript initialization settings: [typescript-language-server configuration](https://github.com/typescript-language-server/typescript-language-server/blob/master/docs/configuration.md).

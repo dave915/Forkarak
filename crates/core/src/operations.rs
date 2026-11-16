@@ -9,7 +9,8 @@ use std::{
     io::{self, Read},
     os::{fd::AsRawFd, unix::process::CommandExt},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -115,12 +116,53 @@ pub struct OperationOutput {
     pub truncated: bool,
 }
 
+/// Cancellation for one explicitly owned operation, including its SSH/hook
+/// children. Attach before execution. Cancelling also prevents subsequent
+/// commands in a multi-step operation from starting.
+#[derive(Debug, Clone, Default)]
+pub struct OperationCancellation {
+    state: Arc<Mutex<OperationProcess>>,
+}
+
+#[derive(Debug, Default)]
+struct OperationProcess {
+    cancelled: bool,
+    child: Option<Child>,
+}
+
+impl OperationCancellation {
+    /// Synchronously terminate and reap only this handle's owned child group.
+    /// Call from app/window shutdown before dropping its background task.
+    pub fn cancel(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.cancelled = true;
+        if let Some(mut child) = state.child.take() {
+            // SAFETY: this Child was spawned in a new process group by capture.
+            // The mutex serializes spawning, reaping and cancellation; no PID
+            // discovered from a process listing or another job is ever used.
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .cancelled
+    }
+}
+
 /// A handle to one worktree. Call from a background task and serialize writes
 /// in the caller. Git's own locks and worktree protections remain in effect.
 #[derive(Debug, Clone)]
 pub struct GitOperations {
     root: PathBuf,
     timeout: Duration,
+    cancellation: OperationCancellation,
     #[cfg(test)]
     global_config: Option<PathBuf>,
 }
@@ -144,12 +186,20 @@ impl GitOperations {
                 .canonicalize()
                 .context("The selected worktree no longer exists")?,
             timeout,
+            cancellation: OperationCancellation::default(),
             #[cfg(test)]
             global_config: None,
         };
         let root = this.metadata(&["rev-parse", "--show-toplevel"])?;
         this.root = crate::git::path(root.strip_suffix(b"\n").unwrap_or(&root)).canonicalize()?;
         Ok(this)
+    }
+
+    /// Share this job's lifetime with its UI owner. The owner must cancel on
+    /// shutdown; normal UI close/quit should first guard in-flight writes.
+    pub fn with_cancellation(mut self, cancellation: OperationCancellation) -> Self {
+        self.cancellation = cancellation;
+        self
     }
 
     pub fn root(&self) -> &Path {
@@ -594,7 +644,12 @@ impl GitOperations {
     }
 
     fn run(&self, args: &[&str]) -> Result<Captured> {
-        capture(self.command(args), self.timeout)
+        self.run_command(self.command(args))
+    }
+
+    // Child operation modules use this for per-command environment changes.
+    fn run_command(&self, command: Command) -> Result<Captured> {
+        capture(command, self.timeout, &self.cancellation)
             .with_context(|| format!("Git in {}", self.root.display()))
     }
 }
@@ -712,12 +767,39 @@ fn drain(
     Ok(false)
 }
 
-fn capture(mut command: Command, timeout: Duration) -> Result<Captured> {
-    let mut child = command
-        .spawn()
-        .context("Cannot launch Git; install Git and ensure it is on PATH")?;
-    let mut stdout = child.stdout.take().expect("piped stdout");
-    let mut stderr = child.stderr.take().expect("piped stderr");
+fn capture(
+    mut command: Command,
+    timeout: Duration,
+    cancellation: &OperationCancellation,
+) -> Result<Captured> {
+    // Register the Child under the same lock used by shutdown. Cancellation can
+    // never fall into a gap between checking a flag and starting a write.
+    let (mut stdout, mut stderr) = {
+        let mut state = cancellation
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        ensure!(
+            !state.cancelled,
+            "Git operation cancelled; refresh repository state before retrying"
+        );
+        ensure!(
+            state.child.is_none(),
+            "Another command is already running in this Git job"
+        );
+        command
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .context("Cannot launch Git; install Git and ensure it is on PATH")?;
+        let stdout = child.stdout.take().context("Git stdout must be piped")?;
+        let stderr = child.stderr.take().context("Git stderr must be piped")?;
+        state.child = Some(child);
+        (stdout, stderr)
+    };
     let result = (|| {
         nonblocking(&stdout)?;
         nonblocking(&stderr)?;
@@ -728,7 +810,6 @@ fn capture(mut command: Command, timeout: Duration) -> Result<Captured> {
             truncated: false,
         };
         let deadline = Instant::now() + timeout;
-        let mut status = None;
         loop {
             let out_done = drain(
                 &mut stdout,
@@ -742,16 +823,27 @@ fn capture(mut command: Command, timeout: Duration) -> Result<Captured> {
                 ERROR_LIMIT,
                 &mut output.truncated,
             )?;
-            if status.is_none() {
-                status = child.try_wait()?;
-            }
-            if let Some(status) = status
+            let mut state = cancellation
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            ensure!(
+                !state.cancelled,
+                "Git operation cancelled; refresh repository state before retrying because it may have partially completed"
+            );
+            if let Some(status) = state
+                .child
+                .as_mut()
+                .context("Git process is no longer owned by this job")?
+                .try_wait()?
                 && out_done
                 && err_done
             {
                 output.code = status.code();
+                state.child.take();
                 return Ok(output);
             }
+            drop(state);
             ensure!(
                 Instant::now() < deadline,
                 "Git timed out after {} seconds. Check connectivity and your credential helper/SSH agent, then refresh repository state before retrying; the operation may have partially completed.",
@@ -761,13 +853,7 @@ fn capture(mut command: Command, timeout: Duration) -> Result<Captured> {
         }
     })();
     if result.is_err() {
-        // Kill the complete process group, including SSH/credential helpers.
-        // SAFETY: negative child PID addresses its newly created process group.
-        unsafe {
-            libc::kill(-(child.id() as i32), libc::SIGKILL);
-        }
-        let _ = child.kill();
-        let _ = child.wait();
+        cancellation.cancel();
     }
     result
 }
@@ -1311,7 +1397,12 @@ mod tests {
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
             .process_group(0);
-        let result = capture(output, Duration::from_secs(10)).unwrap();
+        let result = capture(
+            output,
+            Duration::from_secs(10),
+            &OperationCancellation::default(),
+        )
+        .unwrap();
         assert!(result.truncated);
         assert_eq!(result.stdout.len(), OUTPUT_LIMIT);
         assert_eq!(result.stderr.len(), ERROR_LIMIT);
@@ -1326,12 +1417,67 @@ mod tests {
         .process_group(0);
         let start = Instant::now();
         assert!(
-            capture(slow, Duration::from_millis(150))
-                .unwrap_err()
-                .to_string()
-                .contains("timed out")
+            capture(
+                slow,
+                Duration::from_millis(150),
+                &OperationCancellation::default()
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("timed out")
         );
         assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn cancellation_reaps_owned_child_and_prevents_followup_writes() {
+        let f = Fixture::new();
+        let token = OperationCancellation::default();
+        let mut unrelated = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let mut command = Command::new("/usr/bin/python3");
+        command
+            .args([
+                "-c",
+                "import subprocess, time; subprocess.Popen(['/bin/sleep', '30']); time.sleep(30)",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null());
+        let worker_token = token.clone();
+        let worker =
+            thread::spawn(move || capture(command, Duration::from_secs(30), &worker_token));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while token.state.lock().unwrap().child.is_none() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(5));
+        }
+        token.cancel();
+        assert!(
+            worker
+                .join()
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("cancelled")
+        );
+        assert!(token.state.lock().unwrap().child.is_none());
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "unrelated process must remain alive"
+        );
+        unrelated.kill().unwrap();
+        unrelated.wait().unwrap();
+        let op = f.op().with_cancellation(token);
+        assert!(
+            op.execute(&Operation::CreateBranch {
+                name: "must-not-exist".into()
+            })
+            .is_err()
+        );
+        assert_eq!(
+            f.git(&["for-each-ref", "--format=%(refname)", "refs/heads/"]),
+            "refs/heads/main"
+        );
     }
 
     #[test]

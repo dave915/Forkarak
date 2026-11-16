@@ -11,7 +11,9 @@ Mode: operate/read. A compact developer review surface, with a steel spork mark 
 
 ## First viewport
 Seamless custom native titlebar: native traffic lights, product mark/name, repository name, open project, refresh and navigation. No separate gray OS title strip or duplicate title. Project tabs sit directly below in the same background. Comparison and analysis controls follow.
-Left 210px: worktrees with branch, local path and change count. Middle 270px: changed files/all files and search. Remaining width: selected file header, diff/code modes, native code surface. Footer: worktree path and loading/analysis status. The worktree sidebar has no explanatory footer caption.
+Repositories open in Git Graph mode. A 38px mode bar switches between Git Graph and Code View, with Stage / Commit directly available. Left 210px: worktrees/branches. The remaining area has a vertically resizable commit graph above the selected commit detail. Graph rows show branch labels, message, author, date and hash; a working-changes row opens the current files. The lower detail has a resizable changed-file list and read-only historical diff/code, with explicit merge-parent selection and guarded cherry-pick/revert actions.
+
+Code View retains the existing changed files/all files, search and current-file reader, including per-worktree reading positions and language navigation. File/text search switches to Code View. Historical editors never invoke current-source language navigation. Project/worktree opens return to the graph and reject old asynchronous history results. Footer: worktree path and loading/analysis status. The worktree sidebar has no explanatory footer caption.
 
 ## Signature behavior
 Each worktree restores its exact reading context. The current comparison and worktree stay visible as the code reader moves through definitions and back. New filesystem data prompts refresh without yanking the current reading position.

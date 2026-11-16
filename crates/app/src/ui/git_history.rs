@@ -1,5 +1,6 @@
 //! Dedicated immutable history view. Its editors never enter working-tree
 //! documents/navigation, and writes use the existing Git job lifecycle.
+mod home;
 use super::*;
 use pokarak_core::history::{self, Commit, CommitDetail, GraphRow, HistoryCursor, HistoryEntry};
 use pokarak_core::operations::{
@@ -9,7 +10,7 @@ use pokarak_core::operations::{
 
 #[derive(Default)]
 pub(super) struct HistoryUi {
-    active: bool,
+    pub(super) active: bool,
     root: Option<PathBuf>,
     request: u64,
     loading: bool,
@@ -23,7 +24,23 @@ pub(super) struct HistoryUi {
     editor: Option<Entity<EditorState>>,
     code: bool,
     scroll: UniformListScrollHandle,
+    files_scroll: UniformListScrollHandle,
     error: Option<String>,
+}
+
+impl HistoryUi {
+    fn reset(&mut self, active: bool) {
+        let request = self.request + 1;
+        *self = Self {
+            active,
+            request,
+            ..Self::default()
+        };
+    }
+
+    fn accepts_read(&self, request: u64, root: &Path) -> bool {
+        self.active && self.request == request && self.root.as_deref() == Some(root)
+    }
 }
 impl Pokarak {
     fn history_read<T: Send + 'static>(
@@ -53,8 +70,7 @@ impl Pokarak {
                     return;
                 }
                 app.git_history.loading = false;
-                if !app.git_history.active
-                    || !window.has_active_dialog(cx)
+                if !app.git_history.accepts_read(token, &root)
                     || app.current.as_ref() != Some(&root)
                     || app.request != navigation_generation
                     || app.git_is_busy()
@@ -90,6 +106,7 @@ impl Pokarak {
         self.git_history.document = None;
         self.git_history.editor = None;
         self.git_history.scroll = UniformListScrollHandle::new();
+        self.git_history.files_scroll = UniformListScrollHandle::new();
         self.git_history.error = None;
         self.git_history.limit_reached = false;
         self.git_history.shallow = false;
@@ -112,63 +129,34 @@ impl Pokarak {
                     )
                 }
             },
-            |app, page, _, _| {
+            move |app, page, window, cx| {
                 app.git_history.entries.extend(page.entries);
                 app.git_history.cursor = page.next;
                 app.git_history.limit_reached = page.limit_reached;
                 app.git_history.shallow = page.shallow;
+                if first {
+                    let head = app.snapshot().map(|s| s.worktree.head.as_str());
+                    let selected = app
+                        .git_history
+                        .entries
+                        .iter()
+                        .find(|entry| Some(entry.commit.oid.as_str()) == head)
+                        .or_else(|| app.git_history.entries.first())
+                        .map(|entry| entry.commit.oid.clone());
+                    if let Some(oid) = selected {
+                        app.load_history_detail(oid, 0, window, cx);
+                    }
+                }
             },
             window,
             cx,
         );
     }
     fn show_history_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.close_all_dialogs(cx);
         self.git_history.active = true;
-        let weak = cx.entity().downgrade();
-        let closing = weak.clone();
-        window.open_dialog(cx, move |dialog, _, cx| {
-            let Some(view) = weak.upgrade() else { return dialog; };
-            let app = view.read(cx);
-            let ui = &app.git_history;
-            let palette = Palette::new(cx);
-            let busy = history_disabled(app);
-            let graph_width = (ui.entries.iter().map(|e| e.graph.columns).max().unwrap_or(1) * 14 + 12) as f32;
-            let entries = ui.entries.clone();
-            let target = weak.clone();
-            let list = uniform_list("history-commits", entries.len(), move |range, _, _| {
-                range.map(|index| {
-                    let entry = &entries[index];
-                    let commit = entry.commit.clone();
-                    let oid = commit.oid.clone();
-                    let row_target = target.clone();
-                    let label = format!("{} {} {} {} {}", short(&commit.oid), commit.subject, commit.author, commit.date, commit.refs.join(", "));
-                    let refs = commit.refs.iter().map(|r| r.strip_prefix("refs/").unwrap_or(r)).collect::<Vec<_>>().join(", ");
-                    div().h(px(48.)).w_full().flex().items_center()
-                        .child(graph_view(entry.graph.clone(), graph_width, palette))
-                        .child(Button::new(("history-row", index)).ghost().small().w_full().h(px(48.)).min_w_0().justify_start()
-                            .tooltip(label.clone()).accessibility_label(label).disabled(busy)
-                            .child(div().v_flex().w_full().min_w_0().items_start()
-                                .child(div().w_full().text_ellipsis().child(format!("{}  {}", short(&commit.oid), visible(&commit.subject))))
-                                .child(div().w_full().text_size(px(11.)).text_color(palette.rgb(MUTED)).text_ellipsis().child(format!("{}  {}  {}", visible(&commit.author), commit.date, refs))))
-                            .on_click(move |_, w, cx| { let _ = row_target.update(cx, |app, cx| app.load_history_detail(oid.clone(), 0, w, cx)); }))
-                }).collect::<Vec<_>>()
-            }).track_scroll(&ui.scroll).h(px(264.)).w_full();
-            let status = if ui.loading { "커밋 읽는 중…".into() } else if ui.limit_reached { format!("{}개 표시 · 안전 한도 {}개 도달", ui.entries.len(), history::HISTORY_LIMIT) } else { format!("{}개 표시 · {}", ui.entries.len(), if ui.cursor.is_some() { "다음 페이지 있음" } else { "끝" }) };
-            dialog.title("커밋 그래프 / 기록").width(px(860.)).margin_top(px(12.)).overlay_closable(false).on_ok(|_,_,_| false)
-                .on_close({ let closing = closing.clone(); move |_, _, cx| { let _ = closing.update(cx, |app, cx| { app.git_history.active = false; app.git_history.request += 1; app.git_history.loading = false; cx.notify(); }); } })
-                .child(div().v_flex().gap_2().min_w_0()
-                    .child(history_scope(ui))
-                    .child(div().text_size(px(11.)).text_color(palette.rgb(MUTED)).child("브랜치·원격 추적·태그의 스냅샷 · 커밋 선택으로 파일과 부모 대비 diff 보기"))
-                    .child(div().id("history-graph-scroll").overflow_x_scroll().child(div().min_w(px(graph_width + 600.)).child(list)))
-                    .child(div().text_size(px(12.)).child(status))
-                    .when(ui.shallow, |d| d.child(div().text_size(px(11.)).child("Shallow 저장소: 로컬에 있는 기록만 표시합니다. 필요 시 명시적으로 fetch 하세요.")))
-                    .when_some(ui.error.clone(), |d,e| d.child(history_error(e))))
-                .footer(div().flex().gap_2().justify_end()
-                    .child(history_button(&weak, "history-reload", "기록 새로고침", busy, |a,w,cx| a.open_git_history(w,cx)))
-                    .child(history_button(&weak, "history-more", "다음 100개", busy || ui.cursor.is_none(), |a,w,cx| a.load_history_page(false,w,cx)))
-                    .child(history_close(&weak)))
-        });
+        self.results_open = false;
+        self.focus.focus(window, cx);
+        cx.notify();
     }
     fn load_history_detail(
         &mut self,
@@ -242,59 +230,9 @@ impl Pokarak {
         self.git_history.editor = Some(editor);
         cx.notify();
     }
-    fn show_history_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.close_all_dialogs(cx);
+    fn show_history_detail(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.git_history.active = true;
-        let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
-            let Some(view) = weak.upgrade() else { return dialog; };
-            let app = view.read(cx); let ui = &app.git_history;
-            let Some(detail) = &ui.detail else { return dialog; };
-            let busy = history_disabled(app); let palette = Palette::new(cx);
-            let mut parents = div().flex().gap_2().items_center();
-            if detail.commit.parents.is_empty() { parents = parents.child("Root commit → 빈 트리 대비"); }
-            for (index, oid) in detail.commit.parents.iter().enumerate() {
-                let commit = detail.commit.oid.clone();
-                parents = parents.child(history_button(&weak, ("history-parent",index), format!("부모 {} {}",index+1,short(oid)), busy,
-                    move |a,w,cx| a.load_history_detail(commit.clone(),index,w,cx)).selected(detail.parent.as_ref() == Some(oid)));
-            }
-            let changed_files = detail.files.clone();
-            let selected_file = ui.selected.clone();
-            let files_target = weak.clone();
-            let files = uniform_list("history-files", changed_files.len(), move |range, _, _| {
-                range.map(|index| {
-                    let file = &changed_files[index];
-                    let path = file.path.clone();
-                    let label = format!("{} {}", match file.status { FileStatus::Added => "A", FileStatus::Deleted => "D", _ => "M" }, visible(&path.to_string_lossy()));
-                    div().h(px(28.)).w_full().child(history_button(&files_target, ("history-file",index), label.clone(), busy,
-                        move |a,w,cx| a.load_history_file(path.clone(),w,cx)).ghost().w_full().justify_start().tooltip(label).selected(selected_file.as_ref() == Some(&file.path)))
-                }).collect::<Vec<_>>()
-            }).w(px(205.)).flex_none().h(px(232.));
-            let preview = if let Some(editor) = &ui.editor {
-                Editor::new(editor).readonly(true).bordered(true).h(px(232.)).w_full().font_family("JetBrains Mono").text_size(px(12.)).into_any_element()
-            } else { div().h(px(232.)).p_3().child(if ui.loading { "파일 읽는 중…" } else if detail.files.is_empty() { "이 부모와 비교한 파일 변경이 없습니다." } else { "파일을 선택하세요." }).into_any_element() };
-            let truncated = ui.document.as_ref().is_some_and(|d| d.truncated);
-            let binary = ui.document.as_ref().is_some_and(|d| d.binary);
-            let merge = detail.commit.parents.len() > 1;
-            dialog.title(div().text_ellipsis().child(format!("{}  {}",short(&detail.commit.oid),visible(&detail.commit.subject)))).width(px(860.)).margin_top(px(12.)).overlay_closable(false).on_ok(|_,_,_| false)
-                .on_close({ let weak = weak.clone(); move |_,_,cx| { let _=weak.update(cx,|a,cx| {a.git_history.active=false;a.git_history.request+=1;a.git_history.loading=false;cx.notify();}); } })
-                .child(div().v_flex().gap_2().min_w_0()
-                    .child(history_scope(ui))
-                    .child(div().text_size(px(11.)).text_ellipsis().child(format!("{}  {}  {}",visible(&detail.commit.author),detail.commit.date,detail.commit.oid)))
-                    .child(div().id("history-parent-scroll").overflow_x_scroll().text_size(px(12.)).child(parents))
-                    .child(div().flex().gap_2().items_center()
-                        .child(history_button(&weak,"history-diff","Diff",busy,|a,w,cx|{a.git_history.code=false;a.update_history_editor(w,cx)}).selected(!ui.code))
-                        .child(history_button(&weak,"history-code","커밋의 파일",busy||binary,|a,w,cx|{a.git_history.code=true;a.update_history_editor(w,cx)}).selected(ui.code))
-                        .child(div().min_w_0().text_size(px(11.)).text_ellipsis().child(ui.selected.as_ref().map(|p|visible(&p.to_string_lossy())).unwrap_or_default())))
-                    .child(div().flex().gap_2().min_w_0().child(files).child(div().flex_1().min_w_0().child(preview)))
-                    .child(div().text_size(px(11.)).text_color(palette.rgb(MUTED)).child(if truncated { "미리보기 제한: 2 MiB / 50,000줄. 역사 파일은 읽기 전용이며 현재 코드 탐색을 사용하지 않습니다." } else if merge { "Merge 커밋: 부모를 선택해 비교합니다. mainline 지정이 필요한 cherry-pick/revert는 외부 Git을 사용하세요." } else { "읽기 전용 역사 파일 · 현재 코드의 정의/사용처 탐색 없음 · 이름 변경은 삭제/추가로 표시" }))
-                    .when_some(ui.error.clone(), |d,e|d.child(history_error(e))))
-                .footer(div().flex().gap_2().justify_end()
-                    .child(history_button(&weak,"history-back","그래프로",busy,|a,w,cx|a.show_history_list(w,cx)))
-                    .child(history_button(&weak,"history-pick","Cherry-pick…",busy||merge,|a,w,cx|a.prepare_history_action(HistoryAction::CherryPick,w,cx)))
-                    .child(history_button(&weak,"history-revert","Revert…",busy||merge,|a,w,cx|a.prepare_history_action(HistoryAction::Revert,w,cx)))
-                    .child(history_close(&weak)))
-        });
+        cx.notify();
     }
     fn prepare_history_action(
         &mut self,
@@ -327,7 +265,7 @@ impl Pokarak {
             let busy=weak.upgrade().is_none_or(|v|history_disabled(v.read(cx)));
             let destination=target.clone(); let source=commit.oid.clone();
             dialog.title(format!("{} 확인",action.label())).width(px(650.)).margin_top(px(20.)).overlay_closable(false).on_ok(|_,_,_|false)
-                .on_close({let weak=weak.clone();move |_,_,cx|{let _=weak.update(cx,|a,cx|{a.git_history.active=false;a.git_history.request+=1;a.git_history.loading=false;cx.notify();});}})
+                .on_close({let weak=weak.clone();move |_,_,cx|{let _=weak.update(cx,|a,cx|{a.git_history.request+=1;a.git_history.loading=false;cx.notify();});}})
                 .child(div().v_flex().gap_3().text_size(px(13.))
                     .child(format!("원본 커밋: {}\n{}",commit.oid,visible(&commit.subject)))
                     .child(format!("대상 브랜치: {}\n대상 HEAD: {}",target.branch,target.head))
@@ -335,10 +273,9 @@ impl Pokarak {
                     .child(if action==HistoryAction::CherryPick {"이 커밋 하나의 변경을 대상 브랜치에 새 커밋으로 적용합니다."}else{"이 커밋 하나의 변경을 되돌리는 새 커밋을 대상 브랜치에 만듭니다."})
                     .child("작업 트리와 index가 깨끗해야 합니다. 충돌 발생 시 상태를 보존하며, Stash / 충돌 해결에서 계속 또는 중단할 수 있습니다. 저장소에 설정된 Git hook이 실행될 수 있습니다."))
                 .footer(div().flex().gap_2().justify_end()
-                    .child(history_button(&weak,"history-confirm-back","취소",busy,|a,w,cx|a.show_history_detail(w,cx)))
+                    .child(history_button(&weak,"history-confirm-back","취소",busy,|a,w,cx|{w.close_all_dialogs(cx);a.show_history_detail(w,cx)}))
                     .child(history_button(&weak,"history-confirm",format!("{} 실행",action.label()),busy,move |a,w,cx| {
                         a.git_history.request+=1;
-                        a.git_history.active=false;
                         w.close_all_dialogs(cx);
                         let source=source.clone(); let target=destination.clone();
                         a.run_git_job(target.root.clone(),action.label().into(),move |ops|ops.history_action(action,&source,&target),w,cx);
@@ -368,23 +305,7 @@ fn history_button(
             let _ = weak.update(cx, |a, cx| action(a, w, cx));
         })
 }
-fn history_close(weak: &WeakEntity<Pokarak>) -> Button {
-    history_button(weak, "history-close", "닫기", false, |app, w, cx| {
-        app.git_history.active = false;
-        app.git_history.request += 1;
-        app.git_history.loading = false;
-        w.close_dialog(cx);
-        cx.notify();
-    })
-}
-fn history_scope(ui: &HistoryUi) -> Div {
-    div().text_size(px(12.)).text_ellipsis().child(
-        ui.root
-            .as_ref()
-            .map(|p| format!("워크트리: {}", p.display()))
-            .unwrap_or_default(),
-    )
-}
+
 fn history_error(error: String) -> impl IntoElement {
     div()
         .id("history-error")
@@ -407,7 +328,7 @@ fn graph_view(row: GraphRow, width: f32, palette: Palette) -> impl IntoElement {
         move |bounds, row, window, _| {
             let x = |lane: usize| bounds.left() + px(10. + lane as f32 * 14.);
             let top = bounds.top();
-            let middle = top + px(24.);
+            let middle = top + px(15.);
             let bottom = bounds.bottom();
             let mut path = PathBuilder::stroke(px(1.5));
             for lane in 0..row.incoming {
@@ -431,6 +352,44 @@ fn graph_view(row: GraphRow, width: f32, palette: Palette) -> impl IntoElement {
         },
     )
     .w(px(width))
-    .h(px(48.))
+    .h(px(30.))
     .flex_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HistoryUi;
+    use std::path::PathBuf;
+
+    #[test]
+    fn reopening_a_worktree_does_not_accept_its_previous_read() {
+        let root = PathBuf::from("/tmp/pokarak-history/main");
+        let mut ui = HistoryUi {
+            active: true,
+            root: Some(root.clone()),
+            request: 7,
+            ..Default::default()
+        };
+        assert!(ui.accepts_read(7, &root));
+        ui.reset(true);
+        ui.root = Some(root.clone());
+        assert!(!ui.accepts_read(7, &root));
+        assert!(ui.accepts_read(ui.request, &root));
+    }
+
+    #[test]
+    fn worktree_switch_and_code_view_reject_late_history() {
+        let main = PathBuf::from("/tmp/pokarak-history/main");
+        let feature = PathBuf::from("/tmp/pokarak-history/feature");
+        let mut ui = HistoryUi {
+            active: true,
+            root: Some(feature.clone()),
+            request: 8,
+            ..Default::default()
+        };
+        assert!(!ui.accepts_read(8, &main));
+        assert!(ui.accepts_read(8, &feature));
+        ui.active = false;
+        assert!(!ui.accepts_read(8, &feature));
+    }
 }

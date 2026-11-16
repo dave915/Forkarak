@@ -162,3 +162,15 @@ That release report preceded the settings/sidebar source update. A release-to-so
 | Minimum macOS 13 runtime, Intel Mac, other OS packaging, Developer ID/notarization/update delivery | Not verified by this record. |
 
 Add screenshots and release identifiers only when supplied or observed; keep untested matrix rows pending rather than turning source implementation into a UI pass.
+
+## Graph-first home verification — 2026-11-17
+
+The `feat/graph-home` change makes the commit graph the main repository view. This is a fresh check on the Apple Silicon Mac running macOS 26.5.1, separate from the earlier records above. The app's historical editors remain separate from working-file documents and language navigation. Projects and worktrees open in graph mode; Code View and file/text search retain the working-file reader.
+
+- `cargo clippy -p pokarak --all-targets --target aarch64-apple-darwin -- -D warnings` passed.
+- `cargo test -p pokarak --target aarch64-apple-darwin` passed: 15 tests, including regression cases for late history results after reopening a worktree, switching worktrees and leaving the graph.
+- `scripts/package-macos.sh --debug` built and packaged the native app with `MACOSX_DEPLOYMENT_TARGET=13.0`. The signing check in that script passed. This is a local debug build, not a notarized release.
+- Native interactions used authored temporary repositories with a merge, two parents, a tag, a linked worktree, an uncommitted edit and an unborn repository. At 1440×900, verified graph-first project open, empty history, commit selection, historical Diff/File switching, current working-file code, linked-worktree switch and alternate-parent diff. At 940×580, verified the graph/detail layout, the working-changes action, return to the graph and Cmd-W returning to the welcome screen.
+- The fixture HEAD remained `b1bb0eb`; its pre-existing working edit remained the only change. No cherry-pick, revert or other Git mutation was executed during UI verification. Existing backend write-operation behavior was not retested by this UI change.
+
+Local, ephemeral visual receipts: `/tmp/pokarak-graph-qa-initial.png` (unborn repository), `/tmp/pokarak-graph-qa-review.png` (1440×900 graph and merge detail), `/tmp/pokarak-graph-qa-historical-code.png`, `/tmp/pokarak-graph-qa-working-text.png`, `/tmp/pokarak-graph-qa-linked.png`, `/tmp/pokarak-graph-qa-parent2.png` and `/tmp/pokarak-graph-qa-small-final.png` (940×580). The QA bundle used a separate bundle identifier and session directories; normal preferences were not used for these checks.

@@ -102,7 +102,7 @@ pub fn bind_keys(cx: &mut App) {
         ]),
         Menu::new("Git").items([
             MenuItem::action("Stage / 커밋…", OpenGitCommit),
-            MenuItem::action("커밋 그래프 / 기록…", OpenGitHistory),
+            MenuItem::action("Git 그래프", OpenGitHistory),
             MenuItem::action("Git 작업 및 저장소 설정…", OpenGitActions),
         ]),
         Menu::new("탐색").items([
@@ -525,6 +525,7 @@ impl Pokarak {
     }
 
     fn reset_active(&mut self, cx: &mut Context<Self>) {
+        self.reset_git_history();
         self.opening_path = None;
         self.analysis_feedback = AnalysisFeedback::default();
         self.pending_projects.clear();
@@ -656,6 +657,7 @@ impl Pokarak {
             checking_changes: false,
             _subscriptions: subscriptions,
         };
+        this.reset_git_history();
         this.install_git_lifecycle(window, cx);
         cx.on_release(|this, cx| {
             this.cancel_git_job();
@@ -811,6 +813,7 @@ impl Pokarak {
 
     fn open_repository(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.persist(cx);
+        self.reset_git_history();
         self.stop_analysis(cx);
         self.analysis_feedback = AnalysisFeedback::default();
         self.opening_path = Some(path.canonicalize().unwrap_or_else(|_| path.clone()));
@@ -1049,9 +1052,10 @@ impl Pokarak {
         session.snapshot = Some(snapshot);
         session.diffs.clear();
         self.status = "준비됨".into();
-        if let Some(path) = selection {
+        if let Some(path) = selection.filter(|_| !self.git_history.active) {
             self.open_file(path, false, None, window, cx);
         }
+        self.sync_git_history(window, cx);
         self.restore_git_completion(cx);
     }
 
@@ -1063,6 +1067,7 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.leave_git_graph();
         let Some(root) = self.current.clone() else {
             return;
         };
@@ -1331,6 +1336,7 @@ impl Pokarak {
     }
 
     fn compare(&mut self, branch: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_code_view(window, cx);
         let Some(root) = &self.current else {
             return;
         };
@@ -1397,7 +1403,7 @@ impl Pokarak {
         cx: &mut Context<Self>,
     ) {
         // Dialog readers (index/history/conflict) are not current working code.
-        if self.navigating || window.has_active_dialog(cx) {
+        if self.navigating || self.git_history.active || window.has_active_dialog(cx) {
             return;
         }
         let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
@@ -1663,6 +1669,7 @@ impl Pokarak {
     }
 
     fn focus_search(&mut self, text: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_code_view(window, cx);
         self.text_search = text;
         if !text && let Some(root) = &self.current {
             self.sessions.get_mut(root).unwrap().saved.all_files = true;
@@ -1791,7 +1798,7 @@ impl Pokarak {
                     .ghost()
                     .small()
                     .tooltip("뒤로  ⌘[")
-                    .disabled(self.session().is_none_or(|s| s.history.is_empty()))
+                    .disabled(self.git_history.active || self.session().is_none_or(|s| s.history.is_empty()))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.navigate_history(true, window, cx)),
                     ),
@@ -1802,7 +1809,7 @@ impl Pokarak {
                     .ghost()
                     .small()
                     .tooltip("앞으로  ⌘]")
-                    .disabled(self.session().is_none_or(|s| s.forward.is_empty()))
+                    .disabled(self.git_history.active || self.session().is_none_or(|s| s.forward.is_empty()))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.navigate_history(false, window, cx)),
                     ),
@@ -3019,7 +3026,12 @@ impl Render for Pokarak {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.observe_feedback();
         let palette = Palette::new(cx);
-        let body = if self.current.is_some() {
+        let body = if self.current.is_some() && self.git_history.active {
+            h_resizable("graph-main-panes")
+                .child(resizable_panel().size(px(210.)).size_range(px(160.)..px(420.)).child(self.render_worktrees(cx)))
+                .child(resizable_panel().child(self.render_git_graph(cx)))
+                .into_any_element()
+        } else if self.current.is_some() {
             h_resizable("main-panes")
                 .child(
                     resizable_panel()
@@ -3051,7 +3063,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&OpenGitActions,w,cx|this.open_git_actions(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitCommit,w,cx|this.open_git_commit(w,cx)))
             .on_action(cx.listener(|this,_:&OpenRepository,w,cx|this.choose_repository(w,cx)))
-            .on_action(cx.listener(|this,_:&CloseFile,w,cx|{if let Some(path)=this.selected(){this.close_file(path,w,cx)}else if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
+            .on_action(cx.listener(|this,_:&CloseFile,w,cx|{if !this.git_history.active && let Some(path)=this.selected(){this.close_file(path,w,cx)}else if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
             .on_action(cx.listener(|this,_:&CloseProject,w,cx|{if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
             .on_action(cx.listener(|this,_:&CloseAllProjects,w,cx|this.close_all_projects(w,cx)))
             .on_action(cx.listener(|this,_:&NextWorktree,w,cx|this.cycle_worktree(true,w,cx)))
@@ -3059,16 +3071,17 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&NextProject,w,cx|this.cycle_project(true,w,cx)))
             .on_action(cx.listener(|this,_:&PreviousProject,w,cx|this.cycle_project(false,w,cx)))
             .on_action(cx.listener(|this,_:&Refresh,w,cx|this.refresh(w,cx)))
-            .on_action(cx.listener(|this,_:&Back,w,cx|this.navigate_history(true,w,cx)))
-            .on_action(cx.listener(|this,_:&Forward,w,cx|this.navigate_history(false,w,cx)))
+            .on_action(cx.listener(|this,_:&Back,w,cx|{if !this.git_history.active {this.navigate_history(true,w,cx)}}))
+            .on_action(cx.listener(|this,_:&Forward,w,cx|{if !this.git_history.active {this.navigate_history(false,w,cx)}}))
             .on_action(cx.listener(|this,_:&FindFile,w,cx|this.focus_search(false,w,cx)))
             .on_action(cx.listener(|this,_:&FindText,w,cx|this.focus_search(true,w,cx)))
             .on_action(cx.listener(|this,_:&FindReferences,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::References,None,w,cx)}}))
             .on_action(cx.listener(|this,_:&FindDefinition,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::Definition,None,w,cx)}}))
-            .on_action(cx.listener(|this,_:&ToggleCode,_,cx|{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}))
+            .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}}))
             .child(self.render_toolbar(cx))
             .when(!self.projects.is_empty(),|d|d.child(self.render_projects(cx)))
-            .when(self.current.is_some(),|d|d.child(self.render_comparison(cx)))
+            .when(self.current.is_some(),|d|d.child(self.render_workspace_switcher(cx)))
+            .when(self.current.is_some() && !self.git_history.active,|d|d.child(self.render_comparison(cx)))
             .when(self.external_change,|d|d.child(div().h(px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(px(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")
                 .child(Button::new("apply-refresh").label("갱신").ghost().small().on_click(cx.listener(|this,_,w,cx|this.refresh(w,cx))))))
@@ -3086,7 +3099,7 @@ impl Render for Pokarak {
                 .child(div().flex_1().min_w_0().text_ellipsis().child(context))
                 .child(self.output_button("status-output", cx))
                 .child(div().max_w(px(400.)).min_w_0().text_ellipsis().child(self.status.clone()))
-                .child(if self.current.is_some() { "⌘클릭 정의  /  ⌥F7 사용처" } else { "⌘O 프로젝트 열기" }))
+                .child(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의  /  ⌥F7 사용처" }))
     }
 }
 

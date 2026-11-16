@@ -62,7 +62,8 @@ fn error_summary(raw: &str) -> String {
         "Maven/Gradle 프로젝트 설정이 없습니다. 소스 상위 폴더의 pom.xml 또는 Gradle 설정을 확인하세요."
     } else if [
         "unsupportedclassversionerror",
-        "class file version",
+        "compiled by a more recent version of the java runtime",
+        "only recognizes class file versions",
         "unable to locate a java runtime",
         "could not create the java virtual machine",
         "java_home is not set",
@@ -319,6 +320,9 @@ mod tests {
         assert!(error_summary(raw).contains("Maven/Gradle"));
         assert!(!error_summary(raw).contains("JDK"));
         assert!(!error_summary("Project import failed: dependencies").contains("JDK"));
+        assert!(
+            !error_summary("Project import failed: source class file version 61").contains("JDK")
+        );
         assert!(error_summary("UnsupportedClassVersionError").contains("JDK"));
         assert_eq!(
             error_summary("git fetch failed\nsecret multiline diagnostic"),
@@ -331,12 +335,13 @@ mod tests {
     fn errors_are_retained_after_dismissal_and_isolated_by_worktree() {
         let mut feedback = AnalysisFeedback::default();
         let root = Some(PathBuf::from("/fixture/a"));
-        let error = Some("raw diagnostic\nline two".to_owned());
+        let raw = "raw diagnostic\nline two";
+        let error = Some(raw.to_owned());
         feedback.observe(&root, &error);
         feedback.observe(&root, &error);
-        assert_eq!(feedback.output, error.clone().unwrap());
+        assert_eq!(feedback.output, raw);
         feedback.observe(&root, &None);
-        assert_eq!(feedback.output, error.unwrap());
+        assert_eq!(feedback.output, raw);
         feedback.observe(&Some(PathBuf::from("/fixture/b")), &None);
         assert!(feedback.output.is_empty());
         feedback.append(&"한".repeat(100000));

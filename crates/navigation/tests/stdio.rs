@@ -441,7 +441,8 @@ fn java_runtime_errors_and_kotlin_import_gate_are_readable() {
         .navigate(Path::new("Main.java"), 0, 6, Definition)
         .unwrap_err()
         .to_string();
-    assert!(error.contains("Java 17") && error.contains("JDK runtime"));
+    assert!(error.contains("UnsupportedClassVersionError"));
+    assert!(!error.contains("Java 17 may be too old"));
     fs::write(f.root.join("Main.kt"), "class Main\n").unwrap();
     let mut config = f.config("normal");
     config.language = "kotlin".into();
@@ -546,6 +547,7 @@ fn official_jvm_shares_one_session_and_reports_failed_imports() {
         };
         let mut kotlin = java.clone();
         kotlin.language = "kotlin".into();
+        fs::write(f.root.join("pom.xml"), "<project/>").unwrap();
         fs::write(f.root.join("Main.java"), "class Main {}\n").unwrap();
         fs::write(f.root.join("Main.kt"), "class Main\n").unwrap();
         let mut options = f.options();
@@ -553,11 +555,12 @@ fn official_jvm_shares_one_session_and_reports_failed_imports() {
         let mut nav = Navigator::with_options(f.root.clone(), vec![java, kotlin], options);
         let result = nav.navigate(Path::new("Main.java"), 0, 6, Definition);
         if mode == "import-failed" {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("Project import failed"));
+            assert!(!error.contains("JDK runtime"));
             assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Project import failed")
+                nav.server_messages()
+                    .contains("Maven import failed deliberately")
             );
         } else {
             result.unwrap();
@@ -801,4 +804,139 @@ fn cancellation_before_first_request_prevents_server_start() {
     nav.shutdown();
     drop(nav);
     handle.cancel().unwrap();
+}
+
+#[test]
+fn missing_kotlin_build_is_actionable_and_does_not_launch_a_server() {
+    let f = Fixture::new();
+    fs::write(f.root.join("Main.kt"), "class Main\n").unwrap();
+    let mut config = f.config("normal");
+    config.language = "kotlin".into();
+    let mut options = f.options();
+    options.allow_project_imports = true;
+    let mut nav = Navigator::with_options(f.root.clone(), vec![config], options);
+    let error = nav
+        .navigate(Path::new("Main.kt"), 0, 6, Definition)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("noBuildSystemFound") && error.contains("pom.xml"));
+    assert!(!error.contains("JDK"));
+    assert!(!f.root.join("mock.pid").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn nested_import_roots_keep_worktree_tokens_and_dependency_clients_isolated() {
+    let f = Fixture::new();
+    let launcher = f.root.join("intellij-server");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_pokarak-mock-lsp"), &launcher).unwrap();
+    let deps = tempfile::tempdir().unwrap();
+    let deps = deps.path().canonicalize().unwrap();
+    let config = ServerConfig {
+        language: "kotlin".into(),
+        program: launcher.to_string_lossy().into_owned(),
+        args: vec!["dependency".into(), "{root}".into()],
+    };
+    for name in ["a", "b"] {
+        fs::create_dir(f.root.join(name)).unwrap();
+        fs::write(f.root.join(name).join("pom.xml"), "<project/>").unwrap();
+        fs::write(f.root.join(name).join("Main.kt"), "class Main\n").unwrap();
+        let dependency = deps.join(format!("{name}.java"));
+        fs::write(&dependency, "// dependency\n  class Source {}\n").unwrap();
+        fs::write(
+            f.root.join(name).join("dependency-uri"),
+            path_to_uri(&dependency).unwrap(),
+        )
+        .unwrap();
+    }
+    let mut options = f.options();
+    options.allow_project_imports = true;
+    let mut nav = Navigator::with_options(f.root.clone(), vec![config], options);
+    assert_eq!(nav.root(), f.root);
+    let a = nav
+        .navigate(Path::new("a/Main.kt"), 0, 6, Definition)
+        .unwrap()
+        .locations
+        .remove(0);
+    nav.navigate(Path::new("b/Main.kt"), 0, 6, Definition)
+        .unwrap();
+    // No Java configuration exists. This must return to a's Kotlin client, not
+    // infer a new import root / JDT client from the external Java file.
+    nav.navigate(&a.path, 1, 2, References).unwrap();
+    nav.shutdown();
+    let mut index_dirs = vec![];
+    for name in ["a", "b"] {
+        let project = f.root.join(name);
+        let log: Vec<Value> = fs::read_to_string(project.join("protocol.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        let init = &log[0]["params"];
+        assert_eq!(init["rootUri"], path_to_uri(&project).unwrap());
+        assert_eq!(init["workspaceFolders"][0]["uri"], init["rootUri"]);
+        index_dirs.push(
+            init["initializationOptions"]["indexDir"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+        assert_eq!(
+            log.iter().filter(|m| m["method"] == "initialize").count(),
+            1
+        );
+        let args: Vec<String> =
+            serde_json::from_str(&fs::read_to_string(project.join("launch.json")).unwrap())
+                .unwrap();
+        assert!(
+            args.contains(&f.root.to_string_lossy().into_owned()),
+            "public root token changed"
+        );
+        assert_eq!(
+            log.iter().any(|m| m["method"] == "textDocument/references"),
+            name == "a"
+        );
+        assert_process_gone(&project.join("mock.pid"));
+    }
+    assert_ne!(index_dirs[0], index_dirs[1]);
+    assert!(!Path::new(&index_dirs[0]).starts_with(&f.root));
+}
+
+#[cfg(unix)]
+#[test]
+fn jdt_uses_nested_build_root_with_imports_disabled_until_opt_in() {
+    let f = Fixture::new();
+    fs::create_dir(f.root.join("backend")).unwrap();
+    fs::write(f.root.join("backend/pom.xml"), "<project/>").unwrap();
+    fs::write(f.root.join("backend/Main.java"), "class Main {}\n").unwrap();
+    let launcher = f.root.join("jdtls");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_pokarak-mock-lsp"), &launcher).unwrap();
+    let config = ServerConfig {
+        language: "java".into(),
+        program: launcher.to_string_lossy().into_owned(),
+        args: vec!["normal".into()],
+    };
+    let mut nav = Navigator::with_options(f.root.clone(), vec![config], f.options());
+    nav.navigate(Path::new("backend/Main.java"), 0, 6, Definition)
+        .unwrap();
+    nav.shutdown();
+    let log: Vec<Value> = fs::read_to_string(f.root.join("backend/protocol.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    let init = &log[0]["params"];
+    assert_eq!(
+        init["rootUri"],
+        path_to_uri(&f.root.join("backend")).unwrap()
+    );
+    assert_eq!(
+        init["initializationOptions"]["settings"]["java"]["import"]["maven"]["enabled"],
+        false
+    );
+    assert_eq!(
+        init["initializationOptions"]["settings"]["java"]["autobuild"]["enabled"],
+        false
+    );
+    assert_eq!(nav.root(), f.root);
 }

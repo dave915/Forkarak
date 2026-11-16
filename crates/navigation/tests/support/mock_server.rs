@@ -58,6 +58,7 @@ fn main() {
         .unwrap();
     let mut stdin = BufReader::new(std::io::stdin().lock());
     let mut docs = HashMap::<String, Value>::new();
+    fs::write("launch.json", serde_json::to_string(&args).unwrap()).unwrap();
     let mut root_uri = String::new();
     loop {
         let mut size = None;
@@ -241,11 +242,14 @@ fn main() {
                 }
                 // Unrelated responses must not satisfy the pending request.
                 response(&json!(987654), json!({"unrelated": true}));
-                let target = args
-                    .get(2)
-                    .filter(|value| value.starts_with("file:") || value.starts_with("jdt:"))
-                    .cloned()
-                    .unwrap_or_else(|| format!("{root_uri}/target.ts"));
+                let target = if mode == "dependency" {
+                    fs::read_to_string("dependency-uri").unwrap()
+                } else {
+                    args.get(2)
+                        .filter(|value| value.starts_with("file:") || value.starts_with("jdt:"))
+                        .cloned()
+                        .unwrap_or_else(|| format!("{root_uri}/target.ts"))
+                };
                 let start = json!({"line": 1, "character": 2});
                 let range = json!({"start": start, "end": {"line": 1, "character": 5}});
                 let location = json!({"uri": target, "range": range});

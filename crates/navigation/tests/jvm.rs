@@ -253,3 +253,126 @@ fn real_official_kotlin_only_definitions_and_references() {
     );
     nav.shutdown();
 }
+
+#[test]
+#[ignore = "requires official Kotlin LSP; imports an authored nested Maven reactor"]
+fn real_official_kotlin_nested_maven_reactor() {
+    let f = mixed_fixture();
+    fs::create_dir_all(f.root.join("backend/api")).unwrap();
+    fs::rename(f.root.join("src"), f.root.join("backend/api/src")).unwrap();
+    fs::rename(f.root.join("pom.xml"), f.root.join("backend/api/pom.xml")).unwrap();
+    f.write("backend/pom.xml", r#"<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>dev.pokarak.fixture</groupId><artifactId>reactor</artifactId><version>1.0</version><packaging>pom</packaging><modules><module>api</module></modules></project>"#);
+    let kotlin = installed_configs(&tools())
+        .unwrap()
+        .into_iter()
+        .find(|c| c.language == "kotlin")
+        .unwrap();
+    let mut nav = f.nav(vec![kotlin]);
+    assert_eq!(nav.root(), f.root);
+    f.check(
+        &mut nav,
+        "backend/api/src/main/kotlin/demo/KotlinCaller.kt",
+        "kotlinGreeting()",
+        Definition,
+        "backend/api/src/main/kotlin/demo/KotlinGreeter.kt",
+        "kotlinGreeting()",
+    );
+    f.check(
+        &mut nav,
+        "backend/api/src/main/kotlin/demo/KotlinGreeter.kt",
+        "javaGreeting()",
+        Definition,
+        "backend/api/src/main/java/demo/JavaGreeter.java",
+        "javaGreeting()",
+    );
+    f.check(
+        &mut nav,
+        "backend/api/src/main/kotlin/demo/KotlinGreeter.kt",
+        "kotlinGreeting()",
+        References,
+        "backend/api/src/main/kotlin/demo/KotlinCaller.kt",
+        "kotlinGreeting()",
+    );
+    f.check(
+        &mut nav,
+        "backend/api/src/main/kotlin/demo/KotlinGreeter.kt",
+        "kotlinGreeting()",
+        References,
+        "backend/api/src/main/java/demo/JavaCaller.java",
+        "kotlinGreeting()",
+    );
+    nav.shutdown();
+}
+
+#[test]
+#[ignore = "requires official Kotlin LSP; mirrors the repaired authored UI sample source layout"]
+fn real_official_kotlin_qa_backend_source_layout() {
+    let f = mixed_fixture();
+    fs::create_dir(f.root.join("backend")).unwrap();
+    fs::rename(f.root.join("src"), f.root.join("backend/src")).unwrap();
+    let pom = fs::read_to_string(f.root.join("pom.xml"))
+        .unwrap()
+        .replace("src/main/", "backend/src/main/")
+        .replace(
+            "<build>",
+            "<build><sourceDirectory>backend/src/main/java</sourceDirectory>",
+        );
+    f.write("pom.xml", &pom);
+    let kotlin = installed_configs(&tools())
+        .unwrap()
+        .into_iter()
+        .find(|c| c.language == "kotlin")
+        .unwrap();
+    let mut nav = f.nav(vec![kotlin]);
+    f.check(
+        &mut nav,
+        "backend/src/main/kotlin/demo/KotlinGreeter.kt",
+        "javaGreeting()",
+        Definition,
+        "backend/src/main/java/demo/JavaGreeter.java",
+        "javaGreeting()",
+    );
+    f.check(
+        &mut nav,
+        "backend/src/main/kotlin/demo/KotlinGreeter.kt",
+        "kotlinGreeting()",
+        References,
+        "backend/src/main/kotlin/demo/KotlinCaller.kt",
+        "kotlinGreeting()",
+    );
+    nav.shutdown();
+}
+
+#[test]
+#[ignore = "requires managed JDT LS; imports authored nested Maven Java sources"]
+fn real_jdt_nested_maven_java17() {
+    let f = mixed_fixture();
+    fs::create_dir(f.root.join("backend")).unwrap();
+    fs::rename(f.root.join("src"), f.root.join("backend/src")).unwrap();
+    fs::rename(f.root.join("pom.xml"), f.root.join("backend/pom.xml")).unwrap();
+    let java = installed_configs(&tools())
+        .unwrap()
+        .into_iter()
+        .find(|c| c.language == "java")
+        .unwrap();
+    let mut nav = f.nav(vec![java]);
+    f.write("backend/src/main/java/demo/JavaOnlyCaller.java", "package demo;\nclass JavaOnlyCaller {\n    String call() { return new JavaGreeter().javaGreeting(); }\n}\n");
+    f.check(
+        &mut nav,
+        "backend/src/main/java/demo/JavaOnlyCaller.java",
+        "javaGreeting()",
+        Definition,
+        "backend/src/main/java/demo/JavaGreeter.java",
+        "javaGreeting()",
+    );
+    let result = f.check(
+        &mut nav,
+        "backend/src/main/java/demo/JavaGreeter.java",
+        "javaGreeting()",
+        References,
+        "backend/src/main/java/demo/JavaOnlyCaller.java",
+        "javaGreeting()",
+    );
+    assert!(result.status.contains("Kotlin callers may be missing"));
+    nav.shutdown();
+}

@@ -1,5 +1,6 @@
 //! Read-only, root-scoped semantic navigation over stdio LSP.
 //! Construct only after trust; call on an application background thread.
+mod build_root;
 mod cancellation;
 mod client;
 mod config;
@@ -45,15 +46,23 @@ pub struct NavigationResult {
     pub status: String,
 }
 
+#[derive(Clone)]
+struct ClientOrigin {
+    key: String,
+    config: ServerConfig,
+    import_root: PathBuf,
+}
+
 pub struct Navigator {
     root: PathBuf,
     configs: Vec<ServerConfig>,
     options: NavigatorOptions,
     clients: BTreeMap<String, Client>,
-    external_sources: HashSet<PathBuf>,
+    external_sources: BTreeMap<PathBuf, ClientOrigin>,
     setup_error: Option<String>,
     last_status: String,
     last_stderr: String,
+    last_messages: String,
     stopped: bool,
     cancellation: CancellationHandle,
 }
@@ -81,12 +90,13 @@ impl Navigator {
             configs,
             options,
             clients: BTreeMap::new(),
-            external_sources: HashSet::new(),
+            external_sources: BTreeMap::new(),
             last_status: setup_error
                 .clone()
                 .unwrap_or_else(|| "Analysis idle; language servers start on navigation".into()),
             setup_error,
             last_stderr: String::new(),
+            last_messages: String::new(),
             stopped: false,
             cancellation: CancellationHandle::default(),
         }
@@ -138,7 +148,7 @@ impl Navigator {
         if other_worktree(&self.root, &path) {
             bail!("Refusing source from another worktree: {}", path.display());
         }
-        if !path.starts_with(&self.root) && !self.external_sources.contains(&path) {
+        if !path.starts_with(&self.root) && !self.external_sources.contains_key(&path) {
             bail!(
                 "Source is outside this worktree and was not returned as a dependency: {}",
                 path.display()
@@ -148,27 +158,51 @@ impl Navigator {
             language(&path).context("No language-server configuration for this file type")?;
         let text = read_document(&path)?;
         validate_position(&text, line, column)?;
-        let config = self.configs.iter().rev().find(|c| c.language == language)
-            .or_else(|| self.configs.iter().rev().find(|c| c.language == family(language)))
-            .cloned().with_context(|| format!("No language server configured for {language}; semantic navigation is unavailable"))?;
-        let server_family = if is_jetbrains(&config) {
-            "jetbrains-jvm"
+        // A dependency source keeps the originating import session even if its
+        // language or filesystem root differs from the selected worktree source.
+        let origin = if let Some(origin) = self.external_sources.get(&path) {
+            origin.clone()
         } else {
-            family(language)
+            let config = self.configs.iter().rev().find(|c| c.language == language)
+                .or_else(|| self.configs.iter().rev().find(|c| c.language == family(language)))
+                .cloned().with_context(|| format!("No language server configured for {language}; semantic navigation is unavailable"))?;
+            Client::check_import_permission(&config, &self.options)?;
+            let import_root = if language == "kotlin" || is_jetbrains(&config) || is_jdt(&config) {
+                build_root::discover(&self.root, &path, is_jdt(&config))?
+            } else {
+                self.root.clone()
+            };
+            let server_family = if is_jetbrains(&config) {
+                "jetbrains-jvm"
+            } else {
+                family(language)
+            };
+            let key = serde_json::to_string(&(
+                server_family,
+                &config.program,
+                &config.args,
+                &import_root,
+            ))?;
+            ClientOrigin {
+                key,
+                config,
+                import_root,
+            }
         };
-        let key = serde_json::to_string(&(server_family, &config.program, &config.args))?;
-        if !self.clients.contains_key(&key) {
-            let mut launch_config = config.clone();
-            launch_config.language = family(language).into();
+        let key = &origin.key;
+        if !self.clients.contains_key(key) {
+            let mut launch_config = origin.config.clone();
+            launch_config.language = family(&launch_config.language).into();
             let client = Client::start(
                 &self.root,
+                &origin.import_root,
                 &launch_config,
                 &self.options,
                 &self.cancellation,
             )?;
             self.clients.insert(key.clone(), client);
         }
-        let client = self.clients.get_mut(&key).unwrap();
+        let client = self.clients.get_mut(key).unwrap();
         let response = client.navigate(&path, text, language, line, column, &kind);
         let response = match response {
             Ok(value) => value,
@@ -177,8 +211,9 @@ impl Navigator {
                 // A later explicit navigation may start a fresh session.
                 client.transport.stop(Duration::ZERO);
                 self.last_stderr = client.transport.stderr();
+                self.last_messages = client.server_messages().to_owned();
                 let error = client.error_message(&format!("{error:#}"), language);
-                self.clients.remove(&key);
+                self.clients.remove(key);
                 bail!("{error}");
             }
         };
@@ -187,7 +222,7 @@ impl Navigator {
             locations
                 .iter()
                 .filter(|hit| !hit.path.starts_with(&self.root))
-                .map(|hit| hit.path.clone()),
+                .map(|hit| (hit.path.clone(), origin.clone())),
         );
         let mut status = if locations.is_empty() {
             "Semantic navigation completed: no locations returned".into()
@@ -197,7 +232,7 @@ impl Navigator {
         if !skipped.is_empty() {
             status.push_str(&format!("; skipped {}", skipped.join("; ")));
         }
-        if matches!(kind, NavigationKind::References) && is_jdt(&config) {
+        if matches!(kind, NavigationKind::References) && is_jdt(&origin.config) {
             status.push_str("; JDT LS Java scope: Kotlin callers may be missing");
         }
         Ok(NavigationResult {
@@ -222,6 +257,7 @@ impl Navigator {
             if let Err(error) = client.refresh(Instant::now() + self.options.request_timeout) {
                 client.transport.stop(Duration::ZERO);
                 self.last_stderr = client.transport.stderr();
+                self.last_messages = client.server_messages().to_owned();
                 self.last_status =
                     client.error_message(&format!("Disk synchronization failed: {error:#}"), "");
                 self.clients.remove(&key);
@@ -259,12 +295,13 @@ impl Navigator {
             .join("\n")
     }
 
-    /// Bounded protocol log/import messages from currently active language servers.
+    /// Bounded protocol log/import messages, including the last failed session.
     pub fn server_messages(&self) -> String {
         self.clients
             .values()
             .map(|client| client.server_messages())
             .filter(|s| !s.is_empty())
+            .chain((!self.last_messages.is_empty()).then_some(self.last_messages.as_str()))
             .collect::<Vec<_>>()
             .join("\n")
     }

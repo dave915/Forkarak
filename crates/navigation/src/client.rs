@@ -44,6 +44,7 @@ struct Document {
 pub(crate) struct Client {
     pub transport: Transport,
     root: PathBuf,
+    import_root: PathBuf,
     options: NavigatorOptions,
     capabilities: Value,
     settings: Value,
@@ -73,19 +74,28 @@ impl Client {
         read_document(path)
     }
 
+    pub(crate) fn check_import_permission(
+        config: &ServerConfig,
+        options: &NavigatorOptions,
+    ) -> Result<()> {
+        if (config.language == "kotlin" || is_jetbrains(config)) && !options.allow_project_imports {
+            bail!(
+                "Kotlin analysis is disabled: explicitly enable allowProjectImports after trusting Gradle/Maven project import actions."
+            );
+        }
+        Ok(())
+    }
+
     pub fn start(
         root: &Path,
+        import_root: &Path,
         config: &ServerConfig,
         options: &NavigatorOptions,
         cancellation: &CancellationHandle,
     ) -> Result<Self> {
         cancellation.check()?;
+        Self::check_import_permission(config, options)?;
         let jetbrains = is_jetbrains(config);
-        if (config.language == "kotlin" || jetbrains) && !options.allow_project_imports {
-            bail!(
-                "Kotlin analysis is disabled: Kotlin servers may execute Gradle/Maven or classpath scripts during project import. Explicitly enable allowProjectImports after trusting those actions."
-            );
-        }
         let program = discover_program(&config.program).with_context(|| format!("Language server unavailable for {}: executable {:?} was not found on the absolute PATH entries. Configure an installed executable in ~/.config/pokarak/language-servers.json; nothing was installed.", config.language, config.program))?;
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         root.hash(&mut hash);
@@ -118,7 +128,7 @@ impl Client {
                 ]);
             }
         }
-        let transport = Transport::spawn(&program, &args, root, cancellation)?;
+        let transport = Transport::spawn(&program, &args, import_root, cancellation)?;
         let settings = json!({
             "java": {
                 "autobuild": {"enabled": false},
@@ -130,6 +140,7 @@ impl Client {
         let mut client = Self {
             transport,
             root: root.to_path_buf(),
+            import_root: import_root.to_path_buf(),
             options: options.clone(),
             capabilities: Value::Null,
             settings,
@@ -161,7 +172,7 @@ impl Client {
             let response = client.request("initialize", json!({
                 "processId": std::process::id(),
                 "clientInfo": {"name": "pokarak", "version": env!("CARGO_PKG_VERSION")},
-                "rootPath": root, "rootUri": path_to_uri(root)?,
+                "rootPath": import_root, "rootUri": path_to_uri(import_root)?,
                 "workspaceFolders": client.workspace_folders()?,
                 "capabilities": {
                     "general": {"positionEncodings": ["utf-16"]},
@@ -225,11 +236,11 @@ impl Client {
 
     fn workspace_folders(&self) -> Result<Value> {
         Ok(
-            json!([{"uri": path_to_uri(&self.root)?, "name": self.root.file_name().unwrap_or_default().to_string_lossy()}]),
+            json!([{"uri": path_to_uri(&self.import_root)?, "name": self.import_root.file_name().unwrap_or_default().to_string_lossy()}]),
         )
     }
 
-    pub fn error_message(&self, error: &str, language: &str) -> String {
+    pub fn error_message(&self, error: &str, _language: &str) -> String {
         let mut message = error.to_owned();
         if let Some(exit) = self.transport.exit_status() {
             message.push_str(&format!("; {exit}"));
@@ -240,9 +251,6 @@ impl Client {
         }
         if !self.server_messages.is_empty() {
             message.push_str(&format!("\nServer messages:\n{}", self.server_messages));
-        }
-        if matches!(language, "java" | "kotlin") {
-            message.push_str("\nCheck the server's required JDK runtime (the project's Java 17 may be too old). Configure an explicit launcher/JDK argv; Pokarak never installs a JDK or runs a build to repair this.");
         }
         message
     }

@@ -17,6 +17,7 @@ Quickly understand AI-produced code changes, inspect surrounding code, follow de
 Local Git repositories and multiple worktrees. AI or an external IDE can continue modifying files during review. Users need to inspect both uncommitted changes and changes already committed on a branch.
 
 ## Capabilities and Constraints
+- Multiple project tabs in one window, per-project worktrees, individual/all-project close, and a recent-project welcome screen.
 - Worktree discovery and switching without checkout or mutation.
 - Separate file tabs, selected file, scroll position, and navigation history per worktree.
 - Working-tree versus HEAD and branch changes versus a chosen base.

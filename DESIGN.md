@@ -10,11 +10,14 @@ Mode: operate/read. A compact developer review surface, with a steel spork mark 
 - Native keyboard conventions, visible focus, tooltips, drag-resizable panes. No dashboard cards or decorative metrics.
 
 ## First viewport
-Top toolbar: product mark/name, repository name, open repository, refresh, navigation, analysis settings.
-Left 210px: worktrees with branch, local path and change count. Middle 270px: changed files/all files and search. Remaining width: selected file header, diff/code modes, native code surface. Footer: worktree path, comparison, loading/analysis status.
+Seamless custom native titlebar: native traffic lights, product mark/name, repository name, open project, refresh and navigation. No separate gray OS title strip or duplicate title. Project tabs sit directly below in the same background. Comparison and analysis controls follow.
+Left 210px: worktrees with branch, local path and change count. Middle 270px: changed files/all files and search. Remaining width: selected file header, diff/code modes, native code surface. Footer: worktree path and loading/analysis status. The worktree sidebar has no explanatory footer caption.
 
 ## Signature behavior
 Each worktree restores its exact reading context. The current comparison and worktree stay visible as the code reader moves through definitions and back. New filesystem data prompts refresh without yanking the current reading position.
+
+## Empty and multiple projects
+Closing all projects restores the welcome screen with project-open action and recent-project list. Worktree sessions, search and reading positions remain isolated within each project. Project close never deletes a repository or worktree.
 
 ## Native verification
 Inspect the actual macOS window at 1440×900 and a smaller window. Web-only detectors do not apply. Check open/empty/error/loading, long file paths, keyboard navigation, diff/code switch, worktree isolation, and external modifications.

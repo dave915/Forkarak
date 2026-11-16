@@ -12,4 +12,5 @@ serde_json.workspace = true
 pokarak-core = { path = "../core" }
 pokarak-navigation = { path = "../navigation" }
 smol = "2"
+notify = "8"
 

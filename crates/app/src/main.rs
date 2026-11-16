@@ -15,6 +15,9 @@ fn main() {
         eprintln!("{error}");
         std::process::exit(2);
     });
+    if let Some(path) = options.session_dir {
+        prefs::set_session_dir(path);
+    }
     let initial = options.projects;
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)

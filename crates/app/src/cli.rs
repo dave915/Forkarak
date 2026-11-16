@@ -2,6 +2,7 @@ use std::{ffi::OsString, path::PathBuf};
 
 pub struct Options {
     pub projects: Vec<PathBuf>,
+    pub session_dir: Option<PathBuf>,
     pub width: f32,
     pub height: f32,
 }
@@ -10,6 +11,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options, String
     let mut args = args.into_iter();
     let mut options = Options {
         projects: vec![],
+        session_dir: None,
         width: 1440.,
         height: 900.,
     };
@@ -19,7 +21,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Options, String
             paths_only = true;
             continue;
         }
-        if !paths_only && arg == "--window-size" {
+        if !paths_only && arg == "--session-dir" {
+            options.session_dir = Some(PathBuf::from(
+                args.next().ok_or("--session-dir requires a directory")?,
+            ));
+        } else if !paths_only && arg == "--window-size" {
             let size = args.next().ok_or("--window-size requires WIDTHxHEIGHT")?;
             let size = size.to_str().ok_or("Invalid window size")?;
             let (w, h) = size

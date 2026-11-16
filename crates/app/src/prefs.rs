@@ -1,6 +1,12 @@
 use pokarak_core::CompareMode;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use std::{collections::HashMap, path::PathBuf};
+
+static SESSION_DIR: OnceLock<PathBuf> = OnceLock::new();
+pub fn set_session_dir(path: PathBuf) {
+    let _ = SESSION_DIR.set(path);
+}
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -49,6 +55,9 @@ pub struct SavedView {
 }
 
 pub fn config_path() -> PathBuf {
+    if let Some(path) = SESSION_DIR.get() {
+        return path.join("session.json");
+    }
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/pokarak/session.json")
 }
 impl Preferences {

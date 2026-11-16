@@ -1577,6 +1577,7 @@ impl Pokarak {
                     .ghost()
                     .small()
                     .tooltip("뒤로  ⌘[")
+                    .disabled(self.session().is_none_or(|s| s.history.is_empty()))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.navigate_history(true, window, cx)),
                     ),
@@ -1587,6 +1588,7 @@ impl Pokarak {
                     .ghost()
                     .small()
                     .tooltip("앞으로  ⌘]")
+                    .disabled(self.session().is_none_or(|s| s.forward.is_empty()))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.navigate_history(false, window, cx)),
                     ),
@@ -2513,17 +2515,55 @@ impl Pokarak {
                     .icon(IconName::FolderOpen)
                     .on_click(cx.listener(|this, _, w, cx| this.choose_repository(w, cx))),
             );
+        let mut recent = div()
+            .id("recent-projects")
+            .w(px(620.))
+            .max_w(relative(0.9))
+            .max_h(px(200.))
+            .v_flex()
+            .gap_1()
+            .overflow_y_scroll();
         for (index, path) in self.prefs.recent.iter().enumerate() {
             let target = path.clone();
-            content = content.child(
+            recent = recent.child(
                 Button::new(("recent", index))
-                    .label(path.to_string_lossy().to_string())
+                    .label(
+                        path.file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string(),
+                    )
+                    .icon(IconName::FolderGit2)
+                    .tooltip(path.to_string_lossy().to_string())
                     .ghost()
                     .small()
+                    .w_full()
+                    .h(px(40.))
+                    .flex_none()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .text_size(px(11.))
+                            .text_color(rgb(MUTED))
+                            .child(path.parent().unwrap_or(path).to_string_lossy().to_string()),
+                    )
                     .on_click(cx.listener(move |this, _, w, cx| {
                         this.open_repository(target.clone(), w, cx)
                     })),
             );
+        }
+        if !self.prefs.recent.is_empty() {
+            content = content
+                .child(
+                    div()
+                        .mt_3()
+                        .text_size(px(12.))
+                        .text_color(rgb(MUTED))
+                        .child("최근 프로젝트"),
+                )
+                .child(recent);
         }
         content.into_any_element()
     }
@@ -2554,7 +2594,7 @@ impl Render for Pokarak {
             .current
             .as_ref()
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "로컬 저장소 전용".into());
+            .unwrap_or_else(|| "로컬 Git 프로젝트".into());
         div().id("pokarak").key_context("Pokarak").track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(rgb(BG)).text_color(rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
             .on_action(cx.listener(|this,_:&OpenRepository,w,cx|this.choose_repository(w,cx)))
@@ -2592,7 +2632,7 @@ impl Render for Pokarak {
             .child(div().h(px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(rgb(LINE)).bg(rgb(SIDE)).text_size(px(11.)).text_color(rgb(MUTED))
                 .child(div().flex_1().min_w_0().text_ellipsis().child(context))
                 .child(div().max_w(px(400.)).min_w_0().text_ellipsis().child(self.status.clone()))
-                .child("⌘클릭 정의  /  ⌥F7 사용처"))
+                .child(if self.current.is_some() { "⌘클릭 정의  /  ⌥F7 사용처" } else { "⌘O 프로젝트 열기" }))
     }
 }
 

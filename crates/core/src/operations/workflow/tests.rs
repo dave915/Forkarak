@@ -15,6 +15,7 @@ impl Fixture {
             root,
             timeout: Duration::from_secs(10),
             global_config: Some(global),
+            cancellation: OperationCancellation::default(),
         };
         // All fixture operations inherit only a private config, never global hooks/remotes.
         ops.checked(&["init", "-b", "main"]).unwrap();
@@ -388,5 +389,60 @@ fn replaced_parent_symlink_is_rejected() {
     assert_eq!(
         fs::read_to_string(external.join("file.txt")).unwrap(),
         "outside"
+    );
+}
+
+#[test]
+fn binary_conflict_can_choose_exact_side_but_not_edit_text() {
+    let f = Fixture::new();
+    f.write("file.txt", "\0base");
+    f.commit("binary base");
+    f.git(&["switch", "-c", "incoming"]);
+    f.write("file.txt", "\0theirs");
+    f.commit("binary theirs");
+    f.git(&["switch", "main"]);
+    f.write("file.txt", "\0ours");
+    f.commit("binary ours");
+    f.ops.run(&["merge", "incoming"]).unwrap();
+    let snapshot = f
+        .ops
+        .inspect_conflict(&f.ops.conflicts().unwrap()[0])
+        .unwrap();
+    assert!(
+        f.ops
+            .resolve_conflict(&snapshot, &Resolution::Edited("not binary".into()))
+            .is_err()
+    );
+    f.ops
+        .resolve_conflict(&snapshot, &Resolution::Theirs)
+        .unwrap();
+    assert_eq!(fs::read(f.ops.root.join("file.txt")).unwrap(), b"\0theirs");
+    assert!(f.ops.conflicts().unwrap().is_empty());
+}
+#[test]
+fn replaced_stage_oid_cannot_save_stale_result() {
+    let f = Fixture::new();
+    let snapshot = f.conflict(false);
+    let oid = &snapshot.file.stages[0].oid;
+    let mut command = f.ops.command(&["update-index", "--index-info"]);
+    let mut child = command.stdin(Stdio::piped()).spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("100644 {oid} 2\tfile.txt\n").as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    assert_eq!(f.ops.conflicts().unwrap().len(), 1);
+    assert!(
+        f.ops
+            .resolve_conflict(&snapshot, &Resolution::Theirs)
+            .unwrap_err()
+            .to_string()
+            .contains("stages changed")
+    );
+    assert_eq!(
+        fs::read(f.ops.root.join("file.txt")).unwrap(),
+        snapshot.disk.unwrap().bytes
     );
 }

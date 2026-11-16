@@ -26,6 +26,7 @@ pub struct StashEntry {
     pub message: String,
     /// Recorded by Git in the stash subject, not an ownership claim.
     pub source_branch: Option<String>,
+    list_fingerprint: [u8; 32],
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictStage {
@@ -142,6 +143,7 @@ impl GitOperations {
     }
     pub fn stashes(&self) -> Result<Vec<StashEntry>> {
         let data = self.metadata(&["stash", "list", "--format=%H%x00%gd%x00%gs%x00"])?;
+        let list_fingerprint: [u8; 32] = Sha256::digest(&data).into();
         let mut fields = data.split(|b| *b == 0);
         let mut entries = vec![];
         while let Some(oid) = fields.next() {
@@ -164,6 +166,7 @@ impl GitOperations {
                 selector,
                 message,
                 source_branch,
+                list_fingerprint,
             });
         }
         Ok(entries)
@@ -243,7 +246,7 @@ impl GitOperations {
     pub fn stash_pop(&self, entry: &StashEntry) -> Result<OperationOutput> {
         self.require_stash_identity(entry)?;
         let applied = self.stash_apply(entry)?;
-        self.stash_drop(entry).context("Stash was applied, but was NOT dropped. The stash list changed or removal failed; refresh before any further action")?;
+        self.stash_drop(entry).context("Stash was applied, but the removal step failed. Refresh the stash list to check whether it remains; do not apply it again blindly")?;
         Ok(applied)
     }
     /// Caller must present a concrete confirmation naming selector, OID and message.
@@ -355,7 +358,11 @@ impl GitOperations {
                     snapshot
                         .stages
                         .iter()
-                        .all(|s| matches!(s.content, ConflictContent::Text(_))),
+                        .all(|s| matches!(s.content, ConflictContent::Text(_)))
+                        && snapshot
+                            .working
+                            .as_ref()
+                            .is_none_or(|c| matches!(c, ConflictContent::Text(_))),
                     "Binary/type/large conflicts require an explicit side selection or an external tool"
                 );
                 let mode = snapshot
@@ -385,6 +392,7 @@ impl GitOperations {
                     .transpose()?
             }
         };
+        let expected_bytes = desired.as_ref().map(|(bytes, _)| bytes.clone());
         let path = self.safe_working_path(&snapshot.file.path)?;
         self.require_stages(&snapshot.file)?;
         ensure!(
@@ -435,6 +443,10 @@ impl GitOperations {
             }
         }
         self.require_stages(&snapshot.file).context("Result saved, but index changed before staging. The result remains on disk; inspect it and resolve/stage explicitly")?;
+        ensure!(
+            read_disk(&path)?.map(|version| version.bytes) == expected_bytes,
+            "Result saved, but the file changed externally before staging. Inspect the current working file before retrying"
+        );
         self.workflow_output(self.checked(&["add", "--", path_text(&snapshot.file.path)?]).context("Result saved, but staging failed. The saved result remains on disk; reopen the conflict or stage it with Git. No commit was made")?)
     }
     fn require_stages(&self, file: &ConflictFile) -> Result<()> {
@@ -512,8 +524,8 @@ impl GitOperations {
                         bytes.len() <= OUTPUT_LIMIT,
                         "Operation metadata is too large"
                     );
-                    digest.update(name);
-                    digest.update(&bytes);
+                    crate::filesystem::feed(&mut digest, name.as_bytes());
+                    crate::filesystem::feed(&mut digest, &bytes);
                     present.insert(name, bytes);
                 }
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -572,7 +584,7 @@ impl GitOperations {
             .env("GIT_EDITOR", "/usr/bin/true")
             .env("GIT_SEQUENCE_EDITOR", "/usr/bin/true")
             .env("GIT_MERGE_AUTOEDIT", "no");
-        let result = capture(command, self.timeout)?;
+        let result = self.run_command(command)?;
         ensure!(
             result.code == Some(0),
             "{} {} failed. Inspect the operation state before retrying:\n{}\n{}",
@@ -615,10 +627,10 @@ fn path_text(path: &Path) -> Result<&str> {
         .context("Non-UTF-8 paths require an external Git tool")
 }
 fn content(bytes: Vec<u8>) -> ConflictContent {
-    if !bytes.contains(&0) {
-        if let Ok(text) = std::str::from_utf8(&bytes) {
-            return ConflictContent::Text(text.into());
-        }
+    if !bytes.contains(&0)
+        && let Ok(text) = std::str::from_utf8(&bytes)
+    {
+        return ConflictContent::Text(text.into());
     }
     ConflictContent::Binary(bytes)
 }

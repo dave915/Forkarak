@@ -1,3 +1,5 @@
+mod file_icons;
+
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
 use crate::theme::{self, Palette, ThemeChoice};
 use gpui_kit::assets::IconName;
@@ -2298,19 +2300,13 @@ impl Pokarak {
                                     palette.rgb(BG)
                                 })
                                 .hover(|s| s.bg(palette.rgb(PANEL)))
-                                .child(
-                                    Icon::new(if row.directory {
-                                        IconName::Folder
-                                    } else {
-                                        IconName::FileCode
-                                    })
-                                    .size(px(14.))
-                                    .text_color(palette.rgb(if row.directory {
-                                        MUTED
-                                    } else {
-                                        status.map(|s| s.1).unwrap_or(MUTED)
-                                    })),
-                                )
+                                .child(if row.directory {
+                                    Icon::new(IconName::Folder)
+                                        .size(px(14.))
+                                        .text_color(palette.rgb(MUTED))
+                                } else {
+                                    file_icons::icon_for_path(&row.path, palette)
+                                })
                                 .child(div().flex_1().min_w_0().text_ellipsis().child(row.label))
                                 .when_some(status, |d, (label, color)| {
                                     d.child(
@@ -2482,7 +2478,7 @@ impl Pokarak {
                                     .to_string_lossy()
                                     .to_string(),
                             )
-                            .icon(IconName::FileCode)
+                            .icon(file_icons::icon_for_path(tab, palette))
                             .ghost()
                             .small()
                             .selected(tab == path)

@@ -1,0 +1,388 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-16T15:53:39Z",
+  "title": "Design System: 포카락 · Pokarak native macOS",
+  "extensions": {
+    "native": {
+      "schemaVersion": 1,
+      "platform": "macOS desktop",
+      "language": "Rust",
+      "renderer": "GPUI + GPUI Kit 0.10.0",
+      "webview": false,
+      "purposeModes": ["operate", "read"],
+      "provenance": {
+        "method": "Source extraction; dimensions are not screenshot measurements.",
+        "baseRevision": "d46873b8b96a62c39de81b41abf6d3a9f3cb953f",
+        "sourceRoot": "/Users/han/dev/pokarak",
+        "sourceUpdate": "Includes root working-copy changes to applied comparison state, full diff lines, Palette, settings and the Worktrees/Branches selector reported on 2026-11-17 Asia/Seoul. These changes were not yet committed when inspected; this documentation worktree has older app source. Source hashes identify the inspected files, not a release binary.",
+        "sourceSha256": {
+          "crates/app/src/theme.rs": "3f4261c2f1fc9b9f2c438258b361a2eec801827f9af62dd0590726bdbe1d0bc8",
+          "crates/app/src/prefs.rs": "08f7bd5ef798561a3d028813075491f6510c541a7d10d7e8fbc8789d63a0f5e1",
+          "crates/app/src/ui.rs": "bd1eba55a47b35713c1a93c4a5db1ab2d10dd7067257e6b6c092c832b13dd997",
+          "crates/app/src/main.rs": "0c330db7dc773262a58fbf88c84a1792a370b0b0f16fd08233ab28d855961a6c",
+          "crates/app/src/cli.rs": "a342c5d16cf408da832543c414887e9ff4f192736eecd3d690daa8fc357234d5"
+        },
+        "files": ["PRODUCT.md", "DESIGN.md", "README.md", "crates/app/src/main.rs", "crates/app/src/ui.rs", "crates/app/src/cli.rs", "crates/app/src/prefs.rs", "crates/app/src/theme.rs"],
+        "dependencySources": ["gpui-component 0.10.0: src/root.rs, src/sizing.rs, src/button/button.rs", "gpui-pre-macros 0.3.12: src/styles.rs"],
+        "verificationRecord": "docs/verification.md"
+      },
+      "sidecarContract": {
+        "tokenLocation": "extensions.native.tokens",
+        "reason": "DESIGN.md has prose but no token frontmatter and is outside this documentation change. The requested token-bearing sidecar therefore stores extracted primitives in this native extension of the version-2 envelope.",
+        "references": "Brace-wrapped dotted paths, for example {extensions.native.tokens.colors.ground}, resolve within this JSON document. Color references yield dark/light values; select the value matching the resolved appearance.",
+        "preview": "Native component descriptions and illustrative Rust builder fragments are under extensions.native.components; fragments require the surrounding app context. The top-level web preview components array is intentionally empty: HTML/CSS shadow-DOM samples would not represent this GPUI macOS application.",
+        "omissions": "No synthetic tonal ramps, CSS breakpoints, animation timings, or shadow recipes. App-owned values are extracted below; library-owned syntax colors, focus styling, control radii and effects remain delegated to the locked GPUI Kit theme."
+      },
+      "units": {
+        "px": "GPUI logical pixels, not physical Retina screenshot pixels.",
+        "rem": "Native GPUI rems, not browser CSS. GPUI Kit's WindowState::prepare sets window rem size to theme.font_size. main.rs and theme.rs: apply keep it at 13px independently of code_font_size.",
+        "remSizePx": 13,
+        "spacingResolution": "GPUI helpers use quarter-rem steps. resolvedPx values below are computed from source, not measured at runtime. Explicit px(...) dimensions do not scale with these helpers."
+      },
+      "tokens": {
+        "colors": {
+          "ground": { "dark": "#20252c", "light": "#f8fafc" },
+          "sidebar": { "dark": "#1b2026", "light": "#eef2f6" },
+          "raised": { "dark": "#282f38", "light": "#e3eaf1" },
+          "separator": { "dark": "#343e49", "light": "#d1dae4" },
+          "ink": { "dark": "#e5eaf0", "light": "#1e2b3a" },
+          "muted": { "dark": "#a4b0be", "light": "#566779" },
+          "accent": { "dark": "#7fb8e2", "light": "#255f8d" },
+          "theme-accent-surface": { "dark": "#314353", "light": "#d7e6f4" },
+          "addition-ink": { "dark": "#83c4a1", "light": "#1b6a40" },
+          "addition-surface": { "dark": "#24382f", "light": "#e5f3e9" },
+          "deletion-ink": { "dark": "#e5a0a5", "light": "#a42f41" },
+          "deletion-surface": { "dark": "#3c2a30", "light": "#fae7e9" },
+          "diff-header-surface": { "dark": "#283744", "light": "#e5eef7" },
+          "worktree-selected": { "dark": "#2b3947", "light": "#d7e6f4" },
+          "file-selected": { "dark": "#2c3a48", "light": "#d7e6f4" },
+          "warning-ink": { "dark": "#e4bb79", "light": "#805512" },
+          "external-change-surface": { "dark": "#3b3326", "light": "#fff0cd" },
+          "external-change-ink": { "dark": "#e4c28c", "light": "#7b4f0c" },
+          "trust-surface": { "dark": "#293848", "light": "#e5eef7" }
+        },
+        "typography": {
+          "body": { "fontFamily": "IBM Plex Sans", "fontSize": "13px" },
+          "sidebar-mode": { "fontFamily": "IBM Plex Sans", "fontSize": "12px" },
+          "settings-label": { "fontFamily": "IBM Plex Sans", "fontSize": "13px", "fontWeight": 500 },
+          "product": { "fontFamily": "IBM Plex Sans", "fontSize": "17px", "fontWeight": 600 },
+          "welcome-title": { "fontFamily": "IBM Plex Sans", "fontSize": "24px", "fontWeight": 500 },
+          "code": { "fontFamily": "JetBrains Mono", "defaultFontSize": "13px", "fontSizePreference": "code_font_size", "minimumFontSize": "10px", "maximumFontSize": "24px", "step": "1px", "scope": "whole-file code view only" },
+          "diff": { "fontFamily": "JetBrains Mono", "fontSize": "12px" },
+          "path-and-preview": { "fontFamily": "JetBrains Mono", "fontSize": "11px" },
+          "metadata": { "fontFamily": "IBM Plex Sans", "fontSize": "11px" },
+          "notice": { "fontFamily": "IBM Plex Sans", "fontSize": "12px" },
+          "file-status": { "fontFamily": "IBM Plex Sans", "fontSize": "10px" },
+          "small-control": { "fontFamily": "IBM Plex Sans", "fontSize": "0.875rem", "resolvedFontSizePx": 11.375 }
+        },
+        "spacing": {
+          "step-1": { "value": "0.25rem", "resolvedPx": 3.25, "helpers": ["gap_1", "mb_1", "mt_1", "py_1"] },
+          "step-2": { "value": "0.5rem", "resolvedPx": 6.5, "helpers": ["gap_2", "px_2", "py_2", "pb_2", "pr_2", "ml_2"] },
+          "step-3": { "value": "0.75rem", "resolvedPx": 9.75, "helpers": ["gap_3", "px_3", "p_3", "mt_3"] },
+          "step-4": { "value": "1rem", "resolvedPx": 13, "helpers": ["gap_4", "px_4", "p_4"] },
+          "step-5": { "value": "1.25rem", "resolvedPx": 16.25, "helpers": ["mr_5", "gap_5"] },
+          "step-6": { "value": "1.5rem", "resolvedPx": 19.5, "helpers": ["p_6"] }
+        },
+        "rounded": { "worktree-and-project-tab": "5px" },
+        "borders": { "separator": "1px", "titlebar-bottom": "0px" },
+        "sizes": {
+          "titlebar-height": "52px",
+          "titlebar-traffic-light-inset": "90px",
+          "project-tabs-height": "38px",
+          "comparison-height": "42px",
+          "base-input-width": "145px",
+          "applied-base-max-width": "260px",
+          "panel-header-height": "44px",
+          "branch-row-height": "32px",
+          "settings-dialog-width": "430px",
+          "file-tabs-height": "34px",
+          "reader-header-height": "40px",
+          "file-row-height": "29px",
+          "diff-row-height": "22px",
+          "diff-number-column-width": "45px",
+          "diff-sign-column-width": "22px",
+          "results-height": "210px",
+          "results-header-height": "34px",
+          "result-row-height": "40px",
+          "footer-height": "27px",
+          "footer-status-max-width": "400px",
+          "external-change-height": "32px",
+          "recent-list-width": "620px",
+          "recent-list-max-height": "200px",
+          "recent-row-height": "40px",
+          "small-control-height": "1.5rem",
+          "welcome-open-control-height": "2rem"
+        },
+        "icons": {
+          "titlebar-mark": "24px",
+          "welcome-mark": "52px",
+          "worktree": "15px",
+          "file": "14px"
+        }
+      },
+      "fonts": {
+        "registration": "crates/app/src/main.rs: text_system().add_fonts",
+        "bundled": ["assets/fonts/IBMPlexSans-Regular.ttf", "assets/fonts/IBMPlexSans-Medium.ttf", "assets/fonts/IBMPlexSans-SemiBold.ttf", "assets/fonts/JetBrainsMono-Regular.ttf"],
+        "koreanFallback": "System Korean sans fallback is the DESIGN.md intent. App source registers no explicit Korean font family; glyph fallback is delegated to the native text system.",
+        "lineHeightAndTracking": "No app-specific line-height or letter-spacing scale is set. Diff row height is a layout dimension, not a font line-height token."
+      },
+      "palette": {
+        "source": "crates/app/src/theme.rs: Palette::rgb, Palette::new, apply",
+        "dark": "Palette::rgb returns the original app color unchanged when cx.theme().is_dark().",
+        "light": "All 19 app color roles have explicit mappings in Palette::rgb. Unknown values pass through unchanged; this is not an automatic inversion or a synthesized scale.",
+        "scope": "App rendering calls palette.rgb for its surfaces, text, states and diff colors. theme::apply also maps background, foreground, border, accent and accent_foreground; other GPUI Kit control/dialog/syntax styles follow the selected library theme."
+      },
+      "layout": {
+        "source": "main.rs: WindowOptions; cli.rs: parse; ui.rs: Render for Pokarak",
+        "window": { "defaultSizePx": [1440, 900], "minimumSizePx": [940, 580], "initialPlacement": "centered", "resizable": true },
+        "titlebar": {
+          "implementation": "Native transparent TitlebarOptions plus GPUI Kit TitleBar",
+          "height": "{extensions.native.tokens.sizes.titlebar-height}",
+          "backgroundColor": "{extensions.native.tokens.colors.sidebar}",
+          "nativeTitle": null,
+          "windowTitle": "포카락",
+          "trafficLights": "native macOS window controls",
+          "trafficLightPositionPx": [15, 18],
+          "contentLeftInset": "{extensions.native.tokens.sizes.titlebar-traffic-light-inset}",
+          "contentPaddingX": "{extensions.native.tokens.spacing.step-4.value}",
+          "bottomBorder": "{extensions.native.tokens.borders.titlebar-bottom}",
+          "contents": ["spork mark", "포카락", "Back", "Forward", "repository basename", "Refresh", "Open project", "Settings"]
+        },
+        "verticalOrder": ["titlebar", "project tabs when projects exist", "comparison when a worktree is active", "external-change / error / trust notices when present", "resizable review panes or welcome", "results when open, spanning the full window width", "footer"],
+        "panes": [
+          { "name": "sidebar", "views": ["worktrees", "branches"], "initialWidthPx": 210, "sizeRangePx": [160, 420], "backgroundColor": "{extensions.native.tokens.colors.sidebar}" },
+          { "name": "files", "initialWidthPx": 285, "sizeRangePx": [200, 600], "backgroundColor": "{extensions.native.tokens.colors.ground}" },
+          { "name": "reader", "width": "remaining space", "contents": ["file tabs", "file header and mode controls", "optional source/limit notices", "diff or read-only code"] }
+        ],
+        "paneResizing": "h_resizable / resizable_panel; drag handles use GPUI Kit. No app-defined breakpoint or mobile layout.",
+        "fileTreeIndent": { "basePx": 10, "perDepthPx": 13 },
+        "worktreePathInsetPx": 23,
+        "overflow": "Root and panes clip overflow; project/file tabs scroll horizontally; worktrees/recent projects scroll vertically; branch, file, diff and result lists use uniform_list. Paths generally ellipsize; file/project tabs expose path tooltips.",
+        "settings": "GPUI Kit dialog, 430px wide, with theme choices, whole-file code font-size controls and Close. Library theme owns the dialog surface and modal styling.",
+        "welcome": "Replaces the review panes after all projects close. Centered mark, title, subtitle, open action and up to eight recent projects; recent list has a 90% maximum relative width."
+      },
+      "modes": {
+        "appearance": {
+          "default": "Dark",
+          "choices": ["System", "Light", "Dark"],
+          "labels": ["시스템", "라이트", "다크"],
+          "source": "theme.rs: ThemeChoice, apply; ui.rs: new, set_theme, open_settings",
+          "startup": "main.rs initializes Dark; Pokarak::new then applies the saved Preferences.theme. ThemeChoice defaults to Dark when no saved value exists.",
+          "system": "theme::apply resolves window.appearance(). An observe_window_appearance subscription reapplies it only while the saved choice is System; System has no third palette.",
+          "persistence": "Preferences.theme is global to the app session, saved immediately on selection; Light/Dark choices stay explicit when OS appearance changes."
+        },
+        "sidebar": {
+          "source": "ui.rs: render_sidebar_header, render_worktrees, render_branches; prefs.rs: Preferences.show_branches",
+          "default": "worktrees",
+          "labels": ["워크트리", "브랜치"],
+          "persistence": "show_branches defaults to false. The selector saves this global preference immediately; it is shared across projects/worktrees rather than stored in SavedView.",
+          "branchAction": "A branch row writes its name into base_input and calls compare(true) for the current worktree; it does not check out or switch worktrees. The callback rejects a changed worktree scope.",
+          "branchState": "Rows are selected against the installed snapshot's Branch(base). 현재 marks the checked-out branch separately; the list uses snapshot.branches. An empty list says 아직 커밋된 브랜치가 없습니다."
+        },
+        "comparison": {
+          "uncommitted": "HEAD versus current files, including staged and unstaged changes.",
+          "branch": "Chosen base's common ancestor versus current files; includes committed branch changes.",
+          "appliedState": "Mode selection and the applied-base label use snapshot.compare, not the draft input. Labels are 적용됨: HEAD → 현재 파일 or 적용됨: {base} 공통 조상 → 현재 파일.",
+          "draftState": "While an applied Branch(base) differs from the trimmed draft, the Apply button reads 적용 *. In uncommitted mode this branch-draft pending marker is not set.",
+          "apply": "적용 or Enter in the base input calls compare(true). The Apply button is disabled while loading or when the trimmed draft is empty. Clicking 브랜치 변경 also applies the draft; selecting a sidebar branch first sets the draft to that branch, then applies it.",
+          "failure": "Refresh failure retains the last installed snapshot and restores saved comparison from it; the draft is not presented as applied."
+        },
+        "files": { "changed": "변경 파일", "all": "전체 파일, with collapsible directories when unfiltered", "filenameFilter": "Case-insensitive path filter; Cmd-P selects all files and focuses the input; arrows and Enter choose a row.", "textSearch": "Cmd-Shift-F changes the input to content search; Enter opens labeled text results." },
+        "reader": {
+          "diff": "Unified old/new line numbers, addition/deletion signs and colors; virtualized rows with horizontal scrolling. Nonempty rows render their full line.text; there is no app-level 2,000-character line truncation. Core whole-file, line-count and calculation limits still apply.",
+          "code": "Read-only, line-numbered GPUI Editor; syntax highlighting via GPUI Kit, soft_wrap(false), and text_size(px(self.prefs.code_font_size)). Current source supports Cmd-click definitions and declaration-to-usages navigation. The font-size preference does not change the 12px diff text or 22px diff rows.",
+          "deleted": "Deleted-source notice; semantic navigation is unavailable for pre-deletion content.",
+          "binary": "Text comparison is replaced with an explicit binary-file message."
+        },
+        "analysis": "Viewing needs no analysis server. Per-worktree trust is explicit; servers start on a navigation request. Analysis, import, error and search status remain visible.",
+        "results": { "semanticLabel": "언어 분석 결과", "textLabel": "텍스트 검색 결과", "navigation": "Focused results support arrows, Enter and Escape." },
+        "sessionIsolation": "SavedView and runtime Session are keyed by worktree path; projects remember their last worktree. Tabs, selection, filter, comparison and reading positions are saved outside the inspected repository. Back/Forward stacks are runtime state, not serialized history.",
+        "persistence": "~/.config/pokarak/session.json, or <session-dir>/session.json with --session-dir."
+      },
+      "settings": {
+        "source": "ui.rs: open_settings, set_theme, set_code_size, new; prefs.rs: Preferences",
+        "entryPoints": ["titlebar Settings button", "포카락 menu → 설정…", "Cmd-,"],
+        "title": "설정",
+        "codeFontSize": {
+          "label": "코드 보기 글자 크기",
+          "preference": "code_font_size",
+          "scope": "global preference for whole-file code view only",
+          "default": 13,
+          "minimum": 10,
+          "maximum": 24,
+          "step": 1,
+          "displaySuffix": "pt",
+          "renderUnit": "GPUI px(...) logical pixels",
+          "validation": "Pokarak::new normalizes missing/default-zero, nonfinite or out-of-range values to 13. set_code_size clamps changes to 10–24; minus/plus buttons disable at their bounds.",
+          "persistence": "Saved immediately through Preferences::save; theme::apply updates mono_font_size while keeping UI font_size at 13. No change to the explicit diff or metadata font sizes."
+        }
+      },
+      "components": [
+        {
+          "name": "Titlebar and project tabs",
+          "kind": "native-navigation",
+          "source": "ui.rs: render_toolbar, render_projects",
+          "description": "One continuous sidebar-colored native top surface. Active project wrappers use raised color and the 5px custom radius; project tabs scroll and have individual close actions.",
+          "rust": "gpui_kit::component::TitleBar::new().h(px(52.)).pl(px(90.)).bg(palette.rgb(SIDE)).border_b_0()"
+        },
+        {
+          "name": "Compact button and search input",
+          "kind": "native-controls",
+          "source": "ui.rs: render_toolbar, render_files, render_comparison; gpui-component: sizing.rs, button/button.rs",
+          "description": "Toolbar actions and search use .small(); most secondary actions use .ghost(), with selected/disabled/tooltip states owned by GPUI Kit. Small controls use h_6 (1.5 native rem = 19.5 logical px at the current theme size), not a hardcoded 28px. The welcome open action uses the default medium button.",
+          "height": "{extensions.native.tokens.sizes.small-control-height}",
+          "typography": "{extensions.native.tokens.typography.small-control}",
+          "rust": "Input::new(&self.search_input).small().prefix(IconName::Search)"
+        },
+        {
+          "name": "Worktrees / Branches sidebar",
+          "kind": "native-navigation",
+          "source": "ui.rs: render_sidebar_header, render_worktrees, render_branches",
+          "description": "44px header with two 12px ghost toggle labels. Worktree rows show branch, change count and directory basename, with optional missing/locked warnings; their height follows content/padding. Branch rows are 32px high with a selected-base button and a separate 현재 marker for the checked-out branch. Branch activation compares without checkout. Footer retains the current worktree path.",
+          "selectorTypography": "{extensions.native.tokens.typography.sidebar-mode}",
+          "branchRowHeight": "{extensions.native.tokens.sizes.branch-row-height}",
+          "statesScope": "The padding, radius and color states below describe worktree rows; branch buttons delegate selected/hover styling to GPUI Kit.",
+          "padding": "{extensions.native.tokens.spacing.step-2.value}",
+          "rounded": "{extensions.native.tokens.rounded.worktree-and-project-tab}",
+          "states": { "rest": "{extensions.native.tokens.colors.sidebar}", "selected": "{extensions.native.tokens.colors.worktree-selected}", "hover": "{extensions.native.tokens.colors.raised}" }
+        },
+        {
+          "name": "File row",
+          "kind": "native-list-item",
+          "source": "ui.rs: render_files, file_status",
+          "description": "Virtualized 29px rows with hierarchy indentation, ellipsized path and A/D/R/?/!/M status. Keyboard filter selection uses the same selected background as the current file.",
+          "height": "{extensions.native.tokens.sizes.file-row-height}",
+          "states": { "rest": "{extensions.native.tokens.colors.ground}", "selected": "{extensions.native.tokens.colors.file-selected}", "hover": "{extensions.native.tokens.colors.raised}" }
+        },
+        {
+          "name": "Applied comparison bar",
+          "kind": "native-controls",
+          "source": "ui.rs: render_comparison, compare, new base_input subscription",
+          "description": "미커밋 / 브랜치 변경, editable base, 적용 or 적용 *, snapshot-derived applied label and code-analysis toggle. Draft changes require Apply, Enter or branch-mode activation to refresh the snapshot.",
+          "height": "{extensions.native.tokens.sizes.comparison-height}",
+          "inputWidth": "{extensions.native.tokens.sizes.base-input-width}",
+          "labelMaxWidth": "{extensions.native.tokens.sizes.applied-base-max-width}"
+        },
+        {
+          "name": "Unified diff",
+          "kind": "native-reader",
+          "source": "ui.rs: render_reader, scroll_row",
+          "description": "22px rows, two 45px number columns and a 22px sign column. Muted line numbers; green additions, red deletions, blue hunk headers. Full nonempty line text scrolls horizontally; no per-line character clipping.",
+          "typography": "{extensions.native.tokens.typography.diff}",
+          "height": "{extensions.native.tokens.sizes.diff-row-height}",
+          "states": { "addition": "{extensions.native.tokens.colors.addition-surface}", "deletion": "{extensions.native.tokens.colors.deletion-surface}", "header": "{extensions.native.tokens.colors.diff-header-surface}", "context": "{extensions.native.tokens.colors.ground}" },
+          "rust": "uniform_list(\"diff-lines\", lines.len(), /* row renderer */).with_width_from_item(widest).with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)"
+        },
+        {
+          "name": "Whole-file code reader",
+          "kind": "native-reader",
+          "source": "ui.rs: open_file, render_reader, request_navigation",
+          "description": "Borderless read-only editor under file tabs and a path/action header. Font size uses the global code_font_size preference. Cmd-click requests a definition; a semantic self-definition at the declaration switches to references. Deleted or stale source is guarded. Syntax token colors are library-owned.",
+          "typography": "{extensions.native.tokens.typography.code}",
+          "rust": "Editor::new(&editor).readonly(true).bordered(false).h(relative(1.)).font_family(\"JetBrains Mono\").text_size(px(self.prefs.code_font_size))"
+        },
+        {
+          "name": "Results panel",
+          "kind": "native-results",
+          "source": "ui.rs: render_results, handle_list_key",
+          "description": "Full-width lower panel with semantic/text label, count and close action. Rows show blue path:line and muted monospaced preview; cursor and hover use raised color.",
+          "height": "{extensions.native.tokens.sizes.results-height}",
+          "rowHeight": "{extensions.native.tokens.sizes.result-row-height}",
+          "backgroundColor": "{extensions.native.tokens.colors.sidebar}"
+        },
+        {
+          "name": "Notices and footer",
+          "kind": "native-status",
+          "source": "ui.rs: Render for Pokarak, render_reader",
+          "description": "External changes use amber with an explicit refresh action; errors use deletion colors and dismiss; trust uses a blue surface and explicit allow/file-only actions. Footer retains worktree path, status and keyboard hint. Loading uses text and disabled controls, not fabricated activity.",
+          "footerHeight": "{extensions.native.tokens.sizes.footer-height}",
+          "states": { "externalChange": "{extensions.native.tokens.colors.external-change-surface}", "error": "{extensions.native.tokens.colors.deletion-surface}", "trust": "{extensions.native.tokens.colors.trust-surface}" }
+        },
+        {
+          "name": "Settings dialog",
+          "kind": "native-dialog",
+          "source": "ui.rs: open_settings, set_theme, set_code_size",
+          "description": "Settings opens from titlebar, application menu or Cmd-,. System/Light/Dark choices have selected states and Monitor/Sun/Moon icons. The explicitly labeled whole-file code size has minus/plus bounds and a numeric pt label. Changes apply and save immediately; Close dismisses the dialog.",
+          "width": "{extensions.native.tokens.sizes.settings-dialog-width}",
+          "labelTypography": "{extensions.native.tokens.typography.settings-label}",
+          "sectionGap": "{extensions.native.tokens.spacing.step-5.value}",
+          "rust": "window.open_dialog(cx, move |dialog, _, cx| { /* theme and font controls */ dialog.title(\"설정\").width(px(430.)) })"
+        },
+        {
+          "name": "Welcome and recent projects",
+          "kind": "native-empty-state",
+          "source": "ui.rs: render_welcome, close_all_projects",
+          "description": "Centered spork, 변경된 코드를, 가볍게., a short subtitle and project-open action. Recent project rows show name and parent path. Closing all projects restores this view without deleting repositories.",
+          "typography": "{extensions.native.tokens.typography.welcome-title}",
+          "markSize": "{extensions.native.tokens.icons.welcome-mark}"
+        }
+      ],
+      "designDocDifferences": [
+        "DESIGN.md's middle pane is 270px; render uses 285px initially.",
+        "DESIGN.md's compact rows are 28px; file rows are 29px, diff rows 22px, results/recent rows 40px, and worktree rows are content-sized.",
+        "DESIGN.md's 44px toolbar describes the panel-header scale; the titlebar is 52px and comparison bar is 42px.",
+        "The sidebar now has 12px Worktrees/Branches selector buttons instead of the previous worktree title/count header. Whole-file code defaults to 13px and is configurable from 10–24; unified diff remains 12px.",
+        "DESIGN.md records the dark foundation only. theme.rs implements explicit light mappings and persisted System/Light/Dark selection; System follows native window appearance.",
+        "DESIGN.md's 4/8/12/16/24 spacing and 28px controls are intent, not the resolved native helper sizes at the current 13px rem base. The 5px radius is explicit on worktree rows and project wrappers; button/input radii are library-owned."
+      ],
+      "depth": "App-owned panes are flat, separated by tone and 1px rules; there are no app-defined shadow or transition recipes. Native window chrome and GPUI Kit controls retain their own effects.",
+      "guardrails": [
+        "Preserve Rust/GPUI on macOS desktop, native traffic lights and keyboard conventions.",
+        "Keep the current worktree and applied comparison visible; distinguish pending draft input and compare branch selections without checkout.",
+        "Keep code read-only and distinguish semantic results from text matches.",
+        "Preserve per-worktree reading state; analysis starts only after trust and a request.",
+        "Use repository data, the supplied spork mark and existing bundled fonts; no invented metrics or activity."
+      ]
+    },
+    "colorMeta": {
+      "ground": { "role": "neutral", "displayName": "Ground", "source": "ui.rs: BG; main.rs: theme.colors.background; theme.rs: Palette::rgb resolves dark/light" },
+      "sidebar": { "role": "neutral", "displayName": "Sidebar", "source": "ui.rs: SIDE; theme.rs: Palette::rgb resolves dark/light" },
+      "raised": { "role": "neutral", "displayName": "Raised surface", "source": "ui.rs: PANEL; theme.rs: Palette::rgb resolves dark/light" },
+      "separator": { "role": "neutral", "displayName": "Separator", "source": "ui.rs: LINE; main.rs: theme.colors.border; theme.rs: Palette::rgb resolves dark/light" },
+      "ink": { "role": "neutral", "displayName": "Main ink", "source": "ui.rs: TEXT; main.rs: foreground and accent_foreground; theme.rs: Palette::rgb resolves dark/light" },
+      "muted": { "role": "neutral", "displayName": "Secondary ink", "source": "ui.rs: MUTED; theme.rs: Palette::rgb resolves dark/light" },
+      "accent": { "role": "primary", "displayName": "Cool blue accent", "source": "ui.rs: BLUE; theme.rs: Palette::rgb resolves dark/light" },
+      "theme-accent-surface": { "role": "primary", "displayName": "Theme accent surface", "source": "main.rs: theme.colors.accent; distinct from BLUE; theme.rs: Palette::rgb resolves dark/light" },
+      "addition-ink": { "role": "semantic", "displayName": "Addition ink", "source": "ui.rs: GREEN; theme.rs: Palette::rgb resolves dark/light" },
+      "addition-surface": { "role": "semantic", "displayName": "Addition surface", "source": "ui.rs: render_reader, DiffKind::Addition; theme.rs: Palette::rgb resolves dark/light" },
+      "deletion-ink": { "role": "semantic", "displayName": "Deletion and error ink", "source": "ui.rs: RED; theme.rs: Palette::rgb resolves dark/light" },
+      "deletion-surface": { "role": "semantic", "displayName": "Deletion and error surface", "source": "ui.rs: render_reader; Render for Pokarak; theme.rs: Palette::rgb resolves dark/light" },
+      "diff-header-surface": { "role": "neutral", "displayName": "Hunk header", "source": "ui.rs: render_reader, DiffKind::Header; theme.rs: Palette::rgb resolves dark/light" },
+      "worktree-selected": { "role": "neutral", "displayName": "Selected worktree", "source": "ui.rs: render_worktrees; theme.rs: Palette::rgb resolves dark/light" },
+      "file-selected": { "role": "neutral", "displayName": "Selected file", "source": "ui.rs: render_files; theme.rs: Palette::rgb resolves dark/light" },
+      "warning-ink": { "role": "semantic", "displayName": "Warning and modified status", "source": "ui.rs: file_status, render_worktrees, render_reader; theme.rs: Palette::rgb resolves dark/light" },
+      "external-change-surface": { "role": "semantic", "displayName": "External-change surface", "source": "ui.rs: Render for Pokarak; theme.rs: Palette::rgb resolves dark/light" },
+      "external-change-ink": { "role": "semantic", "displayName": "External-change ink", "source": "ui.rs: Render for Pokarak; theme.rs: Palette::rgb resolves dark/light" },
+      "trust-surface": { "role": "semantic", "displayName": "Analysis trust surface", "source": "ui.rs: Render for Pokarak; theme.rs: Palette::rgb resolves dark/light" }
+    },
+    "typographyMeta": {
+      "body": { "displayName": "UI body", "purpose": "Default chrome and list labels." },
+      "sidebar-mode": { "displayName": "Sidebar mode", "purpose": "Worktrees/Branches selector labels explicitly use 12px." },
+      "settings-label": { "displayName": "Settings section label", "purpose": "Medium-weight theme and whole-file code-size labels." },
+      "product": { "displayName": "Product name", "purpose": "Titlebar wordmark." },
+      "welcome-title": { "displayName": "Welcome title", "purpose": "Empty-project headline." },
+      "code": { "displayName": "Whole-file code", "purpose": "Native read-only Editor; code_font_size is persisted globally, default 13, range 10–24. It does not resize the diff." },
+      "diff": { "displayName": "Unified diff", "purpose": "Virtualized diff content." },
+      "path-and-preview": { "displayName": "Code metadata", "purpose": "Reader path and result previews." },
+      "metadata": { "displayName": "UI metadata", "purpose": "Counts, worktree basename, results path and footer." },
+      "notice": { "displayName": "Notice", "purpose": "Banners, trust explanation and recent-project heading." },
+      "file-status": { "displayName": "File status", "purpose": "A/D/R/?/!/M markers." },
+      "small-control": { "displayName": "Small control", "purpose": "GPUI Kit small buttons and inputs; native rem sizing." }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": []
+  },
+  "components": [],
+  "narrative": {
+    "overview": "Mode: operate/read. A compact developer review surface, with a steel spork mark and a cool blue-gray palette.",
+    "keyCharacteristics": [
+      "Native keyboard conventions, visible focus, tooltips, drag-resizable panes. No dashboard cards or decorative metrics.",
+      "Each worktree restores its exact reading context. The current comparison and worktree stay visible as the code reader moves through definitions and back. New filesystem data prompts refresh without yanking the current reading position.",
+      "Closing all projects restores the welcome screen with project-open action and recent-project list. Worktree sessions, search and reading positions remain isolated within each project. Project close never deletes a repository or worktree."
+    ],
+    "rules": [],
+    "dos": [],
+    "donts": []
+  }
+}

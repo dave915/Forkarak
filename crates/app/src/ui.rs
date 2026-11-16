@@ -2,6 +2,7 @@ mod analysis_feedback;
 mod file_icons;
 mod git_actions;
 mod git_workflow;
+mod reader_navigation;
 use analysis_feedback::AnalysisFeedback;
 
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
@@ -1202,7 +1203,13 @@ impl Pokarak {
                                     cx,
                                 );
                             } else if let Some(position) = position {
-                                editor.set_cursor_position(position, window, cx);
+                                // Navigation/search locations use UTF-16; saved reading
+                                // positions above and below remain editor-native columns.
+                                if let Some(position) =
+                                    reader_navigation::editor_position(editor.text(), position)
+                                {
+                                    editor.set_cursor_position(position, window, cx);
+                                }
                             } else if let Some((position, offset)) = previous_position {
                                 editor.set_cursor_position(position, window, cx);
                                 editor.set_scroll_offset(offset, cx);
@@ -1404,16 +1411,16 @@ impl Pokarak {
         let Some(editor) = self.active_editor() else {
             return;
         };
-        let position = position.unwrap_or_else(|| editor.read(cx).cursor_position());
-        let displayed_text = editor.read(cx).value().to_string();
-        let symbol_start = {
-            use gpui_kit::component::input::RopeExt;
-            let text = editor.read(cx).text();
-            let offset = text.position_to_offset(&position);
-            text.word_range(offset)
-                .map(|range| text.offset_to_position(range.start))
-                .unwrap_or(position)
+        let Some(target) = reader_navigation::navigation_target(
+            editor.read(cx).text(),
+            editor.read(cx).cursor(),
+            position,
+        ) else {
+            return;
         };
+        let position = target.position;
+        let displayed_text = editor.read(cx).value().to_string();
+        let symbol_start = target.symbol_start;
         let absolute = root.join(&path);
         let navigator = self.navigation.as_ref().unwrap().clone();
         let retry_kind = kind.clone();
@@ -2621,15 +2628,16 @@ impl Pokarak {
                 .into_any_element()
         } else if code {
             if let Some(editor) = editor {
+                let clicked_editor = editor.clone();
                 div()
                     .size_full()
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseUpEvent, window, cx| {
                             if event.modifiers.platform && !deleted {
-                                this.request_navigation(
-                                    NavigationKind::Definition,
-                                    None,
+                                this.request_clicked_definition(
+                                    &clicked_editor,
+                                    event.position,
                                     window,
                                     cx,
                                 );

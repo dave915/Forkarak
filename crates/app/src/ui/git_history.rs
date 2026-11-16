@@ -20,7 +20,7 @@ pub(super) struct HistoryUi {
     shallow: bool,
     detail: Option<CommitDetail>,
     selected: Option<PathBuf>,
-    document: Option<DiffDocument>,
+    document: Option<ReviewDiff>,
     editor: Option<Entity<EditorState>>,
     code: bool,
     scroll: UniformListScrollHandle,
@@ -198,7 +198,7 @@ impl Pokarak {
         self.history_read(
             move |root| history::historical_diff(root, &detail, &path),
             |app, doc, w, cx| {
-                app.git_history.document = Some(doc);
+                app.git_history.document = Some(doc.into());
                 app.update_history_editor(w, cx);
             },
             window,

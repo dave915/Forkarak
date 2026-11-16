@@ -13,6 +13,7 @@ pub fn set_session_dir(path: PathBuf) {
 pub struct Preferences {
     pub theme: crate::theme::ThemeChoice,
     pub code_font_size: f32,
+    pub split_diff: bool,
     pub show_branches: bool,
     pub recent: Vec<PathBuf>,
     pub last_root: Option<PathBuf>,

@@ -435,7 +435,9 @@ impl Pokarak {
                     .child(format!("변경 파일  {}", detail.files.len())),
             )
             .child(files);
-        let preview = if let Some(editor) = &ui.editor {
+        let preview = if let Some(doc) = ui.document.as_ref().filter(|doc| !ui.code && self.prefs.split_diff && !doc.binary) {
+            doc.split(cx)
+        } else if let Some(editor) = &ui.editor {
             Editor::new(editor)
                 .readonly(true)
                 .bordered(false)
@@ -474,11 +476,19 @@ impl Pokarak {
                     .border_color(palette.rgb(LINE))
                     .child(
                         history_button(&weak, "history-diff", "Diff", busy, |app, window, cx| {
+                            app.set_split_diff(false);
                             app.git_history.code = false;
                             app.update_history_editor(window, cx);
                         })
                         .ghost()
-                        .selected(!ui.code),
+                        .selected(!ui.code && !self.prefs.split_diff),
+                    )
+                    .child(
+                        history_button(&weak, "history-split", "좌우", busy || binary, |app, _, cx| {
+                            app.set_split_diff(true);
+                            app.git_history.code = false;
+                            cx.notify();
+                        }).ghost().selected(!ui.code && self.prefs.split_diff),
                     )
                     .child(
                         history_button(

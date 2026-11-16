@@ -1,4 +1,5 @@
-//! Read-only Git and filesystem operations. No shell evaluation; all paths are argv.
+//! Read-only Git and filesystem inspection, plus explicit writes in `operations`.
+//! No shell evaluation; all paths are argv.
 //!
 //! Paths in snapshots are relative to the canonical worktree root. Diff line
 //! numbers are one-based; search/navigation locations are zero-based UTF-16.
@@ -7,6 +8,7 @@
 mod backend;
 mod filesystem;
 mod git;
+pub mod operations;
 mod text;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};

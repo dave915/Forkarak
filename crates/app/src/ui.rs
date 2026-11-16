@@ -1,7 +1,8 @@
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
+use crate::theme::{self, Palette, ThemeChoice};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    Disableable, Icon, Selectable, Sizable, StyledExt,
+    Disableable, Icon, Selectable, Sizable, StyledExt, WindowExt,
     button::{Button, ButtonVariants},
     input::{Editor, EditorState, Input, InputEvent, InputState, Position},
     resizable::{h_resizable, resizable_panel},
@@ -49,6 +50,7 @@ actions!(
     pokarak,
     [
         Quit,
+        OpenSettings,
         CloseFile,
         CloseProject,
         CloseAllProjects,
@@ -71,7 +73,11 @@ actions!(
 pub fn bind_keys(cx: &mut App) {
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.set_menus([
-        Menu::new("포카락").items([MenuItem::action("포카락 종료", Quit)]),
+        Menu::new("포카락").items([
+            MenuItem::action("설정…", OpenSettings),
+            MenuItem::separator(),
+            MenuItem::action("포카락 종료", Quit),
+        ]),
         Menu::new("파일").items([
             MenuItem::action("저장소 열기…", OpenRepository),
             MenuItem::action("새로고침", Refresh),
@@ -93,6 +99,7 @@ pub fn bind_keys(cx: &mut App) {
     ]);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-w", CloseFile, None),
         KeyBinding::new("cmd-shift-w", CloseProject, None),
         KeyBinding::new("cmd-alt-down", NextWorktree, None),
@@ -203,6 +210,123 @@ pub struct Pokarak {
 }
 
 impl Pokarak {
+    fn set_theme(&mut self, choice: ThemeChoice, window: &mut Window, cx: &mut Context<Self>) {
+        self.prefs.theme = choice;
+        self.prefs.save();
+        theme::apply(choice, self.prefs.code_font_size, window, cx);
+        cx.notify();
+    }
+
+    fn set_code_size(&mut self, value: f32, window: &mut Window, cx: &mut Context<Self>) {
+        self.prefs.code_font_size = value.clamp(10., 24.);
+        self.prefs.save();
+        theme::apply(self.prefs.theme, self.prefs.code_font_size, window, cx);
+        cx.notify();
+    }
+
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigation_request += 1;
+        self.navigating = false;
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let (choice, font_size) = weak
+                .upgrade()
+                .map(|view| {
+                    let app = view.read(cx);
+                    (app.prefs.theme, app.prefs.code_font_size)
+                })
+                .unwrap_or((ThemeChoice::Dark, 13.));
+            let mut choices = div().flex().gap_2();
+            for (index, (value, label, icon)) in [
+                (ThemeChoice::System, "시스템", IconName::Monitor),
+                (ThemeChoice::Light, "라이트", IconName::Sun),
+                (ThemeChoice::Dark, "다크", IconName::Moon),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let target = weak.clone();
+                choices = choices.child(
+                    Button::new(("theme", index))
+                        .label(label)
+                        .icon(icon)
+                        .selected(choice == value)
+                        .on_click(move |_, window, cx| {
+                            let _ = target.update(cx, |app, cx| app.set_theme(value, window, cx));
+                        }),
+                );
+            }
+            let smaller = weak.clone();
+            let larger = weak.clone();
+            dialog.title("설정").width(px(430.)).child(
+                div()
+                    .v_flex()
+                    .gap_5()
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_2()
+                            .child(div().font_weight(FontWeight::MEDIUM).child("테마"))
+                            .child(choices),
+                    )
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("코드 보기 글자 크기"),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(
+                                        Button::new("font-smaller")
+                                            .icon(IconName::Minus)
+                                            .disabled(font_size <= 10.)
+                                            .tooltip("작게")
+                                            .on_click(move |_, window, cx| {
+                                                let _ = smaller.update(cx, |app, cx| {
+                                                    app.set_code_size(
+                                                        app.prefs.code_font_size - 1.,
+                                                        window,
+                                                        cx,
+                                                    )
+                                                });
+                                            }),
+                                    )
+                                    .child(format!("{} pt", font_size as u32))
+                                    .child(
+                                        Button::new("font-larger")
+                                            .icon(IconName::Plus)
+                                            .disabled(font_size >= 24.)
+                                            .tooltip("크게")
+                                            .on_click(move |_, window, cx| {
+                                                let _ = larger.update(cx, |app, cx| {
+                                                    app.set_code_size(
+                                                        app.prefs.code_font_size + 1.,
+                                                        window,
+                                                        cx,
+                                                    )
+                                                });
+                                            }),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div().flex().justify_end().child(
+                            Button::new("settings-close")
+                                .label("닫기")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        ),
+                    ),
+            )
+        });
+    }
+
     fn cycle_worktree(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         let trees: Vec<_> = self
             .snapshot()
@@ -403,7 +527,10 @@ impl Pokarak {
     }
 
     pub fn new(initial: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let prefs = Preferences::load();
+        let mut prefs = Preferences::load();
+        if !prefs.code_font_size.is_finite() || !(10. ..=24.).contains(&prefs.code_font_size) {
+            prefs.code_font_size = 13.;
+        }
         let projects = prefs.open_projects.clone();
         let mut pending_projects: VecDeque<_> = initial.into_iter().collect();
         let initial = pending_projects
@@ -447,6 +574,12 @@ impl Pokarak {
                 _ => {}
             },
         ));
+        subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
+            if this.prefs.theme == ThemeChoice::System {
+                theme::apply(this.prefs.theme, this.prefs.code_font_size, window, cx);
+                cx.notify();
+            }
+        }));
         let mut this = Self {
             focus: cx.focus_handle(),
             prefs,
@@ -520,6 +653,7 @@ impl Pokarak {
             }
         })
         .detach();
+        theme::apply(this.prefs.theme, this.prefs.code_font_size, window, cx);
         this.focus.focus(window, cx);
         if let Some(path) = initial {
             this.open_repository(path, window, cx);
@@ -1552,6 +1686,7 @@ impl Pokarak {
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::new(cx);
         let repo_name = self
             .current
             .as_ref()
@@ -1566,12 +1701,12 @@ impl Pokarak {
             .flex()
             .items_center()
             .gap_2()
-            .bg(rgb(SIDE))
+            .bg(palette.rgb(SIDE))
             .child(
                 Icon::new(IconName::Utensils)
                     .data(include_bytes!("../../../assets/icons/spork.svg").as_slice())
                     .size(px(24.))
-                    .text_color(rgb(BLUE)),
+                    .text_color(palette.rgb(BLUE)),
             )
             .child(
                 div()
@@ -1605,7 +1740,7 @@ impl Pokarak {
             .child(
                 div()
                     .ml_2()
-                    .text_color(rgb(MUTED))
+                    .text_color(palette.rgb(MUTED))
                     .text_ellipsis()
                     .child(repo_name),
             )
@@ -1630,17 +1765,26 @@ impl Pokarak {
                     .label("프로젝트 열기")
                     .small()
                     .on_click(cx.listener(|this, _, w, cx| this.choose_repository(w, cx))),
+            )
+            .child(
+                Button::new("settings")
+                    .icon(IconName::Settings)
+                    .ghost()
+                    .small()
+                    .tooltip("설정  ⌘,")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
             );
         gpui_kit::component::TitleBar::new()
             .h(px(52.))
             .pl(px(90.))
-            .bg(rgb(SIDE))
+            .bg(palette.rgb(SIDE))
             .border_b_0()
             .child(content)
             .into_any_element()
     }
 
     fn render_projects(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::new(cx);
         let mut tabs = div()
             .id("project-tabs")
             .h(px(38.))
@@ -1650,7 +1794,7 @@ impl Pokarak {
             .items_center()
             .gap_1()
             .overflow_x_scroll()
-            .bg(rgb(SIDE));
+            .bg(palette.rgb(SIDE));
         for (index, project) in self.projects.iter().enumerate() {
             let target = project.last_worktree.clone();
             let close = project.root.clone();
@@ -1666,7 +1810,11 @@ impl Pokarak {
                     .flex()
                     .items_center()
                     .rounded(px(5.))
-                    .bg(if active { rgb(PANEL) } else { rgb(SIDE) })
+                    .bg(if active {
+                        palette.rgb(PANEL)
+                    } else {
+                        palette.rgb(SIDE)
+                    })
                     .child(
                         Button::new(("project", index))
                             .icon(IconName::FolderGit2)
@@ -1702,7 +1850,129 @@ impl Pokarak {
         .into_any_element()
     }
 
+    fn render_sidebar_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .h(px(44.))
+            .flex_none()
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                Button::new("sidebar-worktrees")
+                    .label("워크트리")
+                    .ghost()
+                    .small()
+                    .text_size(px(12.))
+                    .selected(!self.prefs.show_branches)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.prefs.show_branches = false;
+                        this.prefs.save();
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("sidebar-branches")
+                    .label("브랜치")
+                    .ghost()
+                    .small()
+                    .text_size(px(12.))
+                    .selected(self.prefs.show_branches)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.prefs.show_branches = true;
+                        this.prefs.save();
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn render_branches(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::new(cx);
+        let branches = Arc::new(
+            self.snapshot()
+                .map(|s| s.branches.clone())
+                .unwrap_or_default(),
+        );
+        let current = self
+            .snapshot()
+            .map(|s| s.worktree.branch.clone())
+            .unwrap_or_default();
+        let base = match self.snapshot().map(|s| &s.compare) {
+            Some(CompareMode::Branch(base)) => Some(base.clone()),
+            _ => None,
+        };
+        let root = self.current.clone();
+        let weak = cx.entity().downgrade();
+        div()
+            .size_full()
+            .v_flex()
+            .bg(palette.rgb(SIDE))
+            .overflow_hidden()
+            .child(self.render_sidebar_header(cx))
+            .child(if branches.is_empty() {
+                div()
+                    .p_3()
+                    .text_color(palette.rgb(MUTED))
+                    .child("아직 커밋된 브랜치가 없습니다.")
+                    .into_any_element()
+            } else {
+                uniform_list("branches", branches.len(), move |range, _, _| {
+                    range
+                        .map(|index| {
+                            let name = branches[index].clone();
+                            let target = weak.clone();
+                            let scope = root.clone();
+                            let selected = base.as_ref() == Some(&name);
+                            div()
+                                .h(px(32.))
+                                .w_full()
+                                .px_2()
+                                .child(
+                                    Button::new(("branch", index))
+                                        .icon(IconName::GitBranch)
+                                        .label(name.clone())
+                                        .tooltip(format!("{name}을 기준으로 현재 워크트리와 비교"))
+                                        .ghost()
+                                        .small()
+                                        .w_full()
+                                        .selected(selected)
+                                        .when(name == current, |b| {
+                                            b.child(
+                                                div()
+                                                    .text_size(px(10.))
+                                                    .text_color(palette.rgb(MUTED))
+                                                    .child("현재"),
+                                            )
+                                        })
+                                        .on_click(move |_, window, cx| {
+                                            let _ = target.update(cx, |this, cx| {
+                                                if this.current != scope {
+                                                    return;
+                                                }
+                                                this.base_input.update(cx, |input, cx| {
+                                                    input.set_value(name.clone(), window, cx)
+                                                });
+                                                this.compare(true, window, cx);
+                                            });
+                                        }),
+                                )
+                                .into_any_element()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .flex_1()
+                .h_full()
+                .into_any_element()
+            })
+            .into_any_element()
+    }
+
     fn render_worktrees(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.prefs.show_branches {
+            return self.render_branches(cx);
+        }
+        let palette = Palette::new(cx);
         let worktrees = self
             .snapshot()
             .map(|s| s.worktrees.clone())
@@ -1710,23 +1980,9 @@ impl Pokarak {
         let mut panel = div()
             .size_full()
             .v_flex()
-            .bg(rgb(SIDE))
+            .bg(palette.rgb(SIDE))
             .overflow_hidden()
-            .child(
-                div()
-                    .h(px(44.))
-                    .flex_none()
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(div().font_weight(FontWeight::MEDIUM).child("워크트리"))
-                    .child(
-                        div()
-                            .text_color(rgb(MUTED))
-                            .child(worktrees.len().to_string()),
-                    ),
-            );
+            .child(self.render_sidebar_header(cx));
         let mut list = div()
             .id("worktree-list")
             .flex_1()
@@ -1760,8 +2016,12 @@ impl Pokarak {
                     .mb_1()
                     .rounded(px(5.))
                     .cursor_pointer()
-                    .bg(if active { rgb(0x2b3947) } else { rgb(SIDE) })
-                    .hover(|s| s.bg(rgb(PANEL)))
+                    .bg(if active {
+                        palette.rgb(0x2b3947)
+                    } else {
+                        palette.rgb(SIDE)
+                    })
+                    .hover(|s| s.bg(palette.rgb(PANEL)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if !missing {
                             this.open_repository(path.clone(), window, cx);
@@ -1772,16 +2032,18 @@ impl Pokarak {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(
-                                Icon::new(IconName::GitBranch)
-                                    .size(px(15.))
-                                    .text_color(if active { rgb(BLUE) } else { rgb(MUTED) }),
-                            )
+                            .child(Icon::new(IconName::GitBranch).size(px(15.)).text_color(
+                                if active {
+                                    palette.rgb(BLUE)
+                                } else {
+                                    palette.rgb(MUTED)
+                                },
+                            ))
                             .child(div().flex_1().text_ellipsis().child(branch))
                             .child(
                                 div()
                                     .text_size(px(11.))
-                                    .text_color(rgb(MUTED))
+                                    .text_color(palette.rgb(MUTED))
                                     .child(tree.changed_files.to_string()),
                             ),
                     )
@@ -1790,7 +2052,7 @@ impl Pokarak {
                             .mt_1()
                             .pl(px(23.))
                             .text_size(px(11.))
-                            .text_color(rgb(MUTED))
+                            .text_color(palette.rgb(MUTED))
                             .text_ellipsis()
                             .child(
                                 tree.path
@@ -1801,13 +2063,16 @@ impl Pokarak {
                             ),
                     )
                     .when(tree.is_locked || missing, |d| {
-                        d.child(div().text_size(px(11.)).text_color(rgb(0xe4bb79)).child(
-                            if missing {
-                                "경로가 없습니다"
-                            } else {
-                                "잠긴 워크트리"
-                            },
-                        ))
+                        d.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(palette.rgb(0xe4bb79))
+                                .child(if missing {
+                                    "경로가 없습니다"
+                                } else {
+                                    "잠긴 워크트리"
+                                }),
+                        )
                     }),
             );
         }
@@ -1816,6 +2081,7 @@ impl Pokarak {
     }
 
     fn render_files(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::new(cx);
         let all = self.session().map(|s| s.saved.all_files).unwrap_or(false);
         let selected = self.selected();
         let keyboard_index = if self.search_input.focus_handle(cx).is_focused(window) {
@@ -1829,7 +2095,7 @@ impl Pokarak {
         div()
             .size_full()
             .v_flex()
-            .bg(rgb(BG))
+            .bg(palette.rgb(BG))
             .overflow_hidden()
             .child(
                 div()
@@ -1869,7 +2135,7 @@ impl Pokarak {
                     .child(
                         div()
                             .text_size(px(11.))
-                            .text_color(rgb(MUTED))
+                            .text_color(palette.rgb(MUTED))
                             .child(count.to_string()),
                     ),
             )
@@ -1899,7 +2165,7 @@ impl Pokarak {
             .child(if count == 0 {
                 div()
                     .p_4()
-                    .text_color(rgb(MUTED))
+                    .text_color(palette.rgb(MUTED))
                     .child(if self.filter.is_empty() {
                         "변경된 파일이 없습니다. 전체 파일에서 코드를 읽을 수 있습니다."
                     } else {
@@ -1959,8 +2225,12 @@ impl Pokarak {
                                 .items_center()
                                 .gap_2()
                                 .cursor_pointer()
-                                .bg(if selected { rgb(0x2c3a48) } else { rgb(BG) })
-                                .hover(|s| s.bg(rgb(PANEL)))
+                                .bg(if selected {
+                                    palette.rgb(0x2c3a48)
+                                } else {
+                                    palette.rgb(BG)
+                                })
+                                .hover(|s| s.bg(palette.rgb(PANEL)))
                                 .child(
                                     Icon::new(if row.directory {
                                         IconName::Folder
@@ -1968,20 +2238,18 @@ impl Pokarak {
                                         IconName::FileCode
                                     })
                                     .size(px(14.))
-                                    .text_color(rgb(
-                                        if row.directory {
-                                            MUTED
-                                        } else {
-                                            status.map(|s| s.1).unwrap_or(MUTED)
-                                        },
-                                    )),
+                                    .text_color(palette.rgb(if row.directory {
+                                        MUTED
+                                    } else {
+                                        status.map(|s| s.1).unwrap_or(MUTED)
+                                    })),
                                 )
                                 .child(div().flex_1().min_w_0().text_ellipsis().child(row.label))
                                 .when_some(status, |d, (label, color)| {
                                     d.child(
                                         div()
                                             .text_size(px(10.))
-                                            .text_color(rgb(color))
+                                            .text_color(palette.rgb(color))
                                             .child(label),
                                     )
                                 })
@@ -2017,6 +2285,7 @@ impl Pokarak {
     }
 
     fn render_comparison(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::new(cx);
         let mode = self.snapshot().map(|s| &s.compare);
         let draft = self.base_input.read(cx).value();
         let pending = matches!(mode,Some(CompareMode::Branch(base)) if base.as_str()!=draft.trim());
@@ -2028,7 +2297,7 @@ impl Pokarak {
             .items_center()
             .gap_2()
             .border_b_1()
-            .border_color(rgb(LINE))
+            .border_color(palette.rgb(LINE))
             .child(
                 Button::new("uncommitted")
                     .label("미커밋")
@@ -2065,7 +2334,7 @@ impl Pokarak {
                     .max_w(px(260.))
                     .text_ellipsis()
                     .text_size(px(11.))
-                    .text_color(rgb(MUTED))
+                    .text_color(palette.rgb(MUTED))
                     .child(match mode {
                         Some(CompareMode::Branch(base)) => {
                             format!("적용됨: {base} 공통 조상 → 현재 파일")
@@ -2099,6 +2368,7 @@ impl Pokarak {
     }
 
     fn render_reader(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::new(cx);
         let Some(session) = self.session() else {
             return self.render_welcome(cx);
         };
@@ -2108,7 +2378,7 @@ impl Pokarak {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(rgb(MUTED))
+                .text_color(palette.rgb(MUTED))
                 .child("파일을 선택하면 변경사항과 코드를 볼 수 있습니다.")
                 .into_any_element();
         };
@@ -2129,7 +2399,7 @@ impl Pokarak {
             .flex_none()
             .overflow_x_scroll()
             .border_b_1()
-            .border_color(rgb(LINE));
+            .border_color(palette.rgb(LINE));
         for (i, tab) in session.saved.tabs.iter().enumerate() {
             let target = tab.clone();
             let close = tab.clone();
@@ -2174,7 +2444,7 @@ impl Pokarak {
             .items_center()
             .gap_2()
             .border_b_1()
-            .border_color(rgb(LINE))
+            .border_color(palette.rgb(LINE))
             .child(
                 div()
                     .flex_1()
@@ -2225,7 +2495,7 @@ impl Pokarak {
         let content = if diff.map(|d| d.binary).unwrap_or(false) {
             div()
                 .p_6()
-                .text_color(rgb(MUTED))
+                .text_color(palette.rgb(MUTED))
                 .child("바이너리 파일입니다. 텍스트 비교를 제공하지 않습니다.")
                 .into_any_element()
         } else if code {
@@ -2251,13 +2521,13 @@ impl Pokarak {
                             .bordered(false)
                             .h(relative(1.))
                             .font_family("JetBrains Mono")
-                            .text_size(px(13.)),
+                            .text_size(px(self.prefs.code_font_size)),
                     )
                     .into_any_element()
             } else {
                 div()
                     .p_4()
-                    .text_color(rgb(MUTED))
+                    .text_color(palette.rgb(MUTED))
                     .child(if self.file_loading {
                         "파일을 읽는 중…"
                     } else {
@@ -2291,17 +2561,17 @@ impl Pokarak {
                             .h(px(22.))
                             .flex()
                             .items_center()
-                            .bg(rgb(background))
+                            .bg(palette.rgb(background))
                             .font_family("JetBrains Mono")
                             .text_size(px(12.))
-                            .text_color(rgb(color))
+                            .text_color(palette.rgb(color))
                             .child(
                                 div()
                                     .w(px(45.))
                                     .flex_none()
                                     .text_right()
                                     .pr_2()
-                                    .text_color(rgb(MUTED))
+                                    .text_color(palette.rgb(MUTED))
                                     .child(
                                         line.old_line.map(|n| n.to_string()).unwrap_or_default(),
                                     ),
@@ -2312,7 +2582,7 @@ impl Pokarak {
                                     .flex_none()
                                     .text_right()
                                     .pr_2()
-                                    .text_color(rgb(MUTED))
+                                    .text_color(palette.rgb(MUTED))
                                     .child(
                                         line.new_line.map(|n| n.to_string()).unwrap_or_default(),
                                     ),
@@ -2355,7 +2625,7 @@ impl Pokarak {
         } else {
             div()
                 .p_4()
-                .text_color(rgb(MUTED))
+                .text_color(palette.rgb(MUTED))
                 .child(if self.file_loading {
                     "변경사항을 읽는 중…"
                 } else {
@@ -2376,7 +2646,7 @@ impl Pokarak {
                         .px_3()
                         .py_1()
                         .text_size(px(11.))
-                        .text_color(rgb(RED))
+                        .text_color(palette.rgb(RED))
                         .child(
                             "삭제 전 코드입니다. 현재 작업 트리 기준 탐색은 사용할 수 없습니다.",
                         ),
@@ -2388,7 +2658,7 @@ impl Pokarak {
                         .px_3()
                         .py_1()
                         .text_size(px(11.))
-                        .text_color(rgb(0xe4bb79))
+                        .text_color(palette.rgb(0xe4bb79))
                         .child("큰 파일의 일부만 표시합니다."),
                 )
             })
@@ -2397,6 +2667,7 @@ impl Pokarak {
     }
 
     fn render_results(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::new(cx);
         let results = Arc::new(self.results.clone());
         let weak = cx.entity().downgrade();
         let root = self.current.clone().unwrap_or_default();
@@ -2408,8 +2679,8 @@ impl Pokarak {
             .flex_none()
             .v_flex()
             .border_t_1()
-            .border_color(rgb(LINE))
-            .bg(rgb(SIDE))
+            .border_color(palette.rgb(LINE))
+            .bg(palette.rgb(SIDE))
             .child(
                 div()
                     .h(px(34.))
@@ -2418,13 +2689,16 @@ impl Pokarak {
                     .items_center()
                     .gap_3()
                     .child(format!("{}  {}", self.result_title, self.results.len()))
-                    .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(
-                        if self.result_semantic {
-                            "언어 분석 결과"
-                        } else {
-                            "텍스트 검색 결과"
-                        },
-                    ))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(palette.rgb(MUTED))
+                            .child(if self.result_semantic {
+                                "언어 분석 결과"
+                            } else {
+                                "텍스트 검색 결과"
+                            }),
+                    )
                     .child(div().flex_1())
                     .child(
                         Button::new("close-results")
@@ -2442,7 +2716,7 @@ impl Pokarak {
             .child(if results.is_empty() {
                 div()
                     .p_3()
-                    .text_color(rgb(MUTED))
+                    .text_color(palette.rgb(MUTED))
                     .child("검색 결과가 없습니다.")
                     .into_any_element()
             } else {
@@ -2462,7 +2736,11 @@ impl Pokarak {
                                 .id(("hit", ix))
                                 .role(accesskit::Role::Button)
                                 .aria_label(label.clone())
-                                .bg(if ix == cursor { rgb(PANEL) } else { rgb(SIDE) })
+                                .bg(if ix == cursor {
+                                    palette.rgb(PANEL)
+                                } else {
+                                    palette.rgb(SIDE)
+                                })
                                 .on_a11y_action(accesskit::Action::Click, move |_, window, cx| {
                                     let _ = accessible_target.update(cx, |this, cx| {
                                         this.open_location(accessible_hit.clone(), window, cx)
@@ -2471,11 +2749,11 @@ impl Pokarak {
                                 .h(px(40.))
                                 .px_3()
                                 .cursor_pointer()
-                                .hover(|s| s.bg(rgb(PANEL)))
+                                .hover(|s| s.bg(palette.rgb(PANEL)))
                                 .child(
                                     div()
                                         .text_size(px(11.))
-                                        .text_color(rgb(BLUE))
+                                        .text_color(palette.rgb(BLUE))
                                         .text_ellipsis()
                                         .child(label),
                                 )
@@ -2483,7 +2761,7 @@ impl Pokarak {
                                     div()
                                         .font_family("JetBrains Mono")
                                         .text_size(px(11.))
-                                        .text_color(rgb(MUTED))
+                                        .text_color(palette.rgb(MUTED))
                                         .text_ellipsis()
                                         .child(hit.preview.clone()),
                                 )
@@ -2505,6 +2783,7 @@ impl Pokarak {
     }
 
     fn render_welcome(&self, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::new(cx);
         let mut content = div()
             .size_full()
             .v_flex()
@@ -2515,7 +2794,7 @@ impl Pokarak {
                 Icon::new(IconName::Utensils)
                     .data(include_bytes!("../../../assets/icons/spork.svg").as_slice())
                     .size(px(52.))
-                    .text_color(rgb(BLUE)),
+                    .text_color(palette.rgb(BLUE)),
             )
             .child(
                 div()
@@ -2525,7 +2804,7 @@ impl Pokarak {
             )
             .child(
                 div()
-                    .text_color(rgb(MUTED))
+                    .text_color(palette.rgb(MUTED))
                     .child("워크트리를 오가며 diff와 코드를 읽으세요."),
             )
             .child(
@@ -2565,7 +2844,7 @@ impl Pokarak {
                             .min_w_0()
                             .text_ellipsis()
                             .text_size(px(11.))
-                            .text_color(rgb(MUTED))
+                            .text_color(palette.rgb(MUTED))
                             .child(path.parent().unwrap_or(path).to_string_lossy().to_string()),
                     )
                     .on_click(cx.listener(move |this, _, w, cx| {
@@ -2579,7 +2858,7 @@ impl Pokarak {
                     div()
                         .mt_3()
                         .text_size(px(12.))
-                        .text_color(rgb(MUTED))
+                        .text_color(palette.rgb(MUTED))
                         .child("최근 프로젝트"),
                 )
                 .child(recent);
@@ -2590,6 +2869,7 @@ impl Pokarak {
 
 impl Render for Pokarak {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = Palette::new(cx);
         let body = if self.current.is_some() {
             h_resizable("main-panes")
                 .child(
@@ -2614,8 +2894,9 @@ impl Render for Pokarak {
             .as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
-        div().id("pokarak").key_context("Pokarak").track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(rgb(BG)).text_color(rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
+        div().id("pokarak").key_context("Pokarak").track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
+            .on_action(cx.listener(|this,_:&OpenSettings,w,cx|this.open_settings(w,cx)))
             .on_action(cx.listener(|this,_:&OpenRepository,w,cx|this.choose_repository(w,cx)))
             .on_action(cx.listener(|this,_:&CloseFile,w,cx|{if let Some(path)=this.selected(){this.close_file(path,w,cx)}else if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
             .on_action(cx.listener(|this,_:&CloseProject,w,cx|{if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
@@ -2635,20 +2916,20 @@ impl Render for Pokarak {
             .child(self.render_toolbar(cx))
             .when(!self.projects.is_empty(),|d|d.child(self.render_projects(cx)))
             .when(self.current.is_some(),|d|d.child(self.render_comparison(cx)))
-            .when(self.external_change,|d|d.child(div().h(px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(rgb(0x3b3326)).text_color(rgb(0xe4c28c)).text_size(px(12.))
+            .when(self.external_change,|d|d.child(div().h(px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(px(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")
                 .child(Button::new("apply-refresh").label("갱신").ghost().small().on_click(cx.listener(|this,_,w,cx|this.refresh(w,cx))))))
-            .when_some(self.error.clone(),|d,error|d.child(div().px_3().py_2().flex().items_start().gap_2().bg(rgb(0x3c2a30)).text_color(rgb(RED)).text_size(px(12.))
+            .when_some(self.error.clone(),|d,error|d.child(div().px_3().py_2().flex().items_start().gap_2().bg(palette.rgb(0x3c2a30)).text_color(palette.rgb(RED)).text_size(px(12.))
                 .child(div().flex_1().child(error)).child(Button::new("dismiss-error").icon(IconName::X).ghost().small().on_click(cx.listener(|this,_,_,cx|{this.error=None;cx.notify();})))))
-            .when(self.trust_prompt,|d|d.child(div().p_3().v_flex().gap_2().bg(rgb(0x293848)).border_b_1().border_color(rgb(LINE))
+            .when(self.trust_prompt,|d|d.child(div().p_3().v_flex().gap_2().bg(palette.rgb(0x293848)).border_b_1().border_color(palette.rgb(LINE))
                 .child(div().font_weight(FontWeight::MEDIUM).child("이 워크트리에서 코드 분석을 시작할까요?"))
-                .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child("언어 서버가 Gradle/Maven 설정을 읽거나 실행할 수 있습니다. 신뢰하는 프로젝트에서만 시작하세요. 파일과 diff는 분석 없이도 읽을 수 있습니다."))
+                .child(div().text_size(px(12.)).text_color(palette.rgb(MUTED)).child("언어 서버가 Gradle/Maven 설정을 읽거나 실행할 수 있습니다. 신뢰하는 프로젝트에서만 시작하세요. 파일과 diff는 분석 없이도 읽을 수 있습니다."))
                 .child(div().flex().gap_2()
                     .child(Button::new("trust-start").label("신뢰하고 분석 허용").small().on_click(cx.listener(|this,_,_,cx|this.enable_analysis(cx))))
                     .child(Button::new("trust-cancel").label("파일만 보기").ghost().small().on_click(cx.listener(|this,_,_,cx|{this.trust_prompt=false;cx.notify();}))))))
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
             .when(self.results_open,|d|d.child(self.render_results(cx)))
-            .child(div().h(px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(rgb(LINE)).bg(rgb(SIDE)).text_size(px(11.)).text_color(rgb(MUTED))
+            .child(div().h(px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(palette.rgb(LINE)).bg(palette.rgb(SIDE)).text_size(px(11.)).text_color(palette.rgb(MUTED))
                 .child(div().flex_1().min_w_0().text_ellipsis().child(context))
                 .child(div().max_w(px(400.)).min_w_0().text_ellipsis().child(self.status.clone()))
                 .child(if self.current.is_some() { "⌘클릭 정의  /  ⌥F7 사용처" } else { "⌘O 프로젝트 열기" }))

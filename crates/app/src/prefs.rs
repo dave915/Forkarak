@@ -11,6 +11,9 @@ pub fn set_session_dir(path: PathBuf) {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    pub theme: crate::theme::ThemeChoice,
+    pub code_font_size: f32,
+    pub show_branches: bool,
     pub recent: Vec<PathBuf>,
     pub last_root: Option<PathBuf>,
     pub worktrees: HashMap<PathBuf, SavedView>,

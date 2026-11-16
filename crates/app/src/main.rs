@@ -1,5 +1,6 @@
 mod cli;
 mod prefs;
+mod theme;
 mod ui;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;

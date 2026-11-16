@@ -26,7 +26,8 @@ Local Git repositories and multiple worktrees. AI or an external IDE can continu
 - Cmd-click definitions and explicit references action through language servers. Semantic results and text candidates must be distinguished.
 - File and diff viewing must work without a language server or project indexing.
 - No unsolicited build/import execution for untrusted repositories.
-- Git writes, advanced history editing and Spring-specific analysis are later scope.
+- Explicit Git actions for branches, remotes, staging, commit/amend, stash and conflict resolution. Repository inspection and worktree viewing remain read-only.
+- Commit graph with parent-relative file diffs and single-commit cherry-pick/revert. Advanced history editing and Spring-specific analysis are later scope.
 
 ## Brand Commitments
 Name: 포카락. Project/English spelling: pokarak. Mark: the user's spork reference, a spoon ending in short fork tines.

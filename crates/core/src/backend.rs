@@ -149,6 +149,17 @@ impl Capture {
     }
 }
 
+/// Working change inventory for the independent commit dialog. No index refresh,
+/// filters, worktree inventory traversal, or disk-backed staged preview.
+pub(crate) fn commit_working_changes(root: &Path) -> Result<Vec<ChangedFile>> {
+    let capture = Capture::read(root, &Tree::new())?;
+    Ok(capture
+        .changes(root, &capture.head_tree, true)?
+        .into_iter()
+        .filter(|file| file.unstaged)
+        .collect())
+}
+
 pub(crate) fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
     let root = git::repository_root(path)?;
     let head = git::head(&root)?;

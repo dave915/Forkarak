@@ -1,5 +1,5 @@
-mod file_icons;
 mod analysis_feedback;
+mod file_icons;
 mod git_actions;
 mod git_workflow;
 use analysis_feedback::AnalysisFeedback;

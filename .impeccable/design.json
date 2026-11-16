@@ -18,7 +18,7 @@
         "sourceSha256": {
           "crates/app/src/theme.rs": "3f4261c2f1fc9b9f2c438258b361a2eec801827f9af62dd0590726bdbe1d0bc8",
           "crates/app/src/prefs.rs": "08f7bd5ef798561a3d028813075491f6510c541a7d10d7e8fbc8789d63a0f5e1",
-          "crates/app/src/ui.rs": "bd1eba55a47b35713c1a93c4a5db1ab2d10dd7067257e6b6c092c832b13dd997",
+          "crates/app/src/ui.rs": "666a50eea13fc2b94359521e20b4eb8318ce1fb10e230ffe4062672de401f0ea",
           "crates/app/src/main.rs": "0c330db7dc773262a58fbf88c84a1792a370b0b0f16fd08233ab28d855961a6c",
           "crates/app/src/cli.rs": "a342c5d16cf408da832543c414887e9ff4f192736eecd3d690daa8fc357234d5"
         },
@@ -176,7 +176,7 @@
           "default": "worktrees",
           "labels": ["워크트리", "브랜치"],
           "persistence": "show_branches defaults to false. The selector saves this global preference immediately; it is shared across projects/worktrees rather than stored in SavedView.",
-          "branchAction": "A branch row writes its name into base_input and calls compare(true) for the current worktree; it does not check out or switch worktrees. The callback rejects a changed worktree scope.",
+          "branchAction": "Branch rows expose a Button role, comparison action name, selected state and accessibility Click action. Click and unmodified Enter/Space activation share a callback that writes the branch name into base_input and calls compare(true); it rejects a changed worktree scope and never checks out or switches worktrees. Rows are tab stops with a visible blue focus border.",
           "branchState": "Rows are selected against the installed snapshot's Branch(base). 현재 marks the checked-out branch separately; the list uses snapshot.branches. An empty list says 아직 커밋된 브랜치가 없습니다."
         },
         "comparison": {
@@ -238,10 +238,10 @@
           "name": "Worktrees / Branches sidebar",
           "kind": "native-navigation",
           "source": "ui.rs: render_sidebar_header, render_worktrees, render_branches",
-          "description": "44px header with two 12px ghost toggle labels. Worktree rows show branch, change count and directory basename, with optional missing/locked warnings; their height follows content/padding. Branch rows are 32px high with a selected-base button and a separate 현재 marker for the checked-out branch. Branch activation compares without checkout. Footer retains the current worktree path.",
+          "description": "44px header with two 12px ghost toggle labels. Worktree rows show branch, change count and directory basename, with optional missing/locked warnings; their height follows content/padding. Branch rows are 32px high, single-line full-row click targets with the same left inset as worktrees, a 15px GitBranch icon, a flexible ellipsized name and a non-shrinking 현재 marker at the right for the checked-out branch. Branch activation compares without checkout. Footer retains the current worktree path.",
           "selectorTypography": "{extensions.native.tokens.typography.sidebar-mode}",
           "branchRowHeight": "{extensions.native.tokens.sizes.branch-row-height}",
-          "statesScope": "The padding, radius and color states below describe worktree rows; branch buttons delegate selected/hover styling to GPUI Kit.",
+          "statesScope": "Both row types use the horizontal padding, 5px radius and palette states below; worktrees also use vertical padding and a path subtitle. Branch rows keep the selected blue fill on hover, use raised fill only for unselected hover, and color selected icons with the accent token.",
           "padding": "{extensions.native.tokens.spacing.step-2.value}",
           "rounded": "{extensions.native.tokens.rounded.worktree-and-project-tab}",
           "states": { "rest": "{extensions.native.tokens.colors.sidebar}", "selected": "{extensions.native.tokens.colors.worktree-selected}", "hover": "{extensions.native.tokens.colors.raised}" }
@@ -323,7 +323,7 @@
         "DESIGN.md's 44px toolbar describes the panel-header scale; the titlebar is 52px and comparison bar is 42px.",
         "The sidebar now has 12px Worktrees/Branches selector buttons instead of the previous worktree title/count header. Whole-file code defaults to 13px and is configurable from 10–24; unified diff remains 12px.",
         "DESIGN.md records the dark foundation only. theme.rs implements explicit light mappings and persisted System/Light/Dark selection; System follows native window appearance.",
-        "DESIGN.md's 4/8/12/16/24 spacing and 28px controls are intent, not the resolved native helper sizes at the current 13px rem base. The 5px radius is explicit on worktree rows and project wrappers; button/input radii are library-owned."
+        "DESIGN.md's 4/8/12/16/24 spacing and 28px controls are intent, not the resolved native helper sizes at the current 13px rem base. The 5px radius is explicit on worktree rows, branch rows and project wrappers; button/input radii are library-owned."
       ],
       "depth": "App-owned panes are flat, separated by tone and 1px rules; there are no app-defined shadow or transition recipes. Native window chrome and GPUI Kit controls retain their own effects.",
       "guardrails": [
@@ -348,7 +348,7 @@
       "deletion-ink": { "role": "semantic", "displayName": "Deletion and error ink", "source": "ui.rs: RED; theme.rs: Palette::rgb resolves dark/light" },
       "deletion-surface": { "role": "semantic", "displayName": "Deletion and error surface", "source": "ui.rs: render_reader; Render for Pokarak; theme.rs: Palette::rgb resolves dark/light" },
       "diff-header-surface": { "role": "neutral", "displayName": "Hunk header", "source": "ui.rs: render_reader, DiffKind::Header; theme.rs: Palette::rgb resolves dark/light" },
-      "worktree-selected": { "role": "neutral", "displayName": "Selected worktree", "source": "ui.rs: render_worktrees; theme.rs: Palette::rgb resolves dark/light" },
+      "worktree-selected": { "role": "neutral", "displayName": "Selected worktree", "source": "ui.rs: render_worktrees, render_branches; theme.rs: Palette::rgb resolves dark/light" },
       "file-selected": { "role": "neutral", "displayName": "Selected file", "source": "ui.rs: render_files; theme.rs: Palette::rgb resolves dark/light" },
       "warning-ink": { "role": "semantic", "displayName": "Warning and modified status", "source": "ui.rs: file_status, render_worktrees, render_reader; theme.rs: Palette::rgb resolves dark/light" },
       "external-change-surface": { "role": "semantic", "displayName": "External-change surface", "source": "ui.rs: Render for Pokarak; theme.rs: Palette::rgb resolves dark/light" },

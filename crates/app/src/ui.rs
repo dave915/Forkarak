@@ -1924,37 +1924,104 @@ impl Pokarak {
                             let target = weak.clone();
                             let scope = root.clone();
                             let selected = base.as_ref() == Some(&name);
+                            let tooltip = format!("{name}을 기준으로 현재 워크트리와 비교");
+                            let branch = name.clone();
+                            let activate = move |window: &mut Window, cx: &mut App| {
+                                let _ = target.update(cx, |this, cx| {
+                                    if this.current != scope {
+                                        return;
+                                    }
+                                    this.base_input.update(cx, |input, cx| {
+                                        input.set_value(branch.clone(), window, cx)
+                                    });
+                                    this.compare(true, window, cx);
+                                });
+                            };
+                            let a11y_activate = activate.clone();
+                            let key_activate = activate.clone();
                             div()
                                 .h(px(32.))
                                 .w_full()
                                 .px_2()
                                 .child(
-                                    Button::new(("branch", index))
-                                        .icon(IconName::GitBranch)
-                                        .label(name.clone())
-                                        .tooltip(format!("{name}을 기준으로 현재 워크트리와 비교"))
-                                        .ghost()
-                                        .small()
-                                        .w_full()
-                                        .selected(selected)
-                                        .when(name == current, |b| {
-                                            b.child(
+                                    div()
+                                        .id(("branch", index))
+                                        .size_full()
+                                        .role(accesskit::Role::Button)
+                                        .aria_label(tooltip.clone())
+                                        .aria_selected(selected)
+                                        .tab_index(0)
+                                        .on_a11y_action(
+                                            accesskit::Action::Click,
+                                            move |_, w, cx| a11y_activate(w, cx),
+                                        )
+                                        .on_key_down(move |event, window, cx| {
+                                            if !event.keystroke.modifiers.modified()
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                window.prevent_default();
+                                                cx.stop_propagation();
+                                                if !event.is_held {
+                                                    key_activate(window, cx);
+                                                }
+                                            }
+                                        })
+                                        .px_2()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .rounded(px(5.))
+                                        .cursor_pointer()
+                                        .bg(if selected {
+                                            palette.rgb(0x2b3947)
+                                        } else {
+                                            palette.rgb(SIDE)
+                                        })
+                                        .hover(|s| {
+                                            s.bg(if selected {
+                                                palette.rgb(0x2b3947)
+                                            } else {
+                                                palette.rgb(PANEL)
+                                            })
+                                        })
+                                        .focus_visible(|s| {
+                                            s.border_1().border_color(palette.rgb(BLUE))
+                                        })
+                                        .tooltip(move |window, cx| {
+                                            gpui_kit::component::tooltip::Tooltip::new(
+                                                tooltip.clone(),
+                                            )
+                                            .build(window, cx)
+                                        })
+                                        .on_click(move |_, window, cx| activate(window, cx))
+                                        .child(
+                                            Icon::new(IconName::GitBranch)
+                                                .size(px(15.))
+                                                .flex_none()
+                                                .text_color(if selected {
+                                                    palette.rgb(BLUE)
+                                                } else {
+                                                    palette.rgb(MUTED)
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_ellipsis()
+                                                .child(name.clone()),
+                                        )
+                                        .when(name == current, |row| {
+                                            row.child(
                                                 div()
+                                                    .flex_none()
                                                     .text_size(px(10.))
                                                     .text_color(palette.rgb(MUTED))
                                                     .child("현재"),
                                             )
-                                        })
-                                        .on_click(move |_, window, cx| {
-                                            let _ = target.update(cx, |this, cx| {
-                                                if this.current != scope {
-                                                    return;
-                                                }
-                                                this.base_input.update(cx, |input, cx| {
-                                                    input.set_value(name.clone(), window, cx)
-                                                });
-                                                this.compare(true, window, cx);
-                                            });
                                         }),
                                 )
                                 .into_any_element()

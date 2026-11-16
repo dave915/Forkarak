@@ -1,4 +1,6 @@
 mod file_icons;
+mod analysis_feedback;
+use analysis_feedback::AnalysisFeedback;
 
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
 use crate::theme::{self, Palette, ThemeChoice};
@@ -188,6 +190,7 @@ pub struct Pokarak {
     file_request: u64,
     navigation_request: u64,
     error: Option<String>,
+    analysis_feedback: AnalysisFeedback,
     status: String,
     results: Vec<SourceLocation>,
     result_revisions: HashMap<PathBuf, FileRevision>,
@@ -500,6 +503,7 @@ impl Pokarak {
 
     fn reset_active(&mut self, cx: &mut Context<Self>) {
         self.opening_path = None;
+        self.analysis_feedback = AnalysisFeedback::default();
         self.pending_projects.clear();
         self.stop_analysis(cx);
         self.request += 1;
@@ -602,6 +606,7 @@ impl Pokarak {
             file_request: 0,
             navigation_request: 0,
             error: None,
+            analysis_feedback: AnalysisFeedback::default(),
             status: "저장소를 열어 시작하세요".into(),
             results: vec![],
             result_revisions: HashMap::new(),
@@ -777,6 +782,7 @@ impl Pokarak {
     fn open_repository(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.persist(cx);
         self.stop_analysis(cx);
+        self.analysis_feedback = AnalysisFeedback::default();
         self.opening_path = Some(path.canonicalize().unwrap_or_else(|_| path.clone()));
         self.request += 1;
         self.file_request += 1;
@@ -1394,6 +1400,8 @@ impl Pokarak {
         };
         let absolute = root.join(&path);
         let navigator = self.navigation.as_ref().unwrap().clone();
+        let retry_kind = kind.clone();
+        let retry_path = path.clone();
         let is_definition = matches!(kind, NavigationKind::Definition);
         let title = match kind {
             NavigationKind::Definition => "정의",
@@ -1408,39 +1416,48 @@ impl Pokarak {
         let source = absolute.clone();
         let expected_text = displayed_text.clone();
         let task = cx.background_spawn(async move {
-            let mut nav = navigator
-                .lock()
-                .map_err(|_| anyhow::anyhow!("분석 서버 상태를 읽을 수 없습니다"))?;
-            anyhow::ensure!(
-                std::fs::read_to_string(&absolute)? == displayed_text,
-                "파일이 외부에서 변경되었습니다. 새로고침 후 다시 탐색하세요."
-            );
-            let mut result = nav.navigate(&absolute, position.line, position.character, kind)?;
-            let mut declaration = false;
-            if is_definition
-                && result.semantic
-                && result.locations.len() == 1
-                && result.locations[0].path == absolute
-                && result.locations[0].line == position.line
-                && result.locations[0].column == symbol_start.character
-            {
-                result = nav.navigate(
-                    &absolute,
-                    position.line,
-                    position.character,
-                    NavigationKind::References,
-                )?;
-                declaration = true;
-            }
-            anyhow::ensure!(
-                std::fs::read_to_string(&absolute)? == displayed_text,
-                "탐색 중 파일이 변경되었습니다. 새로고침 후 다시 탐색하세요."
-            );
-            let revisions = result_revisions(&result.locations);
-            anyhow::Ok((result, declaration, revisions))
+            let mut output = String::new();
+            let result = (|| {
+                let mut nav = navigator
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("분석 서버 상태를 읽을 수 없습니다"))?;
+                let result = (|| {
+                    anyhow::ensure!(
+                        std::fs::read_to_string(&absolute)? == displayed_text,
+                        "파일이 외부에서 변경되었습니다. 새로고침 후 다시 탐색하세요."
+                    );
+                    let mut result =
+                        nav.navigate(&absolute, position.line, position.character, kind)?;
+                    let mut declaration = false;
+                    if is_definition
+                        && result.semantic
+                        && result.locations.len() == 1
+                        && result.locations[0].path == absolute
+                        && result.locations[0].line == position.line
+                        && result.locations[0].column == symbol_start.character
+                    {
+                        result = nav.navigate(
+                            &absolute,
+                            position.line,
+                            position.character,
+                            NavigationKind::References,
+                        )?;
+                        declaration = true;
+                    }
+                    anyhow::ensure!(
+                        std::fs::read_to_string(&absolute)? == displayed_text,
+                        "탐색 중 파일이 변경되었습니다. 새로고침 후 다시 탐색하세요."
+                    );
+                    let revisions = result_revisions(&result.locations);
+                    anyhow::Ok((result, declaration, revisions))
+                })();
+                output = format!("{}\n{}", nav.server_messages(), nav.stderr());
+                result
+            })();
+            (result, output)
         });
         cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
+            let (result, output) = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.navigation_request != token
                     || this.current.as_ref() != Some(&root)
@@ -1455,8 +1472,11 @@ impl Pokarak {
                 {
                     return;
                 }
+                this.observe_feedback();
+                this.analysis_feedback.append(&output);
                 match result {
                     Ok((result, declaration, revisions)) => {
+                        this.error = None;
                         this.result_revisions = revisions;
                         this.status = result.status.clone();
                         if is_definition
@@ -1479,8 +1499,16 @@ impl Pokarak {
                         }
                     }
                     Err(error) => {
-                        this.error = Some(format!("{error:#}"));
-                        this.status = "분석 서버 설정을 확인하세요".into();
+                        let error = format!("{error:#}");
+                        this.record_analysis_failure(
+                            root.clone(),
+                            retry_path,
+                            retry_kind,
+                            position,
+                            error.clone(),
+                        );
+                        this.error = Some(error);
+                        this.status = "분석을 완료하지 못했습니다. Details에서 확인하세요.".into();
                     }
                 }
                 cx.notify();
@@ -1501,6 +1529,7 @@ impl Pokarak {
         self.result_semantic = result.semantic;
         self.result_title = title;
         self.results_open = true;
+        self.analysis_feedback.output_open = false;
         self.result_cursor = 0;
         self.results_focus.focus(window, cx);
         self.result_scroll.scroll_to_item(0, ScrollStrategy::Top);
@@ -2737,6 +2766,8 @@ impl Pokarak {
         let cursor = self.result_cursor;
         div()
             .id("results-panel")
+            .max_h(relative(0.3))
+            .min_h_0()
             .track_focus(&self.results_focus)
             .h(px(210.))
             .flex_none()
@@ -2763,6 +2794,7 @@ impl Pokarak {
                             }),
                     )
                     .child(div().flex_1())
+                    .child(self.output_button("results-output", cx))
                     .child(
                         Button::new("close-results")
                             .icon(IconName::X)
@@ -2932,6 +2964,7 @@ impl Pokarak {
 
 impl Render for Pokarak {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.observe_feedback();
         let palette = Palette::new(cx);
         let body = if self.current.is_some() {
             h_resizable("main-panes")
@@ -2982,8 +3015,6 @@ impl Render for Pokarak {
             .when(self.external_change,|d|d.child(div().h(px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(px(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")
                 .child(Button::new("apply-refresh").label("갱신").ghost().small().on_click(cx.listener(|this,_,w,cx|this.refresh(w,cx))))))
-            .when_some(self.error.clone(),|d,error|d.child(div().px_3().py_2().flex().items_start().gap_2().bg(palette.rgb(0x3c2a30)).text_color(palette.rgb(RED)).text_size(px(12.))
-                .child(div().flex_1().child(error)).child(Button::new("dismiss-error").icon(IconName::X).ghost().small().on_click(cx.listener(|this,_,_,cx|{this.error=None;cx.notify();})))))
             .when(self.trust_prompt,|d|d.child(div().p_3().v_flex().gap_2().bg(palette.rgb(0x293848)).border_b_1().border_color(palette.rgb(LINE))
                 .child(div().font_weight(FontWeight::MEDIUM).child("이 워크트리에서 코드 분석을 시작할까요?"))
                 .child(div().text_size(px(12.)).text_color(palette.rgb(MUTED)).child("언어 서버가 Gradle/Maven 설정을 읽거나 실행할 수 있습니다. 신뢰하는 프로젝트에서만 시작하세요. 파일과 diff는 분석 없이도 읽을 수 있습니다."))
@@ -2991,9 +3022,12 @@ impl Render for Pokarak {
                     .child(Button::new("trust-start").label("신뢰하고 분석 허용").small().on_click(cx.listener(|this,_,_,cx|this.enable_analysis(cx))))
                     .child(Button::new("trust-cancel").label("파일만 보기").ghost().small().on_click(cx.listener(|this,_,_,cx|{this.trust_prompt=false;cx.notify();}))))))
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
-            .when(self.results_open,|d|d.child(self.render_results(cx)))
+            .when(self.error.is_some(), |d| d.child(self.render_error_summary(cx)))
+            .when(self.analysis_feedback.output_open, |d| d.child(self.render_output(cx)))
+            .when(self.results_open && !self.analysis_feedback.output_open,|d|d.child(self.render_results(cx)))
             .child(div().h(px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(palette.rgb(LINE)).bg(palette.rgb(SIDE)).text_size(px(11.)).text_color(palette.rgb(MUTED))
                 .child(div().flex_1().min_w_0().text_ellipsis().child(context))
+                .child(self.output_button("status-output", cx))
                 .child(div().max_w(px(400.)).min_w_0().text_ellipsis().child(self.status.clone()))
                 .child(if self.current.is_some() { "⌘클릭 정의  /  ⌥F7 사용처" } else { "⌘O 프로젝트 열기" }))
     }

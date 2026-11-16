@@ -8,6 +8,7 @@
 mod backend;
 mod filesystem;
 mod git;
+pub mod history;
 pub mod operations;
 mod text;
 use anyhow::Result;

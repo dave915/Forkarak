@@ -527,3 +527,78 @@ fn an_open_file_replaced_by_a_symlink_invalidates_its_session() {
     assert!(error.contains("filesystem target"), "{error}");
     assert_process_gone(&f.root.join("mock.pid"));
 }
+
+#[cfg(unix)]
+#[test]
+fn official_jvm_shares_one_session_and_reports_failed_imports() {
+    for mode in ["import-ready", "import-failed"] {
+        let f = Fixture::new();
+        let launcher = f.root.join("intellij-server");
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_pokarak-mock-lsp"), &launcher).unwrap();
+        let java = ServerConfig {
+            language: "java".into(),
+            program: "/usr/bin/env".into(),
+            args: vec![
+                "POKARAK_FIXTURE=1".into(),
+                launcher.to_string_lossy().into_owned(),
+                mode.into(),
+            ],
+        };
+        let mut kotlin = java.clone();
+        kotlin.language = "kotlin".into();
+        fs::write(f.root.join("Main.java"), "class Main {}\n").unwrap();
+        fs::write(f.root.join("Main.kt"), "class Main\n").unwrap();
+        let mut options = f.options();
+        options.allow_project_imports = true;
+        let mut nav = Navigator::with_options(f.root.clone(), vec![java, kotlin], options);
+        let result = nav.navigate(Path::new("Main.java"), 0, 6, Definition);
+        if mode == "import-failed" {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Project import failed")
+            );
+        } else {
+            result.unwrap();
+            nav.navigate(Path::new("Main.kt"), 0, 6, References)
+                .unwrap();
+        }
+        nav.shutdown();
+        let log = f.log();
+        assert_eq!(
+            log.iter()
+                .filter(|entry| entry["method"] == "initialize")
+                .count(),
+            1
+        );
+        assert!(
+            log[0]["params"]["initializationOptions"]["indexDir"]
+                .as_str()
+                .is_some()
+        );
+        if mode == "import-failed" {
+            assert!(
+                !log.iter()
+                    .any(|entry| entry["method"] == "textDocument/definition")
+            );
+        }
+    }
+}
+
+#[test]
+fn installed_manifest_discovery_is_read_only_and_rejects_invalid_executables() {
+    let f = Fixture::new();
+    let path = f.root.join("installed.json");
+    let config = f.config("normal");
+    fs::write(
+        &path,
+        serde_json::json!({"schemaVersion":1,"servers":[config]}).to_string(),
+    )
+    .unwrap();
+    let configs = pokarak_navigation::installed_configs(&f.root).unwrap();
+    assert_eq!(configs.len(), 1);
+    assert!(!f.root.join("mock.pid").exists());
+    fs::write(&path,serde_json::json!({"schemaVersion":1,"servers":[{"language":"java","program":"relative/java","args":[]}]}).to_string()).unwrap();
+    assert!(pokarak_navigation::installed_configs(&f.root).is_err());
+}

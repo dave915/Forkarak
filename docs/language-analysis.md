@@ -1,43 +1,82 @@
-# 언어 분석 설정과 신뢰
+# Language analysis setup and verified scope
 
-현재 scaffold에서 `crates/navigation`은 공개 타입과 메서드 틀만 제공한다. `default_configs()`는 빈 목록이고 `navigate()`는 언어 서버가 설정되지 않았다는 오류를 반환한다. 설정 파일 경로, 설정 화면, 서버 실행, 신뢰 상태 저장은 아직 구현되지 않았다.
+Run `scripts/setup-language-servers.sh` explicitly to install managed tools. The app does not download tools or execute this script at startup. On this Apple Silicon Mac the default destination is `~/.local/share/pokarak/tools`.
 
-## 공개 설정 형태
-
-`ServerConfig`에는 다음 세 필드가 있다.
-
-| 필드 | 의미 |
-| --- | --- |
-| `language: String` | 분석 대상 언어를 식별할 문자열. 허용 값은 통합 시 확정 필요 |
-| `program: String` | 사용자가 설치한 언어 서버 실행 파일 경로 |
-| `args: Vec<String>` | 각각 독립된 프로세스 인자 |
-
-아래는 타입 구조 설명용 예시다. 현재 앱이 읽는 설정 파일 형식이나 실행 가능한 서버 명령이 아니다.
-
-```json
-{
-  "language": "example-language",
-  "program": "/absolute/path/to/language-server",
-  "args": ["--stdio"]
-}
+```sh
+# In Herdr, run in a background program and collect its exit status.
+hc run --bg --name language-setup -- /bin/sh scripts/setup-language-servers.sh
+hc wait language-setup
+hc read language-setup --lines 30
 ```
 
-프로그램과 인자는 분리해서 전달한다. `program`에 `sh -c ...`나 셸 문자열을 넣는 방식을 사용하지 않는다. 인자 안에 공백이 있어도 하나의 인자 그대로 전달한다. Finder에서 실행한 앱의 PATH는 터미널과 다를 수 있으므로 실행 파일의 절대 경로를 사용한다. 서버별 설치·런타임·시작 인자는 해당 서버의 공식 문서에 따라 사용자가 준비해야 하며, 포카락은 서버를 번들하거나 자동 설치하지 않는다.
+Python 3, curl, and tar are needed for setup. The script uses official release metadata and verifies downloaded archives against published SHA-256/SHA-512 digests. Its recorded installations are reused on subsequent runs without metadata requests or downloads. `--update` explicitly resolves newer releases; `--tools-dir /absolute/path` selects a different installation destination. Only the default destination is discovered automatically by the app; custom destinations can be loaded with `installed_configs(path)` or used in user overrides.
 
-## 연결 시 지켜야 할 동작
+The script writes `installed.json` (versions, source URLs, checksums, executable argv), `language-servers.example.json`, and an experimental `language-servers.kotlin-jvm.example.json` inside the tools directory. It does not write `~/.config/pokarak/language-servers.json`, shell profiles, global `JAVA_HOME`, or inspected projects. The Kotlin/JVM example is for reproducing capability probes, **not** a claim of Java-source navigation support.
 
-이 절은 구현·검증 기준이며 scaffold에서 완료된 기능을 설명하지 않는다.
+## Installed runtimes
 
-1. 파일 및 diff 읽기는 분석 서버 없이 즉시 가능해야 한다.
-2. 사용자가 신뢰할 워크트리 경로와 실제 실행할 프로그램·인자를 확인하고 명시적으로 분석을 시작한다. 저장소를 열거나 파일을 보는 것만으로 서버를 시작하지 않는다.
-3. 서버가 프로젝트 import·빌드 도구를 실행할 수 있다면 실행 범위를 먼저 알린다. 신뢰하지 않은 저장소에서 자동 빌드·import를 실행하지 않는다.
-4. 서버·캐시·요청과 결과를 워크트리의 실제 경로별로 격리한다. 다른 워크트리로 전환한 뒤 도착한 오래된 결과는 현재 화면에 적용하지 않는다.
-5. 분석 중·준비됨·오류·미설정 상태를 구분하고 종료 시 서버를 정리한다. 미설정 또는 서버 실패 때문에 파일 읽기를 막지 않는다.
+These versions were installed and tested on 2026-11-16:
 
-신뢰 여부나 UI 상태는 검사 대상 저장소 밖에 저장해야 한다. 구체적인 경로와 신뢰 철회 방식은 앱 통합 시 확정해야 한다. 이 문서를 따라 저장소 안에 설정 파일을 만들 필요는 없다.
+| Tool | Version | Use |
+| --- | --- | --- |
+| Eclipse Temurin JDK | 25.0.5+8 | JDT LS runtime, addressed by absolute `bin/java` |
+| Eclipse JDT LS | 1.63.0 | Java navigation |
+| Official JetBrains Kotlin LSP | 271.2085.0 | Kotlin and supported cross-language navigation; bundled JetBrains Runtime 25 |
+| Apache Maven | 3.10.1 | Kotlin server's Maven project importer |
+| Node | 22.23.5 | Absolute executable for the TS adapter |
+| typescript-language-server | 5.3.0 | JS/TS/JSX/TSX LSP adapter |
+| TypeScript | 6.0.3 | Compatible tsserver implementation |
 
-## 결과의 의미와 한계
+The current official Kotlin bundle is from **Kotlin/kotlin-lsp / JetBrains**. It is not fwcd's `kotlin-language-server`. Source-level Java 17 remains defined by the project's build/Eclipse configuration. For Maven/Gradle imports, setup discovers an existing JDK 17 with `java_home -v 17` and includes it as a **child-only** `JAVA_HOME` assignment. It does not install a JDK 17 or alter the application's/global environment. JDT is launched directly with JDK 25 and Kotlin's native launcher uses its bundled runtime.
 
-`NavigationResult.semantic`은 의미 기반 응답인지 구분하기 위한 필드다. 언어 서버의 정의·참조와 텍스트 검색 후보는 화면에서 분리해 표시해야 한다. 서버가 없을 때 문자열 일치를 찾더라도 이를 실제 사용처나 참조라고 단정하지 않는다.
+The TS command is an absolute managed Node executable followed by an absolute `typescript-language-server/lib/cli.mjs` and `--stdio`. The Kotlin command uses `/usr/bin/env` with an explicit managed Maven/system PATH, optional child JDK 17 assignment, and the absolute native `intellij-server` launcher. These are argv arrays, not shell commands. Both ran with a GUI-like `/usr/bin:/bin` PATH. The generated manifest contains the exact paths; none refer to `/tmp` installations.
 
-위치의 줄 번호는 0부터 시작하고 열은 UTF-16 단위라는 공개 계약을 따른다. 과거 커밋의 코드에 대한 탐색을 현재 워크트리 코드의 분석 결과로 조용히 대체하지 않는다. Java/Kotlin/Spring 및 JS/TS/JSX/TSX의 실제 서버 호환성, 다중 워크트리 격리와 대규모 프로젝트 비용은 별도의 통합 검증 대상이다.
+Official metadata: [Temurin 25 releases](https://github.com/adoptium/temurin25-binaries/releases), [JDT milestone listing](https://download.eclipse.org/justj/?file=jdtls%2Fmilestones), [Kotlin LSP releases](https://github.com/Kotlin/kotlin-lsp/releases), [Node release index](https://nodejs.org/dist/index.json), [Apache Maven metadata](https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/maven-metadata.xml).
+
+## App integration
+
+`default_configs()` reads the installed manifest without launching anything and prefers it over PATH fallbacks. User configuration remains an override. Malformed or unavailable managed installations can be inspected with `installed_configs(path) -> Result<Vec<ServerConfig>>`; rerun setup if the installation is missing. There is no app-startup repair/download path.
+
+The UI's existing per-worktree trust action warns that Gradle/Maven can execute project code. Its explicit `NavigatorOptions { allow_project_imports: true, ..Default::default() }` is sufficient; there is no additional approval in the navigation crate. Instantiating a Navigator still starts no server. Servers start on navigation and use an isolated worktree/instance state directory. Official Kotlin configurations assigned to both JVM languages share a process within one Navigator and never receive JDT's `-data` flag.
+
+Kotlin project import occurs after LSP initialization. The client checks `intellij/workspaceImportState`, services messages while import is pending, and reports failed/blocked imports as errors instead of empty semantic success. The initialize/import budget is 120 seconds by default, including official Kotlin navigation; other navigation requests retain a 10-second default. Applications can override the existing timeout options. Protocol import/log messages are bounded and exposed through `server_messages()`; stderr remains separately available.
+
+Managed Kotlin starts with `--data-sharing none`. Setup does not inject an EULA acceptance hash, a license, or account credentials. This installed bundle started and performed the verified Kotlin operations without the client supplying them. If a different release or machine requires vendor consent/licensing, the server's errors remain visible; Pokarak does not bypass those requirements.
+
+## Empirical results and limitations
+
+All fixtures were authored in temporary Git repositories, with source/JVM target 17. No user project was used for validation.
+
+| Request | Actual result |
+| --- | --- |
+| Java call → Java definition, JDT LS | Passed |
+| Java symbol → Java callers, JDT LS | Passed |
+| Kotlin call → Kotlin definition, Kotlin-only Maven project | Passed |
+| Kotlin symbol → Kotlin callers, Kotlin-only Maven project | Passed |
+| Kotlin call → Kotlin definition, mixed Maven project | Passed |
+| Kotlin call → Java definition, mixed Maven project | Passed |
+| Kotlin symbol → references including a Java caller | Passed |
+| Java call → Kotlin definition, Kotlin LSP alone | Returned no locations; unsupported in this tested configuration |
+| Java symbol → Kotlin callers, Kotlin LSP alone | Returned no locations; unsupported in this tested configuration |
+| JS/TS/TSX/JSX definitions, TS references/implementation, disk updates | Passed with managed tools and `/usr/bin:/bin` PATH |
+
+**Full bidirectional Java/Kotlin navigation is not established.** The official extension includes Java files to observe changes in mixed projects; that alone does not promise Java-source feature providers. See the [upstream document-selector implementation](https://github.com/Kotlin/kotlin-lsp/blob/main/vscode-extension-core/src/lspClient.ts). Defaults therefore keep JDT LS for Java and JetBrains Kotlin LSP for Kotlin.
+
+JDT reference results explicitly include `JDT LS Java scope: Kotlin callers may be missing`. Kotlin-symbol references including Java callers were verified from a Kotlin source position; this does not establish Kotlin caller coverage when starting from a Java symbol through JDT. The optional Java-source probes in the mixed test print the real returned locations and do not turn empty responses into positive support assertions.
+
+Gradle importing has not been validated here. Kotlin Maven import actually ran Maven, installed its importer plugin, resolved dependencies, and invoked `generate-sources` in the temporary fixtures. In trusted real projects these actions can use the Maven cache and execute project plugins; this is why the UI's import warning and explicit opt-in matter. Large projects, custom source sets, archive-source navigation, and all JVM implementation requests remain outside this validation.
+
+## Reproduce checks
+
+Use `hc run --bg` / `hc wait` for these Cargo commands in Herdr. Keep the shared target cache; do not delete it.
+
+```sh
+export PATH=/Users/han/.cargo/bin:/usr/bin:/bin
+export CARGO_TARGET_DIR=/Users/han/dev/pokarak/target
+cargo test -p pokarak-navigation --features test-server
+cargo test -p pokarak-navigation --test jvm -- --ignored --nocapture --test-threads=1
+cargo test -p pokarak-navigation --test typescript -- --ignored --nocapture
+cargo clippy -p pokarak-navigation --all-targets --features test-server -- -D warnings
+```
+
+The real-server tests install nothing. `POKARAK_TOOLS_DIR` can point tests at a custom manifest; the TS test also retains the optional `POKARAK_TS_SERVER` override for an externally managed executable. Deterministic tests cover managed manifest discovery, official JVM session sharing, import failure handling, existing framing/synchronization behavior, worktree isolation, and cleanup.

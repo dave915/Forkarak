@@ -82,6 +82,19 @@ fn main() {
         let params = &message["params"];
         let method = message["method"].as_str().unwrap_or("");
         match method {
+            "intellij/workspaceImportState" => {
+                assert!(!args.iter().any(|arg| arg == "-data"));
+                response(id, json!({"phase": "IN_PROGRESS"}));
+                let failed = mode == "import-failed";
+                if failed {
+                    send(
+                        json!({"jsonrpc":"2.0","method":"intellij/importLog","params":{"failed":true,"message":"Maven import failed deliberately"}}),
+                    );
+                }
+                send(
+                    json!({"jsonrpc":"2.0","method":"intellij/workspaceImportState","params":{"phase":"FINISHED","folders":[{"status":if failed {"FAILED"} else {"SUCCESS"},"message":if failed {"Maven import failed deliberately"} else {"Imported"}}]}}),
+                );
+            }
             "initialize" => {
                 root_uri = params["rootUri"].as_str().unwrap().into();
                 assert_eq!(

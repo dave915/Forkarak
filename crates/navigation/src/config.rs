@@ -22,7 +22,7 @@ pub struct NavigatorOptions {
 impl Default for NavigatorOptions {
     fn default() -> Self {
         Self {
-            initialize_timeout: Duration::from_secs(30),
+            initialize_timeout: Duration::from_secs(120),
             request_timeout: Duration::from_secs(10),
             shutdown_timeout: Duration::from_secs(2),
             config_file: env::var_os("HOME")
@@ -148,7 +148,7 @@ fn executable(path: &Path) -> bool {
 
 pub fn default_configs() -> Vec<ServerConfig> {
     // A family entry also covers JS/JSX/TSX; exact language overrides take priority.
-    [
+    let mut configs = [
         ("typescript", "typescript-language-server", vec!["--stdio"]),
         (
             "java",
@@ -160,7 +160,7 @@ pub fn default_configs() -> Vec<ServerConfig> {
                 "{workspace}/configuration",
             ],
         ),
-        ("kotlin", "kotlin-language-server", vec![]),
+        ("kotlin", "kotlin-lsp", vec!["--stdio"]),
     ]
     .into_iter()
     .map(|(language, program, args)| ServerConfig {
@@ -170,5 +170,75 @@ pub fn default_configs() -> Vec<ServerConfig> {
             .unwrap_or_else(|| program.into()),
         args: args.into_iter().map(str::to_owned).collect(),
     })
-    .collect()
+    .collect::<Vec<_>>();
+    if let Some(home) = env::var_os("HOME")
+        && let Ok(installed) =
+            installed_configs(&PathBuf::from(home).join(".local/share/pokarak/tools"))
+    {
+        for config in installed {
+            configs.retain(|entry| entry.language != config.language);
+            configs.push(config);
+        }
+    }
+    configs
+}
+
+/// Read setup's manifest only. No downloads, scripts, or server startup.
+pub fn installed_configs(tools_directory: &Path) -> Result<Vec<ServerConfig>> {
+    #[derive(Deserialize)]
+    struct Manifest {
+        #[serde(rename = "schemaVersion")]
+        schema_version: u32,
+        servers: Vec<ServerConfig>,
+    }
+    let path = tools_directory.join("installed.json");
+    let manifest: Manifest = serde_json::from_str(&fs::read_to_string(&path)?)
+        .with_context(|| format!("Invalid tools manifest {}", path.display()))?;
+    if manifest.schema_version != 1 {
+        bail!("Unsupported tools manifest version");
+    }
+    let mut configs = manifest.servers;
+    let mut options = NavigatorOptions {
+        config_file: None,
+        ..NavigatorOptions::default()
+    };
+    merge_user_config(&mut configs, &mut options)?;
+    for config in &configs {
+        if !Path::new(&config.program).is_absolute() || discover_program(&config.program).is_none()
+        {
+            bail!(
+                "Installed executable is unavailable: {}. Rerun scripts/setup-language-servers.sh",
+                config.program
+            );
+        }
+    }
+    Ok(configs)
+}
+
+pub(crate) fn is_jetbrains(config: &ServerConfig) -> bool {
+    let launcher = |value: &str| {
+        matches!(
+            Path::new(value).file_name().and_then(|name| name.to_str()),
+            Some("intellij-server" | "kotlin-lsp" | "kotlin-lsp.sh")
+        )
+    };
+    launcher(&config.program)
+        || (config.program == "/usr/bin/env"
+            && config
+                .args
+                .iter()
+                .filter(|arg| !arg.contains('='))
+                .take(1)
+                .any(|arg| launcher(arg)))
+}
+
+pub(crate) fn is_jdt(config: &ServerConfig) -> bool {
+    Path::new(&config.program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some("jdtls")
+        || config
+            .args
+            .iter()
+            .any(|arg| arg == "-Declipse.application=org.eclipse.jdt.ls.core.id1")
 }

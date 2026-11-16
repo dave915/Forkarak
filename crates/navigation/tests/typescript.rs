@@ -1,5 +1,7 @@
-//! Opt-in real-server test. Installs nothing; supply POKARAK_TS_SERVER explicitly.
-use pokarak_navigation::{NavigationKind::*, Navigator, NavigatorOptions, ServerConfig};
+//! Opt-in real-server test. Installs nothing; uses managed tools or POKARAK_TS_SERVER.
+use pokarak_navigation::{
+    NavigationKind::*, Navigator, NavigatorOptions, ServerConfig, installed_configs,
+};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -37,14 +39,10 @@ impl Project {
             root: root.canonicalize().unwrap(),
         }
     }
-    fn navigator(&self, server: &str) -> Navigator {
+    fn navigator(&self, server: &ServerConfig) -> Navigator {
         Navigator::with_options(
             self.root.clone(),
-            vec![ServerConfig {
-                language: "typescript".into(),
-                program: server.into(),
-                args: vec!["--stdio".into()],
-            }],
+            vec![server.clone()],
             NavigatorOptions {
                 config_file: None,
                 initialize_timeout: Duration::from_secs(20),
@@ -57,10 +55,28 @@ impl Project {
 }
 
 #[test]
-#[ignore = "requires explicitly installed POKARAK_TS_SERVER outside the project"]
+#[ignore = "requires managed TypeScript tools or an explicit POKARAK_TS_SERVER"]
 fn real_typescript_navigation_and_disk_updates() {
-    let server = std::env::var("POKARAK_TS_SERVER")
-        .expect("Set POKARAK_TS_SERVER to an installed typescript-language-server executable");
+    let server = match std::env::var("POKARAK_TS_SERVER") {
+        Ok(program) => ServerConfig {
+            language: "typescript".into(),
+            program,
+            args: vec!["--stdio".into()],
+        },
+        Err(_) => {
+            let directory = std::env::var_os("POKARAK_TOOLS_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(std::env::var_os("HOME").unwrap())
+                        .join(".local/share/pokarak/tools")
+                });
+            installed_configs(&directory)
+                .expect("Run scripts/setup-language-servers.sh")
+                .into_iter()
+                .find(|config| config.language == "typescript")
+                .unwrap()
+        }
+    };
     let a = Project::new("first");
     let b = Project::new("second");
     let mut nav = a.navigator(&server);

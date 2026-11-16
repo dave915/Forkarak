@@ -1,6 +1,6 @@
 use crate::{
     NavigationKind, NavigatorOptions, ServerConfig,
-    config::discover_program,
+    config::{discover_program, is_jetbrains},
     paths::{end_position, other_worktree, path_to_uri},
     transport::Transport,
 };
@@ -51,6 +51,10 @@ pub(crate) struct Client {
     documents: HashMap<PathBuf, Document>,
     sync_kind: u64,
     open_close: bool,
+    server_messages: String,
+    jetbrains: bool,
+    import_in_progress: bool,
+    import_error: Option<String>,
     // Keep server state outside the inspected repository, unique per root + instance.
     _workspace: tempfile::TempDir,
 }
@@ -70,7 +74,8 @@ impl Client {
     }
 
     pub fn start(root: &Path, config: &ServerConfig, options: &NavigatorOptions) -> Result<Self> {
-        if config.language == "kotlin" && !options.allow_project_imports {
+        let jetbrains = is_jetbrains(config);
+        if (config.language == "kotlin" || jetbrains) && !options.allow_project_imports {
             bail!(
                 "Kotlin analysis is disabled: Kotlin servers may execute Gradle/Maven or classpath scripts during project import. Explicitly enable allowProjectImports after trusting those actions."
             );
@@ -90,7 +95,7 @@ impl Client {
                     .replace("{workspace}", &workspace_path.to_string_lossy())
             })
             .collect();
-        if config.language == "java" {
+        if config.language == "java" && !jetbrains {
             // JDT's data directory must never be shared between worktrees or instances.
             for index in 0..args.len() {
                 if args[index] == "-data" {
@@ -126,6 +131,10 @@ impl Client {
             documents: HashMap::new(),
             sync_kind: 0,
             open_close: false,
+            server_messages: String::new(),
+            jetbrains,
+            import_in_progress: false,
+            import_error: None,
             _workspace: workspace,
         };
         let deadline = Instant::now() + options.initialize_timeout;
@@ -138,7 +147,9 @@ impl Client {
                 "settings": client.settings
             });
             // No build, installation, executable-command, edit, or dynamic-registration capability.
-            if config.language == "java" {
+            if jetbrains {
+                init_options = json!({"indexDir": workspace_path.join("index").to_string_lossy()});
+            } else if config.language == "java" {
                 init_options = json!({"settings": client.settings});
             }
             let response = client.request("initialize", json!({
@@ -221,10 +232,94 @@ impl Client {
         if !logs.is_empty() {
             message.push_str(&format!("\nServer stderr:\n{logs}"));
         }
+        if !self.server_messages.is_empty() {
+            message.push_str(&format!("\nServer messages:\n{}", self.server_messages));
+        }
         if matches!(language, "java" | "kotlin") {
             message.push_str("\nCheck the server's required JDK runtime (the project's Java 17 may be too old). Configure an explicit launcher/JDK argv; Pokarak never installs a JDK or runs a build to repair this.");
         }
         message
+    }
+
+    pub fn server_messages(&self) -> &str {
+        &self.server_messages
+    }
+
+    fn record_notification(&mut self, message: &Value) {
+        let params = &message["params"];
+        match message["method"].as_str() {
+            Some("intellij/importLog") => {
+                if params["started"] == true {
+                    self.import_in_progress = true;
+                    self.import_error = None;
+                }
+                if params["failed"] == true {
+                    self.import_error =
+                        Some(format!("Project import failed: {}", params["message"]));
+                }
+            }
+            Some("intellij/workspaceImportState") => self.record_import_state(params),
+            Some("intellij/workspaceImportStatus")
+                if params["blockedFolders"]
+                    .as_array()
+                    .is_some_and(|folders| !folders.is_empty()) =>
+            {
+                self.import_error = Some(format!("Project import blocked: {params}"));
+            }
+            _ => {}
+        }
+        if matches!(
+            message["method"].as_str(),
+            Some(
+                "window/logMessage"
+                    | "window/showMessage"
+                    | "intellij/workspaceImportStatus"
+                    | "intellij/workspaceImportState"
+                    | "intellij/importLog"
+                    | "language/status"
+            )
+        ) {
+            self.server_messages
+                .push_str(&format!("{}: {}\n", message["method"], message["params"]));
+            if self.server_messages.len() > 16 * 1024 {
+                let mut start = self.server_messages.len() - 16 * 1024;
+                while !self.server_messages.is_char_boundary(start) {
+                    start += 1;
+                }
+                self.server_messages.drain(..start);
+            }
+        }
+    }
+
+    fn record_import_state(&mut self, state: &Value) {
+        self.import_in_progress = state["phase"] == "IN_PROGRESS";
+        if matches!(state["phase"].as_str(), Some("FAILED" | "CANCELLED")) {
+            self.import_error = Some(format!("Project import did not complete: {state}"));
+        }
+        if let Some(folders) = state["folders"].as_array() {
+            for folder in folders {
+                if matches!(folder["status"].as_str(), Some("FAILED" | "CANCELLED")) {
+                    self.import_error = Some(format!("Project import failed: {folder}"));
+                }
+            }
+        }
+    }
+
+    fn wait_for_import(&mut self, deadline: Instant) -> Result<()> {
+        while self.import_in_progress {
+            let message = self
+                .transport
+                .receive(deadline)
+                .context("Waiting for JetBrains project import")?;
+            self.record_notification(&message);
+            if message.get("method").is_some() && message.get("id").is_some() {
+                self.server_request(&message, deadline)?;
+            }
+        }
+        if let Some(error) = &self.import_error {
+            bail!("{error}");
+        }
+        Ok(())
     }
 
     fn notify(&self, method: &str, params: Value, deadline: Instant) -> Result<()> {
@@ -249,6 +344,7 @@ impl Client {
                 .receive(deadline)
                 .with_context(|| format!("Waiting for {method}"))?;
             if message.get("method").is_some() {
+                self.record_notification(&message);
                 if message.get("id").is_some() {
                     self.server_request(&message, deadline)?;
                 }
@@ -342,7 +438,16 @@ impl Client {
         column: u32,
         kind: &NavigationKind,
     ) -> Result<Value> {
-        let deadline = Instant::now() + self.options.request_timeout;
+        // JetBrains imports the project after initialize; its first semantic
+        // response needs the same cold-start budget, including dependency import.
+        let timeout = if self.jetbrains {
+            self.options
+                .initialize_timeout
+                .max(self.options.request_timeout)
+        } else {
+            self.options.request_timeout
+        };
+        let deadline = Instant::now() + timeout;
         self.refresh(deadline)?;
         if !self.documents.contains_key(path) {
             if self.open_close {
@@ -365,7 +470,21 @@ impl Client {
         if matches!(kind, NavigationKind::References) {
             params["context"] = json!({"includeDeclaration": true});
         }
-        let result = self.request(method, params, deadline)?;
+        if self.jetbrains {
+            let state = self.request("intellij/workspaceImportState", json!({}), deadline)?;
+            self.record_import_state(&state);
+            self.wait_for_import(deadline)?;
+        }
+        let mut result = self.request(method, params.clone(), deadline)?;
+        if self.jetbrains {
+            // A fresh server can initially report FINISHED before the first import
+            // begins. Never return that early response while import is still active.
+            let was_importing = self.import_in_progress;
+            self.wait_for_import(deadline)?;
+            if was_importing {
+                result = self.request(method, params, deadline)?;
+            }
+        }
         for (path, document) in &self.documents {
             if self.read_current_document(path)? != document.text {
                 bail!(

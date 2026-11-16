@@ -7,7 +7,7 @@ mod transport;
 
 use anyhow::{Context, Result, bail};
 use client::{Client, read_document};
-use config::{family, language, merge_user_config};
+use config::{family, is_jdt, is_jetbrains, language, merge_user_config};
 use paths::{canonical_root, other_worktree, resolved_path, validate_position};
 use pokarak_core::SourceLocation;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub use config::{NavigatorOptions, default_configs, discover_program};
+pub use config::{NavigatorOptions, default_configs, discover_program, installed_configs};
 pub use paths::{path_to_uri, uri_to_path};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -139,7 +139,12 @@ impl Navigator {
         let config = self.configs.iter().rev().find(|c| c.language == language)
             .or_else(|| self.configs.iter().rev().find(|c| c.language == family(language)))
             .cloned().with_context(|| format!("No language server configured for {language}; semantic navigation is unavailable"))?;
-        let key = serde_json::to_string(&(family(language), &config.program, &config.args))?;
+        let server_family = if is_jetbrains(&config) {
+            "jetbrains-jvm"
+        } else {
+            family(language)
+        };
+        let key = serde_json::to_string(&(server_family, &config.program, &config.args))?;
         if !self.clients.contains_key(&key) {
             let mut launch_config = config.clone();
             launch_config.language = family(language).into();
@@ -174,6 +179,9 @@ impl Navigator {
         };
         if !skipped.is_empty() {
             status.push_str(&format!("; skipped {}", skipped.join("; ")));
+        }
+        if matches!(kind, NavigationKind::References) && is_jdt(&config) {
+            status.push_str("; JDT LS Java scope: Kotlin callers may be missing");
         }
         Ok(NavigationResult {
             locations,
@@ -226,6 +234,16 @@ impl Navigator {
             .map(|client| client.transport.stderr())
             .filter(|s| !s.is_empty())
             .chain((!self.last_stderr.is_empty()).then(|| self.last_stderr.clone()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Bounded protocol log/import messages from currently active language servers.
+    pub fn server_messages(&self) -> String {
+        self.clients
+            .values()
+            .map(|client| client.server_messages())
+            .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("\n")
     }

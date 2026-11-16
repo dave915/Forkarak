@@ -154,6 +154,7 @@ impl Pokarak {
             let _ = view.update_in(cx, |this, window, cx| {
                 this.git_ui.busy = None;
                 this.git_ui.cancellation = None;
+                let succeeded = result.is_ok();
                 let mut completion = match result {
                     Ok(output) => GitCompletion {
                         status: format!(
@@ -217,6 +218,7 @@ impl Pokarak {
                 {
                     session.snapshot = Some(snapshot);
                 }
+                this.commit_job_finished(&root, succeeded, window, cx);
                 cx.notify();
             });
         })

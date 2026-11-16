@@ -1,6 +1,7 @@
 mod analysis_feedback;
 mod file_icons;
 mod git_actions;
+mod git_commit;
 mod git_workflow;
 use analysis_feedback::AnalysisFeedback;
 
@@ -58,6 +59,7 @@ actions!(
         Quit,
         OpenSettings,
         OpenGitActions,
+        OpenGitCommit,
         OpenGitWorkflow,
         CloseFile,
         CloseProject,
@@ -95,7 +97,10 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("프로젝트 닫기", CloseProject),
             MenuItem::action("모든 프로젝트 닫기", CloseAllProjects),
         ]),
-        Menu::new("Git").items([MenuItem::action("Git 작업 및 저장소 설정…", OpenGitActions)]),
+        Menu::new("Git").items([
+            MenuItem::action("Stage / 커밋…", OpenGitCommit),
+            MenuItem::action("Git 작업 및 저장소 설정…", OpenGitActions),
+        ]),
         Menu::new("탐색").items([
             MenuItem::action("파일 찾기", FindFile),
             MenuItem::action("본문 검색", FindText),
@@ -110,6 +115,8 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("cmd-shift-k", OpenGitCommit, None),
+        KeyBinding::new("cmd-enter", git_commit::SubmitCommit, Some("CommitDialog")),
         KeyBinding::new("cmd-shift-g", OpenGitWorkflow, None),
         KeyBinding::new("cmd-w", CloseFile, None),
         KeyBinding::new("cmd-shift-w", CloseProject, None),
@@ -198,6 +205,7 @@ pub struct Pokarak {
     file_request: u64,
     navigation_request: u64,
     git_ui: git_actions::GitUi,
+    commit_ui: git_commit::CommitUi,
     error: Option<String>,
     analysis_feedback: AnalysisFeedback,
     status: String,
@@ -616,6 +624,7 @@ impl Pokarak {
             file_request: 0,
             navigation_request: 0,
             git_ui: git_actions::GitUi::default(),
+            commit_ui: git_commit::CommitUi::default(),
             error: None,
             analysis_feedback: AnalysisFeedback::default(),
             status: "저장소를 열어 시작하세요".into(),
@@ -1374,7 +1383,8 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.navigating {
+        // Dialog readers (index/history/conflict) are not current working code.
+        if self.navigating || window.has_active_dialog(cx) {
             return;
         }
         let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
@@ -3024,6 +3034,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&OpenGitWorkflow,w,cx|this.open_git_workflow(w,cx)))
             .on_action(cx.listener(|this,_:&OpenSettings,w,cx|this.open_settings(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitActions,w,cx|this.open_git_actions(w,cx)))
+            .on_action(cx.listener(|this,_:&OpenGitCommit,w,cx|this.open_git_commit(w,cx)))
             .on_action(cx.listener(|this,_:&OpenRepository,w,cx|this.choose_repository(w,cx)))
             .on_action(cx.listener(|this,_:&CloseFile,w,cx|{if let Some(path)=this.selected(){this.close_file(path,w,cx)}else if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
             .on_action(cx.listener(|this,_:&CloseProject,w,cx|{if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))

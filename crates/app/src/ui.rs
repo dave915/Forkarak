@@ -1,6 +1,7 @@
 mod file_icons;
 mod analysis_feedback;
 mod git_actions;
+mod git_workflow;
 use analysis_feedback::AnalysisFeedback;
 
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
@@ -57,6 +58,7 @@ actions!(
         Quit,
         OpenSettings,
         OpenGitActions,
+        OpenGitWorkflow,
         CloseFile,
         CloseProject,
         CloseAllProjects,
@@ -87,6 +89,7 @@ pub fn bind_keys(cx: &mut App) {
         Menu::new("파일").items([
             MenuItem::action("저장소 열기…", OpenRepository),
             MenuItem::action("새로고침", Refresh),
+            MenuItem::action("Stash / 충돌 해결…", OpenGitWorkflow),
             MenuItem::separator(),
             MenuItem::action("파일 닫기", CloseFile),
             MenuItem::action("프로젝트 닫기", CloseProject),
@@ -107,6 +110,7 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("cmd-shift-g", OpenGitWorkflow, None),
         KeyBinding::new("cmd-w", CloseFile, None),
         KeyBinding::new("cmd-shift-w", CloseProject, None),
         KeyBinding::new("cmd-alt-down", NextWorktree, None),
@@ -174,6 +178,7 @@ struct FileRow {
 }
 
 pub struct Pokarak {
+    workflow: git_workflow::WorkflowUi,
     focus: FocusHandle,
     prefs: Preferences,
     current: Option<PathBuf>,
@@ -591,6 +596,7 @@ impl Pokarak {
             }
         }));
         let mut this = Self {
+            workflow: git_workflow::WorkflowUi::default(),
             focus: cx.focus_handle(),
             prefs,
             current: None,
@@ -3015,6 +3021,7 @@ impl Render for Pokarak {
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
         div().id("pokarak").key_context("Pokarak").track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
+            .on_action(cx.listener(|this,_:&OpenGitWorkflow,w,cx|this.open_git_workflow(w,cx)))
             .on_action(cx.listener(|this,_:&OpenSettings,w,cx|this.open_settings(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitActions,w,cx|this.open_git_actions(w,cx)))
             .on_action(cx.listener(|this,_:&OpenRepository,w,cx|this.choose_repository(w,cx)))

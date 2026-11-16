@@ -7,6 +7,7 @@
 pub mod commit_actions;
 pub mod history_actions;
 pub mod workflow;
+pub mod worktrees;
 
 use anyhow::{Context, Result, bail, ensure};
 use std::{
@@ -772,9 +773,18 @@ fn drain(
 }
 
 fn capture(
+    command: Command,
+    timeout: Duration,
+    cancellation: &OperationCancellation,
+) -> Result<Captured> {
+    capture_with_limit(command, timeout, cancellation, OUTPUT_LIMIT)
+}
+
+fn capture_with_limit(
     mut command: Command,
     timeout: Duration,
     cancellation: &OperationCancellation,
+    stdout_limit: usize,
 ) -> Result<Captured> {
     // Register the Child under the same lock used by shutdown. Cancellation can
     // never fall into a gap between checking a flag and starting a write.
@@ -818,7 +828,7 @@ fn capture(
             let out_done = drain(
                 &mut stdout,
                 &mut output.stdout,
-                OUTPUT_LIMIT,
+                stdout_limit,
                 &mut output.truncated,
             )?;
             let err_done = drain(
@@ -1523,6 +1533,11 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("Fixture push policy"));
         assert_eq!(f.at(&remote, &["for-each-ref", "--format=%(refname)"]), "");
+    }
+
+    mod worktree_management {
+        use super::*;
+        include!("operations/worktrees/tests.rs");
     }
 
     #[test]

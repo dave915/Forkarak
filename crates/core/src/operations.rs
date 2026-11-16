@@ -2,7 +2,8 @@
 //!
 //! Commands are argv-only, scoped to a canonical worktree, noninteractive, and
 //! bounded by a deadline and output limits. Credentials/SSH configuration are
-//! inherited; hooks and recursive submodule operations are not run by this UI.
+//! inherited. Explicit writes honor configured Git hooks; submodule operations
+//! are not recursive.
 use anyhow::{Context, Result, bail, ensure};
 use std::{
     io::{self, Read},
@@ -573,8 +574,6 @@ impl GitOperations {
                 "--literal-pathspecs",
                 "-c",
                 "core.fsmonitor=false",
-                "-c",
-                "core.hooksPath=/dev/null",
                 "-c",
                 "maintenance.auto=false",
                 "-c",
@@ -1333,6 +1332,47 @@ mod tests {
                 .contains("timed out")
         );
         assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn explicit_operations_honor_configured_hooks() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = Fixture::new();
+        let hooks = f.temp.path().join("authored-hooks");
+        fs::create_dir(&hooks).unwrap();
+        let checkout = hooks.join("post-checkout");
+        fs::write(&checkout, "#!/bin/sh\nprintf 'ran' > checkout-hook-ran\n").unwrap();
+        fs::set_permissions(&checkout, fs::Permissions::from_mode(0o755)).unwrap();
+        f.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+        let op = f.op();
+        op.execute(&Operation::CreateBranch {
+            name: "hooks".into(),
+        })
+        .unwrap();
+        op.execute(&Operation::CheckoutBranch {
+            name: "hooks".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(f.root.join("checkout-hook-ran")).unwrap(),
+            "ran"
+        );
+        let remote = f.add_origin();
+        let push = hooks.join("pre-push");
+        fs::write(
+            &push,
+            "#!/bin/sh\nprintf 'Fixture push policy rejected this push' >&2\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&push, fs::Permissions::from_mode(0o755)).unwrap();
+        let error = op
+            .execute(&Operation::Push {
+                remote: "origin".into(),
+                branch: "hooks".into(),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("Fixture push policy"));
+        assert_eq!(f.at(&remote, &["for-each-ref", "--format=%(refname)"]), "");
     }
 
     #[test]

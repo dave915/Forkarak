@@ -82,7 +82,7 @@ Git 쓰기, 코드 편집, PR 연동, 과거 커밋의 의미 분석, Spring Bea
 
 프로젝트·워크트리의 UI 상태는 `~/.config/pokarak/session.json`에 저장한다. 분석용 임시 인덱스는 검사 대상 저장소 밖에 둔다. 언어 서버가 사용하는 일반 Maven/Gradle 캐시는 해당 도구 정책을 따른다.
 
-Git 읽기는 외부 diff/filter/hook을 실행하지 않는다. 파일당 텍스트 미리보기는 2 MiB, diff는 50,000행 및 계산 제한이 있다. 제한을 넘으면 부분 표시를 알린다. 통합 diff에서 한 줄이 2,000자를 넘으면 안내와 함께 줄을 제한하며 전체 내용은 코드 탭에서 확인한다. 바이너리·비 UTF-8 텍스트는 코드로 표시하지 않는다. 자세한 비교/rename/symlink 처리 범위는 [core README](crates/core/README.md)에 있다.
+Git 읽기는 외부 diff/filter/hook을 실행하지 않는다. 파일당 텍스트 미리보기는 2 MiB, diff는 50,000행 및 계산 제한이 있다. 제한을 넘으면 부분 표시를 알린다. 통합 diff의 긴 줄은 가로 스크롤로 변경 전·후 내용을 모두 확인할 수 있다. 바이너리·비 UTF-8 텍스트는 코드로 표시하지 않는다. 자세한 비교/rename/symlink 처리 범위는 [core README](crates/core/README.md)에 있다.
 
 macOS Apple Silicon에서 빌드·실행했다. Intel Mac, Windows/Linux 패키징, 최소 macOS 13 환경, Developer ID 서명·공증·자동 업데이트는 검증하지 않았다.
 

@@ -416,7 +416,7 @@ impl Pokarak {
                 .default_value("main")
                 .placeholder("기준 브랜치")
         });
-        let subscriptions = vec![cx.subscribe_in(
+        let mut subscriptions = vec![cx.subscribe_in(
             &search_input,
             window,
             |this, input, event: &InputEvent, window, cx| match event {
@@ -438,6 +438,15 @@ impl Pokarak {
                 _ => {}
             },
         )];
+        subscriptions.push(cx.subscribe_in(
+            &base_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } => this.compare(true, window, cx),
+                InputEvent::Change => cx.notify(),
+                _ => {}
+            },
+        ));
         let mut this = Self {
             focus: cx.focus_handle(),
             prefs,
@@ -2009,6 +2018,8 @@ impl Pokarak {
 
     fn render_comparison(&self, cx: &mut Context<Self>) -> AnyElement {
         let mode = self.snapshot().map(|s| &s.compare);
+        let draft = self.base_input.read(cx).value();
+        let pending = matches!(mode,Some(CompareMode::Branch(base)) if base.as_str()!=draft.trim());
         div()
             .h(px(42.))
             .flex_none()
@@ -2040,13 +2051,28 @@ impl Pokarak {
                     .w(px(145.))
                     .child(Input::new(&self.base_input).small()),
             )
-            .child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(
-                if matches!(mode, Some(CompareMode::Branch(_))) {
-                    "공통 조상 → 현재 파일"
-                } else {
-                    "HEAD → 현재 파일"
-                },
-            ))
+            .child(
+                Button::new("apply-base")
+                    .label(if pending { "적용 *" } else { "적용" })
+                    .ghost()
+                    .small()
+                    .disabled(self.loading || draft.trim().is_empty())
+                    .tooltip("입력한 기준 브랜치를 적용합니다. Enter로도 적용할 수 있습니다.")
+                    .on_click(cx.listener(|this, _, window, cx| this.compare(true, window, cx))),
+            )
+            .child(
+                div()
+                    .max_w(px(260.))
+                    .text_ellipsis()
+                    .text_size(px(11.))
+                    .text_color(rgb(MUTED))
+                    .child(match mode {
+                        Some(CompareMode::Branch(base)) => {
+                            format!("적용됨: {base} 공통 조상 → 현재 파일")
+                        }
+                        _ => "적용됨: HEAD → 현재 파일".into(),
+                    }),
+            )
             .child(div().flex_1())
             .child(
                 Button::new("analysis")
@@ -2295,14 +2321,7 @@ impl Pokarak {
                             .child(div().whitespace_nowrap().child(if line.text.is_empty() {
                                 " ".into()
                             } else {
-                                if line.text.chars().count() > 2_000 {
-                                    format!(
-                                        "{} … [긴 줄: 코드 탭에서 전체 보기]",
-                                        line.text.chars().take(2_000).collect::<String>()
-                                    )
-                                } else {
-                                    line.text.clone()
-                                }
+                                line.text.clone()
                             }))
                             .on_click(move |event, window, cx| {
                                 if event.click_count() == 2

@@ -1,5 +1,5 @@
 use crate::{
-    NavigationKind, NavigatorOptions, ServerConfig,
+    CancellationHandle, NavigationKind, NavigatorOptions, ServerConfig,
     config::{discover_program, is_jetbrains},
     paths::{end_position, other_worktree, path_to_uri},
     transport::Transport,
@@ -73,7 +73,13 @@ impl Client {
         read_document(path)
     }
 
-    pub fn start(root: &Path, config: &ServerConfig, options: &NavigatorOptions) -> Result<Self> {
+    pub fn start(
+        root: &Path,
+        config: &ServerConfig,
+        options: &NavigatorOptions,
+        cancellation: &CancellationHandle,
+    ) -> Result<Self> {
+        cancellation.check()?;
         let jetbrains = is_jetbrains(config);
         if (config.language == "kotlin" || jetbrains) && !options.allow_project_imports {
             bail!(
@@ -112,7 +118,7 @@ impl Client {
                 ]);
             }
         }
-        let transport = Transport::spawn(&program, &args, root)?;
+        let transport = Transport::spawn(&program, &args, root, cancellation)?;
         let settings = json!({
             "java": {
                 "autobuild": {"enabled": false},

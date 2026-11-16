@@ -1,10 +1,11 @@
+use crate::{CancellationHandle, cancellation::OwnedProcess};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::{
     collections::VecDeque,
     io::{BufRead, BufReader, Read, Write},
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         mpsc::{self, Receiver, SyncSender},
@@ -67,8 +68,8 @@ pub(crate) fn read_frame(reader: &mut impl BufRead) -> Result<Value> {
 }
 
 pub(crate) struct Transport {
-    child: Mutex<Child>,
-    pid: u32,
+    process: Arc<OwnedProcess>,
+    cancellation: CancellationHandle,
     rx: Option<Receiver<std::result::Result<Value, String>>>,
     tx: Option<SyncSender<WriteJob>>,
     stderr: Arc<Mutex<VecDeque<u8>>>,
@@ -77,7 +78,12 @@ pub(crate) struct Transport {
 }
 
 impl Transport {
-    pub fn spawn(program: &Path, args: &[String], root: &Path) -> Result<Self> {
+    pub fn spawn(
+        program: &Path,
+        args: &[String],
+        root: &Path,
+        cancellation: &CancellationHandle,
+    ) -> Result<Self> {
         let mut command = Command::new(program);
         command
             .args(args)
@@ -92,17 +98,14 @@ impl Transport {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
-        let mut child = command.spawn().with_context(|| {
+        let process = cancellation.spawn(&mut command).with_context(|| {
             format!(
                 "Cannot start language server {} with argv {:?}",
                 program.display(),
                 args
             )
         })?;
-        let pid = child.id();
-        let mut stdin = child.stdin.take().context("Missing server stdin")?;
-        let stdout = child.stdout.take().context("Missing server stdout")?;
-        let mut stderr = child.stderr.take().context("Missing server stderr")?;
+        let (mut stdin, stdout, mut stderr) = process.take_stdio()?;
         let logs = Arc::new(Mutex::new(VecDeque::new()));
         let capture = Arc::clone(&logs);
         let (response_tx, response_rx) = mpsc::sync_channel(128);
@@ -148,8 +151,8 @@ impl Transport {
             }
         });
         Ok(Self {
-            child: Mutex::new(child),
-            pid,
+            process,
+            cancellation: cancellation.clone(),
             rx: Some(response_rx),
             tx: Some(write_tx),
             stderr: logs,
@@ -159,6 +162,7 @@ impl Transport {
     }
 
     pub fn send(&self, message: &Value, deadline: Instant) -> Result<()> {
+        self.cancellation.check()?;
         let body = serde_json::to_vec(message)?;
         if body.len() > MAX_BODY {
             bail!("Outgoing LSP message exceeds {MAX_BODY} bytes");
@@ -169,34 +173,41 @@ impl Transport {
             .context("Language server is stopped")?
             .try_send((body, ack_tx))
             .map_err(|e| anyhow::anyhow!("Cannot queue LSP write: {e}"))?;
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .context("LSP write timed out")?;
-        ack_rx
-            .recv_timeout(remaining)
-            .context("LSP write timed out or writer exited")?
+        self.wait(&ack_rx, deadline, "LSP write")?
             .map_err(|e| anyhow::anyhow!("LSP write failed: {e}"))
     }
 
     pub fn receive(&self, deadline: Instant) -> Result<Value> {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .context("LSP response timed out")?;
-        self.rx
-            .as_ref()
-            .context("Language server is stopped")?
-            .recv_timeout(remaining)
-            .context("LSP response timed out or reader exited")?
-            .map_err(anyhow::Error::msg)
+        self.wait(
+            self.rx.as_ref().context("Language server is stopped")?,
+            deadline,
+            "LSP response",
+        )?
+        .map_err(anyhow::Error::msg)
+    }
+
+    fn wait<T>(&self, receiver: &Receiver<T>, deadline: Instant, operation: &str) -> Result<T> {
+        loop {
+            self.cancellation.check()?;
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .with_context(|| format!("{operation} timed out"))?;
+            match receiver.recv_timeout(remaining.min(Duration::from_millis(20))) {
+                Ok(value) => {
+                    self.cancellation.check()?;
+                    return Ok(value);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.cancellation.check()?;
+                    bail!("{operation} worker exited");
+                }
+            }
+        }
     }
 
     pub fn exit_status(&self) -> Option<String> {
-        self.child
-            .lock()
-            .ok()?
-            .try_wait()
-            .ok()?
-            .map(|status| format!("Language server exited: {status}"))
+        self.process.exit_status()
     }
 
     pub fn stderr(&self) -> String {
@@ -219,23 +230,14 @@ impl Transport {
         self.tx.take();
         self.rx.take();
         let deadline = Instant::now() + grace;
-        while self.exit_status().is_none() && Instant::now() < deadline {
+        while !self.cancellation.is_cancelled()
+            && self.exit_status().is_none()
+            && Instant::now() < deadline
+        {
             thread::sleep(Duration::from_millis(5));
         }
-        #[cfg(unix)]
-        {
-            // SAFETY: the child was spawned as leader of its own process group;
-            // negative pid targets only that group, never the application's group.
-            unsafe {
-                libc::kill(-(self.pid as i32), libc::SIGKILL);
-            }
-        }
-        if let Ok(mut child) = self.child.lock() {
-            if child.try_wait().ok().flatten().is_none() {
-                let _ = child.kill();
-            }
-            let _ = child.wait();
-        }
+        let _ = self.process.terminate();
+        self.process.reap();
         // A server which deliberately escaped its process group might retain a pipe.
         // Never let such a pipe hold up application shutdown.
         let deadline = Instant::now() + Duration::from_millis(250);

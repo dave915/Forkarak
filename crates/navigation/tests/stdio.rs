@@ -602,3 +602,203 @@ fn installed_manifest_discovery_is_read_only_and_rejects_invalid_executables() {
     fs::write(&path,serde_json::json!({"schemaVersion":1,"servers":[{"language":"java","program":"relative/java","args":[]}]}).to_string()).unwrap();
     assert!(pokarak_navigation::installed_configs(&f.root).is_err());
 }
+
+struct CancelOnDrop(pokarak_navigation::CancellationHandle);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.cancel();
+    }
+}
+
+fn wait_for_marker(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "mock did not reach {}",
+            path.display()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cancel_during_locked_navigation_kills_owned_group_and_leaves_other_roots_alive() {
+    use std::sync::{Arc, Mutex, mpsc};
+    fn send_sync_clone<T: Send + Sync + Clone>() {}
+    send_sync_clone::<pokarak_navigation::CancellationHandle>();
+
+    let f = Fixture::new();
+    let other = Fixture::new();
+    let mut survivor = other.navigator("normal");
+    survivor
+        .navigate(Path::new("entry.ts"), 1, 6, Definition)
+        .unwrap();
+    let mut options = f.options();
+    options.request_timeout = Duration::from_secs(30);
+    options.shutdown_timeout = Duration::from_secs(30);
+    let nav = Navigator::with_options(
+        f.root.clone(),
+        vec![f.config("cancel-descendants")],
+        options,
+    );
+    let handle = nav.cancellation_handle();
+    let _cleanup = CancelOnDrop(handle.clone());
+    let shared = Arc::new(Mutex::new(nav));
+    let worker_nav = Arc::clone(&shared);
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = worker_nav
+            .lock()
+            .unwrap()
+            .navigate(Path::new("entry.ts"), 1, 6, Definition);
+        finished_tx
+            .send(result.map_err(|error| error.to_string()))
+            .unwrap();
+    });
+    wait_for_marker(&f.root.join("request.started"));
+    assert!(
+        shared.try_lock().is_err(),
+        "navigate must own the application mutex"
+    );
+    let start = Instant::now();
+    handle.cancel().unwrap();
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "cancel waited on navigation or process exit"
+    );
+    assert!(handle.is_cancelled());
+    let error = finished_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap_err();
+    assert!(error.contains("cancelled"), "{error}");
+    worker.join().unwrap();
+    assert_process_gone(&f.root.join("mock.pid"));
+    assert_process_gone(&f.root.join("descendant.pid"));
+    assert!(start.elapsed() < Duration::from_secs(3));
+    {
+        let mut nav = shared.lock().unwrap();
+        assert!(nav.status().contains("cancelled"));
+        assert!(
+            nav.navigate(Path::new("entry.ts"), 1, 6, Definition)
+                .unwrap_err()
+                .to_string()
+                .contains("cancelled")
+        );
+        assert!(nav.refresh().is_err());
+    }
+    drop(shared);
+    // Retained handles cannot touch a new session, even at the identical root.
+    let mut replacement = f.navigator("normal");
+    replacement
+        .navigate(Path::new("entry.ts"), 1, 6, Definition)
+        .unwrap();
+    let callbacks: Vec<_> = (0..4)
+        .map(|_| {
+            let handle = handle.clone();
+            std::thread::spawn(move || handle.cancel().unwrap())
+        })
+        .collect();
+    for callback in callbacks {
+        callback.join().unwrap();
+    }
+    replacement
+        .navigate(Path::new("entry.ts"), 1, 6, References)
+        .unwrap();
+    survivor
+        .navigate(Path::new("entry.ts"), 1, 6, References)
+        .unwrap();
+}
+
+#[test]
+fn cancellation_interrupts_initialization_and_blocked_writes() {
+    use std::sync::mpsc;
+    for (mode, marker) in [
+        ("init-hang", "initialize.started"),
+        ("no-read-after-init", "stdin.blocked"),
+    ] {
+        let f = Fixture::new();
+        fs::write(f.root.join("entry.ts"), "x".repeat(2 * 1024 * 1024)).unwrap();
+        let mut options = f.options();
+        options.initialize_timeout = Duration::from_secs(30);
+        options.request_timeout = Duration::from_secs(30);
+        let mut nav = Navigator::with_options(f.root.clone(), vec![f.config(mode)], options);
+        let handle = nav.cancellation_handle();
+        let _cleanup = CancelOnDrop(handle.clone());
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = nav.navigate(Path::new("entry.ts"), 0, 1, Definition);
+            tx.send(result.map_err(|error| error.to_string())).unwrap();
+        });
+        wait_for_marker(&f.root.join(marker));
+        let start = Instant::now();
+        handle.cancel().unwrap();
+        assert!(
+            rx.recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap_err()
+                .contains("cancelled")
+        );
+        worker.join().unwrap();
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert_process_gone(&f.root.join("mock.pid"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn exited_group_leader_is_not_reaped_before_descendant_cancellation() {
+    let f = Fixture::new();
+    let mut nav = f.navigator("exit-descendants");
+    let handle = nav.cancellation_handle();
+    let _cleanup = CancelOnDrop(handle.clone());
+    nav.navigate(Path::new("entry.ts"), 1, 6, Definition)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !nav.status().contains("exit code 0") {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let pid = fs::read_to_string(f.root.join("mock.pid"))
+        .unwrap()
+        .parse::<libc::id_t>()
+        .unwrap();
+    // The child remains waitable after status(): its PID cannot be recycled yet.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    assert_eq!(result, 0);
+    assert_eq!(unsafe { info.si_pid() }, pid as libc::pid_t);
+    handle.cancel().unwrap();
+    // Reaping is independent of Navigator shutdown, even for an idle instance.
+    assert_process_gone(&f.root.join("mock.pid"));
+    assert_process_gone(&f.root.join("descendant.pid"));
+    nav.shutdown();
+    handle.cancel().unwrap();
+}
+
+#[test]
+fn cancellation_before_first_request_prevents_server_start() {
+    let f = Fixture::new();
+    let mut nav = f.navigator("normal");
+    let handle = nav.cancellation_handle();
+    handle.cancel().unwrap();
+    assert!(
+        nav.navigate(Path::new("entry.ts"), 1, 6, Definition)
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled")
+    );
+    assert!(!f.root.join("mock.pid").exists());
+    nav.shutdown();
+    drop(nav);
+    handle.cancel().unwrap();
+}

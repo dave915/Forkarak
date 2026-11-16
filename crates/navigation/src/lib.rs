@@ -1,5 +1,6 @@
 //! Read-only, root-scoped semantic navigation over stdio LSP.
 //! Construct only after trust; call on an application background thread.
+mod cancellation;
 mod client;
 mod config;
 mod paths;
@@ -18,6 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub use cancellation::CancellationHandle;
 pub use config::{NavigatorOptions, default_configs, discover_program, installed_configs};
 pub use paths::{path_to_uri, uri_to_path};
 
@@ -53,6 +55,7 @@ pub struct Navigator {
     last_status: String,
     last_stderr: String,
     stopped: bool,
+    cancellation: CancellationHandle,
 }
 
 impl Navigator {
@@ -85,12 +88,19 @@ impl Navigator {
             setup_error,
             last_stderr: String::new(),
             stopped: false,
+            cancellation: CancellationHandle::default(),
         }
     }
 
     /// Canonical worktree namespace. The UI must discard responses for a root it has left.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Retain a clone outside the application's Navigator mutex for close/quit.
+    /// Cancellation is permanent for this instance; create a new Navigator to resume.
+    pub fn cancellation_handle(&self) -> CancellationHandle {
+        self.cancellation.clone()
     }
 
     /// Lines and columns are zero-based; columns count UTF-16 code units.
@@ -102,6 +112,7 @@ impl Navigator {
         kind: NavigationKind,
     ) -> Result<NavigationResult> {
         let result = self.navigate_inner(path, line, column, kind);
+        let result = self.cancellation.check().and(result);
         match &result {
             Ok(result) => self.last_status = result.status.clone(),
             Err(error) => self.last_status = format!("{error:#}"),
@@ -119,6 +130,7 @@ impl Navigator {
         if self.stopped {
             bail!("Navigator has been shut down for {}", self.root.display());
         }
+        self.cancellation.check()?;
         if let Some(error) = &self.setup_error {
             bail!("{error}");
         }
@@ -148,7 +160,12 @@ impl Navigator {
         if !self.clients.contains_key(&key) {
             let mut launch_config = config.clone();
             launch_config.language = family(language).into();
-            let client = Client::start(&self.root, &launch_config, &self.options)?;
+            let client = Client::start(
+                &self.root,
+                &launch_config,
+                &self.options,
+                &self.cancellation,
+            )?;
             self.clients.insert(key.clone(), client);
         }
         let client = self.clients.get_mut(&key).unwrap();
@@ -192,6 +209,7 @@ impl Navigator {
 
     /// Call on filesystem-change notifications; navigation also refreshes all open buffers.
     pub fn refresh(&mut self) -> Result<()> {
+        self.cancellation.check()?;
         if self.stopped {
             bail!("Navigator has been shut down");
         }
@@ -214,6 +232,9 @@ impl Navigator {
     }
 
     pub fn status(&self) -> String {
+        if !self.stopped && self.cancellation.is_cancelled() {
+            return format!("{}: Analysis cancelled", self.root.display());
+        }
         let state = self
             .clients
             .values()
@@ -256,6 +277,7 @@ impl Navigator {
             client.shutdown();
         }
         self.clients.clear();
+        let _ = self.cancellation.cancel();
         self.external_sources.clear();
         self.stopped = true;
         self.last_status = "Analysis stopped".into();

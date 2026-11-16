@@ -13,6 +13,25 @@ navigator.shutdown();
 
 `References` includes declarations; `Implementation` uses `targetSelectionRange` for LocationLink results. Locations use absolute filesystem paths, zero-based lines, and UTF-16 columns. A completed empty LSP response is semantic with no matches. Missing servers, unsupported methods, crashes, timeouts, malformed responses, and source changes during a request return errors, never fabricated semantic results. There is no text-search fallback.
 
+## Cancellation on project close or app quit
+
+Obtain a handle before putting the Navigator behind the UI's mutex:
+
+```rust,ignore
+let navigator = Navigator::with_options(root, default_configs(), options);
+let cancel = navigator.cancellation_handle(); // Clone + Send + Sync
+let shared = std::sync::Arc::new(std::sync::Mutex::new(navigator));
+// A background worker may now hold shared.lock() throughout navigate().
+// On close/quit, use the saved handle directly, without locking shared:
+cancel.cancel()?;
+```
+
+`Navigator::cancellation_handle() -> CancellationHandle` is additive. The handle exposes `cancel(&self) -> anyhow::Result<()>` and `is_cancelled(&self) -> bool`. Retain one per project/worktree and invoke all relevant handles before app exit. `cancel()` permanently cancels that Navigator, synchronously signals its owned server process groups on Unix, and schedules child reaping independently. It never takes the application's Navigator mutex, waits for an LSP response, or joins I/O threads. Only short process-lifecycle locks (including OS process creation) are shared. Check its result for OS signaling errors.
+
+In-flight reads and writes check cancellation at most every 20 ms while waiting on channels, so they do not wait out the usual request timeout, including when a detached process retains a pipe. The worker returns a cancellation error; subsequent navigation/refresh cannot start another server. Cancellation before the first request prevents startup. To resume, construct a new Navigator with a new handle. Dropping a handle alone does not cancel; repeated/concurrent cancellation and handles retained after Navigator destruction are safe. Normal `shutdown()` still attempts graceful LSP shutdown and remains source-compatible.
+
+Process ownership, group signaling, and reaping share a private lifecycle guard. Unix status checks use `waitid(WNOWAIT)` to retain the group leader's PID until signaling is finished, and signaling is revoked before reaping. A detected external reaper revokes ownership instead of signaling a potentially reused PID. Hosts should leave these child processes to this crate rather than installing a competing global SIGCHLD reaper. Process groups deliberately escaped by descendants and Windows descendant cleanup remain outside the Unix group guarantee.
+
 ## Server configuration
 
 `default_configs()` first prepares PATH fallbacks, then prefers the persistent manifest at `~/.local/share/pokarak/tools/installed.json` without executing anything. Run `scripts/setup-language-servers.sh` explicitly to create it. See [language analysis setup and verified scope](../../docs/language-analysis.md). Without managed tools, the fallbacks are:

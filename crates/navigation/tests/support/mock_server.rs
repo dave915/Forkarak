@@ -102,6 +102,7 @@ fn main() {
                     json!(["utf-16"])
                 );
                 if mode == "init-hang" {
+                    fs::write("initialize.started", "ready").unwrap();
                     continue;
                 }
                 if mode == "malformed" {
@@ -119,11 +120,15 @@ fn main() {
                     }}),
                 );
                 if mode == "no-read-after-init" {
+                    fs::write("stdin.blocked", "ready").unwrap();
                     loop {
                         thread::sleep(Duration::from_secs(60));
                     }
                 }
-                if mode == "descendants" {
+                if matches!(
+                    mode,
+                    "descendants" | "cancel-descendants" | "exit-descendants"
+                ) {
                     // Deliberately orphaned to test the client's process-group cleanup.
                     #[allow(clippy::zombie_processes)]
                     let child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -205,6 +210,12 @@ fn main() {
             | "textDocument/implementation" => {
                 let uri = params["textDocument"]["uri"].as_str().unwrap();
                 assert!(docs.contains_key(uri));
+                if mode == "cancel-descendants" {
+                    fs::write("request.started", "ready").unwrap();
+                    loop {
+                        thread::sleep(Duration::from_secs(60));
+                    }
+                }
                 if method.ends_with("references") {
                     assert_eq!(params["context"]["includeDeclaration"], true);
                 }
@@ -247,6 +258,9 @@ fn main() {
                     response(id, json!([location.clone(), location]));
                 } else {
                     response(id, location);
+                }
+                if mode == "exit-descendants" {
+                    return;
                 }
             }
             "shutdown" => {

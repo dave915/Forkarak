@@ -1,5 +1,6 @@
 mod file_icons;
 mod analysis_feedback;
+mod git_actions;
 use analysis_feedback::AnalysisFeedback;
 
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
@@ -55,6 +56,7 @@ actions!(
     [
         Quit,
         OpenSettings,
+        OpenGitActions,
         CloseFile,
         CloseProject,
         CloseAllProjects,
@@ -75,7 +77,7 @@ actions!(
 );
 
 pub fn bind_keys(cx: &mut App) {
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(git_actions::request_app_quit);
     cx.set_menus([
         Menu::new("포카락").items([
             MenuItem::action("설정…", OpenSettings),
@@ -90,6 +92,7 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("프로젝트 닫기", CloseProject),
             MenuItem::action("모든 프로젝트 닫기", CloseAllProjects),
         ]),
+        Menu::new("Git").items([MenuItem::action("Git 작업 및 저장소 설정…", OpenGitActions)]),
         Menu::new("탐색").items([
             MenuItem::action("파일 찾기", FindFile),
             MenuItem::action("본문 검색", FindText),
@@ -189,6 +192,7 @@ pub struct Pokarak {
     request: u64,
     file_request: u64,
     navigation_request: u64,
+    git_ui: git_actions::GitUi,
     error: Option<String>,
     analysis_feedback: AnalysisFeedback,
     status: String,
@@ -605,6 +609,7 @@ impl Pokarak {
             request: 0,
             file_request: 0,
             navigation_request: 0,
+            git_ui: git_actions::GitUi::default(),
             error: None,
             analysis_feedback: AnalysisFeedback::default(),
             status: "저장소를 열어 시작하세요".into(),
@@ -629,7 +634,9 @@ impl Pokarak {
             checking_changes: false,
             _subscriptions: subscriptions,
         };
+        this.install_git_lifecycle(window, cx);
         cx.on_release(|this, cx| {
+            this.cancel_git_job();
             this.persist(cx);
             if let Some(cancel) = this.cancellation.take() {
                 let _ = cancel.cancel();
@@ -637,6 +644,7 @@ impl Pokarak {
         })
         .detach();
         cx.on_app_quit(|this, cx| {
+            this.cancel_git_job();
             this.persist(cx);
             if let Some(cancel) = this.cancellation.take() {
                 let _ = cancel.cancel();
@@ -1022,6 +1030,7 @@ impl Pokarak {
         if let Some(path) = selection {
             self.open_file(path, false, None, window, cx);
         }
+        self.restore_git_completion(cx);
     }
 
     fn open_file(
@@ -1245,6 +1254,7 @@ impl Pokarak {
                         this.status = "파일을 읽을 수 없습니다".into();
                     }
                 }
+                this.restore_git_completion(cx);
                 cx.notify();
             });
         })
@@ -1796,6 +1806,19 @@ impl Pokarak {
                     .label("프로젝트 열기")
                     .small()
                     .on_click(cx.listener(|this, _, w, cx| this.choose_repository(w, cx))),
+            )
+            .child(
+                Button::new("git-actions")
+                    .label(if self.git_is_busy() {
+                        "Git 작업 중…"
+                    } else {
+                        "Git 작업…"
+                    })
+                    .ghost()
+                    .small()
+                    .disabled(self.git_is_busy() || self.loading || self.current.is_none())
+                    .tooltip("브랜치 전환·원격 동기화·저장소 Git 설정")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_git_actions(window, cx))),
             )
             .child(
                 Button::new("settings")
@@ -2993,6 +3016,7 @@ impl Render for Pokarak {
         div().id("pokarak").key_context("Pokarak").track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
             .on_action(cx.listener(|this,_:&OpenSettings,w,cx|this.open_settings(w,cx)))
+            .on_action(cx.listener(|this,_:&OpenGitActions,w,cx|this.open_git_actions(w,cx)))
             .on_action(cx.listener(|this,_:&OpenRepository,w,cx|this.choose_repository(w,cx)))
             .on_action(cx.listener(|this,_:&CloseFile,w,cx|{if let Some(path)=this.selected(){this.close_file(path,w,cx)}else if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
             .on_action(cx.listener(|this,_:&CloseProject,w,cx|{if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))

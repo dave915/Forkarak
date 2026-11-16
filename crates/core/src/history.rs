@@ -173,12 +173,13 @@ fn parse_commits(data: &[u8]) -> Result<Vec<Commit>> {
         .unwrap_or(data)
         .split(|b| *b == 0)
         .collect::<Vec<_>>();
+    let (records, remainder) = fields.as_chunks::<5>();
     ensure!(
-        fields.len() % 5 == 0,
+        remainder.is_empty(),
         "Malformed history metadata (possibly an embedded NUL in a commit)"
     );
-    fields
-        .chunks_exact(5)
+    records
+        .iter()
         .map(|f| {
             let oid = std::str::from_utf8(f[0])?.to_owned();
             validate_oid(&oid)?;

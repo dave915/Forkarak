@@ -1,10 +1,21 @@
+mod cli;
 mod prefs;
 mod ui;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 use std::borrow::Cow;
 fn main() {
-    let initial = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    if std::env::args_os().any(|arg| arg == "--help" || arg == "-h") {
+        println!(
+            "Pokarak — native Git worktree review\nUsage: pokarak [PROJECT ...] [--window-size WIDTHxHEIGHT]"
+        );
+        return;
+    }
+    let options = cli::parse(std::env::args_os().skip(1)).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2);
+    });
+    let initial = options.projects;
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
@@ -45,7 +56,7 @@ fn main() {
                     }),
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                         None,
-                        size(px(1440.), px(900.)),
+                        size(px(options.width), px(options.height)),
                         cx,
                     ))),
                     window_min_size: Some(size(px(940.), px(580.))),

@@ -1,4 +1,4 @@
-use crate::prefs::{Preferences, SavedView};
+use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     Disableable, Icon, Selectable, Sizable, StyledExt,
@@ -14,13 +14,13 @@ use pokarak_core::{
 };
 use pokarak_navigation::{NavigationKind, NavigationResult, Navigator};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 const BG: u32 = 0x20252c;
@@ -32,11 +32,30 @@ const MUTED: u32 = 0xa4b0be;
 const BLUE: u32 = 0x7fb8e2;
 const GREEN: u32 = 0x83c4a1;
 const RED: u32 = 0xe5a0a5;
+type FileRevision = (u64, SystemTime);
+
+fn file_revision(path: &Path) -> Option<FileRevision> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+fn result_revisions(locations: &[SourceLocation]) -> HashMap<PathBuf, FileRevision> {
+    locations
+        .iter()
+        .filter_map(|hit| file_revision(&hit.path).map(|revision| (hit.path.clone(), revision)))
+        .collect()
+}
 
 actions!(
     pokarak,
     [
         Quit,
+        CloseFile,
+        CloseProject,
+        CloseAllProjects,
+        NextWorktree,
+        PreviousWorktree,
+        NextProject,
+        PreviousProject,
         OpenRepository,
         Refresh,
         Back,
@@ -56,6 +75,10 @@ pub fn bind_keys(cx: &mut App) {
         Menu::new("파일").items([
             MenuItem::action("저장소 열기…", OpenRepository),
             MenuItem::action("새로고침", Refresh),
+            MenuItem::separator(),
+            MenuItem::action("파일 닫기", CloseFile),
+            MenuItem::action("프로젝트 닫기", CloseProject),
+            MenuItem::action("모든 프로젝트 닫기", CloseAllProjects),
         ]),
         Menu::new("탐색").items([
             MenuItem::action("파일 찾기", FindFile),
@@ -70,6 +93,12 @@ pub fn bind_keys(cx: &mut App) {
     ]);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-w", CloseFile, None),
+        KeyBinding::new("cmd-shift-w", CloseProject, None),
+        KeyBinding::new("cmd-alt-down", NextWorktree, None),
+        KeyBinding::new("cmd-alt-up", PreviousWorktree, None),
+        KeyBinding::new("ctrl-tab", NextProject, None),
+        KeyBinding::new("ctrl-shift-tab", PreviousProject, None),
         KeyBinding::new("cmd-o", OpenRepository, None),
         KeyBinding::new("cmd-r", Refresh, None),
         KeyBinding::new("cmd-[", Back, None),
@@ -89,6 +118,8 @@ struct ReadingPoint {
     row: usize,
     line: u32,
     column: u32,
+    scroll_x: f32,
+    scroll_y: f32,
 }
 
 struct Session {
@@ -100,9 +131,11 @@ struct Session {
     history: Vec<ReadingPoint>,
     forward: Vec<ReadingPoint>,
     collapsed: HashSet<PathBuf>,
+    restoring: bool,
 }
 impl Session {
     fn new(saved: SavedView) -> Self {
+        let restoring = saved.selected.is_some();
         Self {
             snapshot: None,
             saved,
@@ -112,6 +145,7 @@ impl Session {
             history: vec![],
             forward: vec![],
             collapsed: HashSet::new(),
+            restoring,
         }
     }
 }
@@ -129,6 +163,11 @@ pub struct Pokarak {
     focus: FocusHandle,
     prefs: Preferences,
     current: Option<PathBuf>,
+    current_project: Option<PathBuf>,
+    opening_path: Option<PathBuf>,
+    projects: Vec<SavedProject>,
+    pending_history: Option<ReadingPoint>,
+    pending_projects: VecDeque<PathBuf>,
     sessions: HashMap<PathBuf, Session>,
     search_input: Entity<InputState>,
     base_input: Entity<InputState>,
@@ -142,23 +181,234 @@ pub struct Pokarak {
     error: Option<String>,
     status: String,
     results: Vec<SourceLocation>,
+    result_revisions: HashMap<PathBuf, FileRevision>,
+    pending_location_revision: Option<FileRevision>,
     result_title: String,
     result_semantic: bool,
     results_open: bool,
     result_scroll: UniformListScrollHandle,
+    file_scroll: UniformListScrollHandle,
+    file_cursor: usize,
+    result_cursor: usize,
+    results_focus: FocusHandle,
     navigation: Option<Arc<Mutex<Navigator>>>,
+    cancellation: Option<pokarak_navigation::CancellationHandle>,
     navigating: bool,
     trust_prompt: bool,
     watcher: Option<RecommendedWatcher>,
     changed: Arc<AtomicBool>,
     external_change: bool,
+    checking_changes: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Pokarak {
-    pub fn new(initial: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn cycle_worktree(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let trees: Vec<_> = self
+            .snapshot()
+            .map(|s| {
+                s.worktrees
+                    .iter()
+                    .filter(|t| !t.is_prunable)
+                    .map(|t| t.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if trees.is_empty() {
+            return;
+        }
+        let index = trees
+            .iter()
+            .position(|p| Some(p) == self.current.as_ref())
+            .unwrap_or(0);
+        let index = if forward {
+            (index + 1) % trees.len()
+        } else {
+            (index + trees.len() - 1) % trees.len()
+        };
+        self.open_repository(trees[index].clone(), window, cx);
+    }
+
+    fn cycle_project(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.projects.is_empty() {
+            return;
+        }
+        let index = self
+            .projects
+            .iter()
+            .position(|p| Some(&p.root) == self.current_project.as_ref())
+            .unwrap_or(0);
+        let index = if forward {
+            (index + 1) % self.projects.len()
+        } else {
+            (index + self.projects.len() - 1) % self.projects.len()
+        };
+        self.open_repository(self.projects[index].last_worktree.clone(), window, cx);
+    }
+    fn activate_row(&mut self, row: FileRow, window: &mut Window, cx: &mut Context<Self>) {
+        if row.directory {
+            if let Some(root) = &self.current {
+                let collapsed = &mut self.sessions.get_mut(root).unwrap().collapsed;
+                if !collapsed.remove(&row.path) {
+                    collapsed.insert(row.path);
+                }
+            }
+            cx.notify();
+        } else {
+            self.open_file(row.path, true, None, window, cx);
+        }
+    }
+
+    fn handle_list_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = event.keystroke.key.as_str();
+        if self.search_input.focus_handle(cx).is_focused(window) && !self.text_search {
+            let rows = self.file_rows();
+            match key {
+                "down" if !rows.is_empty() => {
+                    self.file_cursor = (self.file_cursor + 1).min(rows.len() - 1);
+                }
+                "up" => {
+                    self.file_cursor = self.file_cursor.saturating_sub(1);
+                }
+                "escape" => {
+                    self.focus.focus(window, cx);
+                }
+                _ => return,
+            }
+            self.file_scroll
+                .scroll_to_item(self.file_cursor, ScrollStrategy::Nearest);
+            cx.stop_propagation();
+            cx.notify();
+        } else if self.results_focus.is_focused(window) {
+            match key {
+                "down" if !self.results.is_empty() => {
+                    self.result_cursor = (self.result_cursor + 1).min(self.results.len() - 1)
+                }
+                "up" => self.result_cursor = self.result_cursor.saturating_sub(1),
+                "enter" => {
+                    if let Some(hit) = self.results.get(self.result_cursor).cloned() {
+                        self.open_location(hit, window, cx);
+                    }
+                }
+                "escape" => {
+                    self.results_open = false;
+                    self.navigation_request += 1;
+                    self.focus.focus(window, cx);
+                }
+                _ => return,
+            }
+            self.result_scroll
+                .scroll_to_item(self.result_cursor, ScrollStrategy::Nearest);
+            cx.stop_propagation();
+            cx.notify();
+        }
+    }
+
+    fn close_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.capture_positions(cx);
+        self.file_request += 1;
+        self.navigation_request += 1;
+        self.navigating = false;
+        let Some(root) = self.current.clone() else {
+            return;
+        };
+        let Some(session) = self.sessions.get_mut(&root) else {
+            return;
+        };
+        session.saved.tabs.retain(|p| p != &path);
+        session.documents.remove(&path);
+        session.diffs.remove(&path);
+        session.restoring = false;
+        if session.saved.selected.as_ref() == Some(&path) {
+            session.saved.selected = session.saved.tabs.last().cloned();
+            if let Some(path) = session.saved.selected.clone() {
+                self.open_file(path, false, None, window, cx);
+            }
+        }
+        self.persist(cx);
+        cx.notify();
+    }
+
+    fn close_project(
+        &mut self,
+        project_root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.persist(cx);
+        let Some(index) = self.projects.iter().position(|p| p.root == project_root) else {
+            return;
+        };
+        let project = self.projects.remove(index);
+        if self
+            .opening_path
+            .as_ref()
+            .is_some_and(|path| project.worktrees.iter().any(|root| path.starts_with(root)))
+        {
+            self.request += 1;
+            self.loading = false;
+            self.opening_path = None;
+        }
+        for root in project.worktrees {
+            self.sessions.remove(&root);
+        }
+        if self.current_project.as_ref() == Some(&project_root) {
+            self.reset_active(cx);
+            if let Some(project) = self
+                .projects
+                .get(index.min(self.projects.len().saturating_sub(1)))
+                .cloned()
+            {
+                self.open_repository(project.last_worktree, window, cx);
+            }
+        }
+        self.persist(cx);
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn reset_active(&mut self, cx: &mut Context<Self>) {
+        self.opening_path = None;
+        self.pending_projects.clear();
+        self.stop_analysis(cx);
+        self.request += 1;
+        self.file_request += 1;
+        self.current = None;
+        self.current_project = None;
+        self.watcher = None;
+        self.external_change = false;
+        self.loading = false;
+        self.file_loading = false;
+        self.results_open = false;
+        self.results.clear();
+        self.error = None;
+        self.status = "프로젝트를 열어 시작하세요".into();
+        self.filter.clear();
+        self.text_search = false;
+    }
+
+    fn close_all_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.persist(cx);
+        self.reset_active(cx);
+        self.projects.clear();
+        self.sessions.clear();
+        self.persist(cx);
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    pub fn new(initial: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let prefs = Preferences::load();
-        let initial = initial.or_else(|| prefs.last_root.clone());
+        let projects = prefs.open_projects.clone();
+        let mut pending_projects: VecDeque<_> = initial.into_iter().collect();
+        let initial = pending_projects
+            .pop_front()
+            .or_else(|| prefs.last_root.clone());
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("파일 이름 검색   ⌘P"));
         let base_input = cx.new(|cx| {
@@ -172,10 +422,18 @@ impl Pokarak {
             |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
                     this.filter = input.read(cx).value().to_string();
+                    this.navigation_request += 1;
+                    this.navigating = false;
+                    this.file_cursor = 0;
                     cx.notify();
                 }
                 InputEvent::PressEnter { .. } if this.text_search => {
                     this.search_contents(window, cx)
+                }
+                InputEvent::PressEnter { .. } => {
+                    if let Some(row) = this.file_rows().get(this.file_cursor).cloned() {
+                        this.activate_row(row, window, cx);
+                    }
                 }
                 _ => {}
             },
@@ -184,6 +442,11 @@ impl Pokarak {
             focus: cx.focus_handle(),
             prefs,
             current: None,
+            current_project: None,
+            opening_path: None,
+            projects,
+            pending_history: None,
+            pending_projects,
             sessions: HashMap::new(),
             search_input,
             base_input,
@@ -197,27 +460,48 @@ impl Pokarak {
             error: None,
             status: "저장소를 열어 시작하세요".into(),
             results: vec![],
+            result_revisions: HashMap::new(),
+            pending_location_revision: None,
             result_title: String::new(),
             result_semantic: false,
             results_open: false,
             result_scroll: UniformListScrollHandle::new(),
+            file_scroll: UniformListScrollHandle::new(),
+            file_cursor: 0,
+            result_cursor: 0,
+            results_focus: cx.focus_handle(),
             navigation: None,
+            cancellation: None,
             navigating: false,
             trust_prompt: false,
             watcher: None,
             changed: Arc::new(AtomicBool::new(false)),
             external_change: false,
+            checking_changes: false,
             _subscriptions: subscriptions,
         };
-        cx.on_release(|this, cx| this.persist(cx)).detach();
+        cx.on_release(|this, cx| {
+            this.persist(cx);
+            if let Some(cancel) = this.cancellation.take() {
+                let _ = cancel.cancel();
+            }
+        })
+        .detach();
+        cx.on_app_quit(|this, cx| {
+            this.persist(cx);
+            if let Some(cancel) = this.cancellation.take() {
+                let _ = cancel.cancel();
+            }
+            std::future::ready(())
+        })
+        .detach();
         cx.spawn(async move |view, cx| {
             loop {
                 smol::Timer::after(Duration::from_millis(800)).await;
                 if view
                     .update(cx, |this, cx| {
                         if this.changed.swap(false, Ordering::Relaxed) && !this.loading {
-                            this.external_change = true;
-                            cx.notify();
+                            this.check_changes(cx);
                         }
                     })
                     .is_err()
@@ -262,7 +546,14 @@ impl Pokarak {
             .get(&path)
             .map(|doc| doc.read(cx).cursor_position())
             .unwrap_or_default();
+        let scroll = session
+            .documents
+            .get(&path)
+            .map(|doc| doc.read(cx).scroll_offset())
+            .unwrap_or_default();
         Some(ReadingPoint {
+            scroll_x: scroll.x.into(),
+            scroll_y: scroll.y.into(),
             path,
             code: session.saved.code,
             row: scroll_row(&session.scroll),
@@ -271,28 +562,50 @@ impl Pokarak {
         })
     }
 
-    fn persist(&mut self, cx: &App) {
-        for (root, session) in &mut self.sessions {
-            session.saved.diff_row = scroll_row(&session.scroll);
-            if let Some(doc) = session
-                .saved
-                .selected
-                .as_ref()
-                .and_then(|p| session.documents.get(p))
-            {
+    fn capture_positions(&mut self, cx: &App) {
+        for session in self.sessions.values_mut() {
+            if session.restoring {
+                continue;
+            }
+            for (path, doc) in &session.documents {
                 let editor = doc.read(cx);
                 let p = editor.cursor_position();
                 let offset = editor.scroll_offset();
-                session.saved.line = p.line;
-                session.saved.column = p.character;
-                session.saved.scroll_x = offset.x.into();
-                session.saved.scroll_y = offset.y.into();
+                let saved = session.saved.positions.entry(path.clone()).or_default();
+                saved.line = p.line;
+                saved.column = p.character;
+                saved.scroll_x = offset.x.into();
+                saved.scroll_y = offset.y.into();
             }
+            if let Some(path) = &session.saved.selected {
+                let saved = session.saved.positions.entry(path.clone()).or_default();
+                saved.diff_row = scroll_row(&session.scroll);
+                session.saved.diff_row = saved.diff_row;
+                session.saved.line = saved.line;
+                session.saved.column = saved.column;
+                session.saved.scroll_x = saved.scroll_x;
+                session.saved.scroll_y = saved.scroll_y;
+            }
+        }
+    }
+
+    fn persist(&mut self, cx: &App) {
+        self.capture_positions(cx);
+        if let Some(session) = self
+            .current
+            .as_ref()
+            .and_then(|root| self.sessions.get_mut(root))
+        {
+            session.saved.filter = self.filter.clone();
+            session.saved.text_search = self.text_search;
+        }
+        for (root, session) in &self.sessions {
             self.prefs
                 .worktrees
                 .insert(root.clone(), session.saved.clone());
         }
         self.prefs.last_root = self.current.clone();
+        self.prefs.open_projects = self.projects.clone();
         self.prefs.save();
     }
 
@@ -300,16 +613,17 @@ impl Pokarak {
         let picker = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
-            multiple: false,
-            prompt: Some("Git 저장소 열기".into()),
+            multiple: true,
+            prompt: Some("프로젝트 열기".into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = picker.await {
-                if let Some(path) = paths.first() {
-                    let _ = this.update_in(cx, |this, window, cx| {
-                        this.open_repository(path.clone(), window, cx)
-                    });
-                }
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.pending_projects = paths.into_iter().collect();
+                    if let Some(path) = this.pending_projects.pop_front() {
+                        this.open_repository(path, window, cx);
+                    }
+                });
             }
         })
         .detach();
@@ -318,6 +632,7 @@ impl Pokarak {
     fn open_repository(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.persist(cx);
         self.stop_analysis(cx);
+        self.opening_path = Some(path.canonicalize().unwrap_or_else(|_| path.clone()));
         self.request += 1;
         self.file_request += 1;
         let token = self.request;
@@ -325,10 +640,13 @@ impl Pokarak {
         self.error = None;
         self.status = "저장소를 읽는 중…".into();
         self.results_open = false;
-        let saved = self.prefs.worktrees.get(&path).cloned().unwrap_or_default();
-        let mode = saved.comparison;
+        let saved_views = self.prefs.worktrees.clone();
         let task = cx.background_spawn(async move {
             let root = pokarak_core::repository_root(&path)?;
+            let mode = saved_views
+                .get(&root)
+                .map(|s| s.comparison.clone())
+                .unwrap_or_default();
             let snapshot = pokarak_core::snapshot(&root, &mode)?;
             anyhow::Ok((root, snapshot))
         });
@@ -339,24 +657,64 @@ impl Pokarak {
                     return;
                 }
                 this.loading = false;
+                this.opening_path = None;
                 match result {
                     Ok((root, snapshot)) => {
                         this.current = Some(root.clone());
-                        this.prefs.recent.retain(|p| p != &root);
-                        this.prefs.recent.insert(0, root.clone());
+                        let project_root = snapshot
+                            .worktrees
+                            .iter()
+                            .find(|t| t.is_main)
+                            .map(|t| t.path.clone())
+                            .unwrap_or_else(|| root.clone());
+                        this.current_project = Some(project_root.clone());
+                        let project = SavedProject {
+                            root: project_root.clone(),
+                            last_worktree: root.clone(),
+                            worktrees: snapshot.worktrees.iter().map(|t| t.path.clone()).collect(),
+                        };
+                        if let Some(existing) =
+                            this.projects.iter_mut().find(|p| p.root == project_root)
+                        {
+                            *existing = project;
+                        } else {
+                            this.projects.push(project);
+                        }
+                        this.prefs.recent.retain(|p| p != &project_root);
+                        this.prefs.recent.insert(0, project_root);
                         this.prefs.recent.truncate(8);
                         let saved = this.prefs.worktrees.get(&root).cloned().unwrap_or_default();
                         this.sessions
                             .entry(root.clone())
                             .or_insert_with(|| Session::new(saved));
+                        let saved = this.sessions.get(&root).unwrap().saved.clone();
+                        this.filter = saved.filter.clone();
+                        this.text_search = saved.text_search;
+                        this.search_input.update(cx, |input, cx| {
+                            input.set_value(saved.filter, window, cx);
+                            input.set_placeholder(
+                                if saved.text_search {
+                                    "본문 검색 후 Enter"
+                                } else {
+                                    "파일 이름 검색   ⌘P"
+                                },
+                                window,
+                                cx,
+                            );
+                        });
                         this.install_snapshot(snapshot, window, cx);
-                        this.watch(root);
-                        this.persist(cx);
+                        this.watch(root.clone());
+                        this.prefs.last_root = Some(root);
+                        this.prefs.open_projects = this.projects.clone();
+                        this.prefs.save();
                     }
                     Err(error) => {
                         this.error = Some(format!("{error:#}"));
                         this.status = "저장소를 열 수 없습니다".into();
                     }
+                }
+                if let Some(path) = this.pending_projects.pop_front() {
+                    this.open_repository(path, window, cx);
                 }
                 cx.notify();
             });
@@ -370,28 +728,57 @@ impl Pokarak {
         let changed = self.changed.clone();
         if let Ok(mut watcher) =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if let Ok(event) = event {
-                    if !event.kind.is_access()
-                        && event.paths.iter().any(|path| {
-                            !path.components().any(|c| {
-                                matches!(
-                                    c.as_os_str().to_str(),
-                                    Some("target" | "node_modules" | ".gradle" | "objects")
-                                )
-                            })
+                if let Ok(event) = event
+                    && !event.kind.is_access()
+                    && event.paths.iter().any(|path| {
+                        !path.components().any(|c| {
+                            matches!(
+                                c.as_os_str().to_str(),
+                                Some("target" | "node_modules" | ".gradle" | "objects")
+                            )
                         })
-                    {
-                        changed.store(true, Ordering::Relaxed);
-                    }
+                    })
+                {
+                    changed.store(true, Ordering::Relaxed);
                 }
             })
+            && watcher.watch(&root, RecursiveMode::Recursive).is_ok()
         {
-            if watcher.watch(&root, RecursiveMode::Recursive).is_ok() {
-                self.watcher = Some(watcher);
-            }
+            self.watcher = Some(watcher);
         }
         self.changed.store(false, Ordering::Relaxed);
         self.external_change = false;
+    }
+
+    fn check_changes(&mut self, cx: &mut Context<Self>) {
+        if self.checking_changes || self.external_change {
+            return;
+        }
+        let (Some(root), Some(snapshot)) = (self.current.clone(), self.snapshot()) else {
+            return;
+        };
+        let mode = snapshot.compare.clone();
+        let old_fingerprint = snapshot.fingerprint.clone();
+        let generation = self.request;
+        let check_root = root.clone();
+        self.checking_changes = true;
+        let task = cx.background_spawn(async move { pokarak_core::snapshot(&check_root, &mode) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.checking_changes = false;
+                if this.request != generation || this.current.as_ref() != Some(&root) {
+                    return;
+                }
+                if let Ok(snapshot) = result
+                    && snapshot.fingerprint != old_fingerprint
+                {
+                    this.external_change = true;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -421,7 +808,18 @@ impl Pokarak {
                         this.external_change = false;
                         this.install_snapshot(snapshot, window, cx);
                     }
-                    Err(error) => this.error = Some(format!("{error:#}")),
+                    Err(error) => {
+                        this.error = Some(format!("{error:#}"));
+                        this.status = "비교 기준을 확인하세요".into();
+                        if let Some(s) = this
+                            .current
+                            .as_ref()
+                            .and_then(|root| this.sessions.get_mut(root))
+                            && let Some(snapshot) = &s.snapshot
+                        {
+                            s.saved.comparison = snapshot.compare.clone();
+                        }
+                    }
                 }
                 cx.notify();
             });
@@ -448,6 +846,25 @@ impl Pokarak {
                     || snapshot.changes.iter().any(|f| &f.path == p)
             })
             .or_else(|| snapshot.changes.first().map(|f| f.path.clone()));
+        session.saved.comparison = snapshot.compare.clone();
+        if let CompareMode::Branch(base) = &snapshot.compare {
+            self.base_input
+                .update(cx, |input, cx| input.set_value(base.clone(), window, cx));
+        }
+        session.saved.selected = selection.clone();
+        session.saved.tabs.retain(|path| {
+            if path.is_absolute() {
+                path.is_file()
+            } else {
+                snapshot.files.contains(path) || snapshot.changes.iter().any(|f| &f.path == path)
+            }
+        });
+        session
+            .documents
+            .retain(|path, _| session.saved.tabs.contains(path));
+        session
+            .diffs
+            .retain(|path, _| session.saved.tabs.contains(path));
         session.snapshot = Some(snapshot);
         session.diffs.clear();
         self.status = "준비됨".into();
@@ -467,6 +884,9 @@ impl Pokarak {
         let Some(root) = self.current.clone() else {
             return;
         };
+        self.capture_positions(cx);
+        let history_restore = self.pending_history.take();
+        let target_revision = self.pending_location_revision.take();
         let previous = if history {
             self.reading_point(cx)
         } else {
@@ -477,9 +897,29 @@ impl Pokarak {
         };
         if let Some(point) = previous {
             session.history.push(point);
-            session.history.truncate(100);
+            if session.history.len() > 100 {
+                session.history.remove(0);
+            }
             session.forward.clear();
         }
+        let restore = session
+            .saved
+            .positions
+            .get(&path)
+            .cloned()
+            .unwrap_or_else(|| {
+                if session.saved.selected.as_ref() == Some(&path) {
+                    SavedPosition {
+                        diff_row: session.saved.diff_row,
+                        line: session.saved.line,
+                        column: session.saved.column,
+                        scroll_x: session.saved.scroll_x,
+                        scroll_y: session.saved.scroll_y,
+                    }
+                } else {
+                    SavedPosition::default()
+                }
+            });
         if history && session.saved.selected.as_ref() != Some(&path) {
             session.saved.diff_row = 0;
         }
@@ -503,7 +943,10 @@ impl Pokarak {
             .documents
             .get(&path)
             .map(|doc| (doc.read(cx).cursor_position(), doc.read(cx).scroll_offset()));
-        let restore = session.saved.clone();
+        if let Some(point) = &history_restore {
+            session.saved.code = point.code;
+        }
+        session.restoring = true;
         self.file_request += 1;
         self.navigation_request += 1;
         self.navigating = false;
@@ -513,6 +956,12 @@ impl Pokarak {
         let load_root = root.clone();
         let load_path = path.clone();
         let task = cx.background_spawn(async move {
+            if let Some(expected) = target_revision {
+                anyhow::ensure!(
+                    file_revision(&load_root.join(&load_path)) == Some(expected),
+                    "탐색 결과의 파일이 변경되었습니다. 다시 검색하세요."
+                );
+            }
             let diff = file
                 .as_ref()
                 .map(|file| pokarak_core::diff(&load_root, file, &mode))
@@ -537,6 +986,12 @@ impl Pokarak {
             } else {
                 pokarak_core::read_file(&load_root, &load_path)?
             };
+            if let Some(expected) = target_revision {
+                anyhow::ensure!(
+                    file_revision(&load_root.join(&load_path)) == Some(expected),
+                    "파일을 여는 중 내용이 변경되었습니다. 다시 검색하세요."
+                );
+            }
             anyhow::Ok((text, diff))
         });
         cx.spawn_in(window, async move |this, cx| {
@@ -566,15 +1021,26 @@ impl Pokarak {
                             })
                             .clone();
                         editor.update(cx, |editor, cx| {
+                            editor.set_readonly(true, cx);
                             if editor.value().as_ref() != text {
                                 editor.set_value(text, window, cx);
                             }
-                            if let Some(position) = position {
+                            if let Some(point) = &history_restore {
+                                editor.set_cursor_position(
+                                    Position::new(point.line, point.column),
+                                    window,
+                                    cx,
+                                );
+                                editor.set_scroll_offset(
+                                    gpui_kit::point(px(point.scroll_x), px(point.scroll_y)),
+                                    cx,
+                                );
+                            } else if let Some(position) = position {
                                 editor.set_cursor_position(position, window, cx);
                             } else if let Some((position, offset)) = previous_position {
                                 editor.set_cursor_position(position, window, cx);
                                 editor.set_scroll_offset(offset, cx);
-                            } else if restore.selected.as_ref() == Some(&path) {
+                            } else {
                                 editor.set_cursor_position(
                                     Position::new(restore.line, restore.column),
                                     window,
@@ -586,17 +1052,47 @@ impl Pokarak {
                                 );
                             }
                         });
+                        let diff_row = history_restore
+                            .as_ref()
+                            .map(|point| point.row)
+                            .unwrap_or(restore.diff_row);
+                        session.saved.diff_row = diff_row;
                         session
                             .scroll
-                            .scroll_to_item(session.saved.diff_row, ScrollStrategy::Top);
+                            .scroll_to_item_strict(diff_row, ScrollStrategy::Top);
+                        if !session.saved.code {
+                            this.focus.focus(window, cx);
+                        }
                         this.status = if this.navigation.is_some() {
                             "코드 탐색 준비됨".into()
                         } else {
                             "파일 열람 중".into()
                         };
-                        this.persist(cx);
+                        let weak = cx.entity().downgrade();
+                        let restore_root = root.clone();
+                        window.on_next_frame(move |window, _| {
+                            window.on_next_frame(move |_, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    if this.file_request == token {
+                                        if let Some(session) = this.sessions.get_mut(&restore_root)
+                                        {
+                                            session.restoring = false;
+                                        }
+                                        this.persist(cx);
+                                    }
+                                });
+                            });
+                        });
                     }
-                    Err(error) => this.error = Some(format!("{error:#}")),
+                    Err(error) => {
+                        if let Some(s) = this.sessions.get_mut(&root) {
+                            s.documents.remove(&path);
+                            s.diffs.remove(&path);
+                            s.restoring = false;
+                        }
+                        this.error = Some(format!("{error:#}"));
+                        this.status = "파일을 읽을 수 없습니다".into();
+                    }
                 }
                 cx.notify();
             });
@@ -628,15 +1124,18 @@ impl Pokarak {
             session.saved.diff_row = target.row;
             session.saved.line = target.line;
             session.saved.column = target.column;
+            self.pending_history = Some(target.clone());
             self.open_file(target.path, false, None, window, cx);
         }
     }
 
     fn toggle_code(&mut self, code: bool, cx: &mut Context<Self>) {
-        if let Some(root) = &self.current {
-            if let Some(s) = self.sessions.get_mut(root) {
-                s.saved.code = code;
-            }
+        self.navigation_request += 1;
+        self.navigating = false;
+        if let Some(root) = &self.current
+            && let Some(s) = self.sessions.get_mut(root)
+        {
+            s.saved.code = code;
         }
         self.persist(cx);
         cx.notify();
@@ -663,6 +1162,9 @@ impl Pokarak {
 
     fn stop_analysis(&mut self, cx: &mut Context<Self>) {
         self.navigation_request += 1;
+        if let Some(cancel) = self.cancellation.take() {
+            let _ = cancel.cancel();
+        }
         if let Some(nav) = self.navigation.take() {
             cx.background_spawn(async move {
                 if let Ok(mut nav) = nav.lock() {
@@ -683,14 +1185,16 @@ impl Pokarak {
             self.prefs.trusted.push(root.clone());
             self.prefs.save();
         }
-        self.navigation = Some(Arc::new(Mutex::new(Navigator::with_options(
+        let navigator = Navigator::with_options(
             root,
             pokarak_navigation::default_configs(),
             pokarak_navigation::NavigatorOptions {
                 allow_project_imports: true,
                 ..Default::default()
             },
-        ))));
+        );
+        self.cancellation = Some(navigator.cancellation_handle());
+        self.navigation = Some(Arc::new(Mutex::new(navigator)));
         self.trust_prompt = false;
         self.status = "탐색할 심볼을 ⌘클릭하세요. 서버는 첫 요청 때 시작합니다.".into();
         cx.notify();
@@ -703,6 +1207,9 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.navigating {
+            return;
+        }
         let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
             return;
         };
@@ -754,14 +1261,15 @@ impl Pokarak {
         let token = self.navigation_request;
         self.status = format!("{title} 찾는 중…");
         let source = absolute.clone();
+        let expected_text = displayed_text.clone();
         let task = cx.background_spawn(async move {
+            let mut nav = navigator
+                .lock()
+                .map_err(|_| anyhow::anyhow!("분석 서버 상태를 읽을 수 없습니다"))?;
             anyhow::ensure!(
                 std::fs::read_to_string(&absolute)? == displayed_text,
                 "파일이 외부에서 변경되었습니다. 새로고침 후 다시 탐색하세요."
             );
-            let mut nav = navigator
-                .lock()
-                .map_err(|_| anyhow::anyhow!("분석 서버 상태를 읽을 수 없습니다"))?;
             let mut result = nav.navigate(&absolute, position.line, position.character, kind)?;
             let mut declaration = false;
             if is_definition
@@ -779,7 +1287,12 @@ impl Pokarak {
                 )?;
                 declaration = true;
             }
-            anyhow::Ok((result, declaration))
+            anyhow::ensure!(
+                std::fs::read_to_string(&absolute)? == displayed_text,
+                "탐색 중 파일이 변경되었습니다. 새로고침 후 다시 탐색하세요."
+            );
+            let revisions = result_revisions(&result.locations);
+            anyhow::Ok((result, declaration, revisions))
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
@@ -791,8 +1304,15 @@ impl Pokarak {
                     return;
                 }
                 this.navigating = false;
+                if !this.session().map(|s| s.saved.code).unwrap_or(false)
+                    || this.active_editor().map(|e| e.read(cx).value().to_string())
+                        != Some(expected_text)
+                {
+                    return;
+                }
                 match result {
-                    Ok((result, declaration)) => {
+                    Ok((result, declaration, revisions)) => {
+                        this.result_revisions = revisions;
                         this.status = result.status.clone();
                         if is_definition
                             && !declaration
@@ -808,6 +1328,7 @@ impl Pokarak {
                                     title
                                 },
                                 result,
+                                window,
                                 cx,
                             );
                         }
@@ -824,11 +1345,19 @@ impl Pokarak {
         cx.notify();
     }
 
-    fn show_results(&mut self, title: String, result: NavigationResult, cx: &mut Context<Self>) {
+    fn show_results(
+        &mut self,
+        title: String,
+        result: NavigationResult,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.results = result.locations;
         self.result_semantic = result.semantic;
         self.result_title = title;
         self.results_open = true;
+        self.result_cursor = 0;
+        self.results_focus.focus(window, cx);
         self.result_scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
     }
@@ -839,6 +1368,17 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(expected) = self.result_revisions.get(&location.path).copied() {
+            if file_revision(&location.path) != Some(expected) {
+                self.error = Some(
+                    "탐색 결과의 파일이 변경되었습니다. 사용처 또는 본문 검색을 다시 실행하세요."
+                        .into(),
+                );
+                cx.notify();
+                return;
+            }
+            self.pending_location_revision = Some(expected);
+        }
         let Some(root) = &self.current else {
             return;
         };
@@ -867,25 +1407,39 @@ impl Pokarak {
             return;
         }
         self.status = "본문 검색 중…".into();
+        self.navigation_request += 1;
+        self.navigating = false;
+        let token = self.navigation_request;
+        let expected_query = query.clone();
         let search_root = root.clone();
-        let task =
-            cx.background_spawn(async move { pokarak_core::search(&search_root, &query, 300) });
+        let task = cx.background_spawn(async move {
+            let locations = pokarak_core::search(&search_root, &query, 300)?;
+            let revisions = result_revisions(&locations);
+            anyhow::Ok((locations, revisions))
+        });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
-            let _ = this.update_in(cx, |this, _, cx| {
-                if this.current.as_ref() != Some(&root) {
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.navigation_request != token
+                    || this.current.as_ref() != Some(&root)
+                    || this.filter.trim() != expected_query
+                {
                     return;
                 }
                 match result {
-                    Ok(locations) => this.show_results(
-                        "본문 검색".into(),
-                        NavigationResult {
-                            locations,
-                            semantic: false,
-                            status: String::new(),
-                        },
-                        cx,
-                    ),
+                    Ok((locations, revisions)) => {
+                        this.result_revisions = revisions;
+                        this.show_results(
+                            format!("본문 검색: {expected_query}"),
+                            NavigationResult {
+                                locations,
+                                semantic: false,
+                                status: String::new(),
+                            },
+                            window,
+                            cx,
+                        );
+                    }
                     Err(error) => this.error = Some(error.to_string()),
                 }
                 this.status = "본문 검색 완료".into();
@@ -897,10 +1451,8 @@ impl Pokarak {
 
     fn focus_search(&mut self, text: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.text_search = text;
-        if !text {
-            if let Some(root) = &self.current {
-                self.sessions.get_mut(root).unwrap().saved.all_files = true;
-            }
+        if !text && let Some(root) = &self.current {
+            self.sessions.get_mut(root).unwrap().saved.all_files = true;
         }
         self.search_input.update(cx, |input, cx| {
             input.set_placeholder(
@@ -1077,6 +1629,68 @@ impl Pokarak {
             .into_any_element()
     }
 
+    fn render_projects(&self, cx: &mut Context<Self>) -> AnyElement {
+        let mut tabs = div()
+            .id("project-tabs")
+            .h(px(38.))
+            .flex_none()
+            .px_3()
+            .flex()
+            .items_center()
+            .gap_1()
+            .overflow_x_scroll()
+            .bg(rgb(SIDE));
+        for (index, project) in self.projects.iter().enumerate() {
+            let target = project.last_worktree.clone();
+            let close = project.root.clone();
+            let active = self.current_project.as_ref() == Some(&project.root);
+            let label = project
+                .root
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            tabs = tabs.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .rounded(px(5.))
+                    .bg(if active { rgb(PANEL) } else { rgb(SIDE) })
+                    .child(
+                        Button::new(("project", index))
+                            .icon(IconName::FolderGit2)
+                            .label(label)
+                            .tooltip(project.root.to_string_lossy().to_string())
+                            .ghost()
+                            .small()
+                            .selected(active)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_repository(target.clone(), window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new(("close-project", index))
+                            .icon(IconName::X)
+                            .tooltip("프로젝트 닫기  ⌘⇧W")
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.close_project(close.clone(), window, cx)
+                            })),
+                    ),
+            );
+        }
+        tabs.child(
+            Button::new("add-project")
+                .icon(IconName::Plus)
+                .tooltip("다른 프로젝트 열기")
+                .ghost()
+                .small()
+                .on_click(cx.listener(|this, _, window, cx| this.choose_repository(window, cx))),
+        )
+        .into_any_element()
+    }
+
     fn render_worktrees(&self, cx: &mut Context<Self>) -> AnyElement {
         let worktrees = self
             .snapshot()
@@ -1186,21 +1800,18 @@ impl Pokarak {
                     }),
             );
         }
-        panel = panel.child(list).child(
-            div()
-                .p_3()
-                .border_t_1()
-                .border_color(rgb(LINE))
-                .text_size(px(11.))
-                .text_color(rgb(MUTED))
-                .child("보기를 전환해도 브랜치는 바뀌지 않습니다."),
-        );
+        panel = panel.child(list);
         panel.into_any_element()
     }
 
-    fn render_files(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_files(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let all = self.session().map(|s| s.saved.all_files).unwrap_or(false);
         let selected = self.selected();
+        let keyboard_index = if self.search_input.focus_handle(cx).is_focused(window) {
+            Some(self.file_cursor)
+        } else {
+            None
+        };
         let rows = Arc::new(self.file_rows());
         let count = rows.iter().filter(|r| !r.directory).count();
         let weak = cx.entity().downgrade();
@@ -1294,7 +1905,11 @@ impl Pokarak {
                             let a11y_target = weak.clone();
                             let a11y_path = path.clone();
                             let directory = row.directory;
-                            let selected = selected.as_ref() == Some(&path);
+                            let selected = if let Some(index) = keyboard_index {
+                                ix == index
+                            } else {
+                                selected.as_ref() == Some(&path)
+                            };
                             let status = row.change.as_ref().map(|c| file_status(&c.status));
                             div()
                                 .id(("file", ix))
@@ -1382,6 +1997,7 @@ impl Pokarak {
                         })
                         .collect::<Vec<_>>()
                 })
+                .track_scroll(&self.file_scroll)
                 .h_full()
                 .flex_1()
                 .into_any_element()
@@ -1390,7 +2006,7 @@ impl Pokarak {
     }
 
     fn render_comparison(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mode = self.session().map(|s| &s.saved.comparison);
+        let mode = self.snapshot().map(|s| &s.compare);
         div()
             .h(px(42.))
             .flex_none()
@@ -1488,21 +2104,38 @@ impl Pokarak {
             .border_color(rgb(LINE));
         for (i, tab) in session.saved.tabs.iter().enumerate() {
             let target = tab.clone();
+            let close = tab.clone();
             tabs = tabs.child(
-                Button::new(("tab", i))
-                    .label(
-                        tab.file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string(),
+                div()
+                    .flex()
+                    .items_center()
+                    .child(
+                        Button::new(("tab", i))
+                            .label(
+                                tab.file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string(),
+                            )
+                            .icon(IconName::FileCode)
+                            .ghost()
+                            .small()
+                            .selected(tab == path)
+                            .tooltip(tab.to_string_lossy().to_string())
+                            .on_click(cx.listener(move |this, _, w, cx| {
+                                this.open_file(target.clone(), true, None, w, cx)
+                            })),
                     )
-                    .icon(IconName::FileCode)
-                    .ghost()
-                    .small()
-                    .selected(tab == path)
-                    .on_click(cx.listener(move |this, _, w, cx| {
-                        this.open_file(target.clone(), true, None, w, cx)
-                    })),
+                    .child(
+                        Button::new(("close-tab", i))
+                            .icon(IconName::X)
+                            .ghost()
+                            .small()
+                            .tooltip("파일 닫기  ⌘W")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.close_file(close.clone(), window, cx)
+                            })),
+                    ),
             );
         }
         let head = div()
@@ -1597,10 +2230,20 @@ impl Pokarak {
                 div()
                     .p_4()
                     .text_color(rgb(MUTED))
-                    .child("파일을 읽는 중…")
+                    .child(if self.file_loading {
+                        "파일을 읽는 중…"
+                    } else {
+                        "파일을 표시할 수 없습니다. 새로고침하거나 다른 파일을 선택하세요."
+                    })
                     .into_any_element()
             }
         } else if let Some(diff) = diff {
+            let widest = diff
+                .lines
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, line)| line.text.len())
+                .map(|(index, _)| index);
             let lines = Arc::new(diff.lines.clone());
             let weak = cx.entity().downgrade();
             uniform_list("diff-lines", lines.len(), move |range, _, _| {
@@ -1616,7 +2259,7 @@ impl Pokarak {
                         let target = weak.clone();
                         div()
                             .id(("diff-row", ix))
-                            .w_full()
+                            .min_w_full()
                             .h(px(22.))
                             .flex()
                             .items_center()
@@ -1650,26 +2293,33 @@ impl Pokarak {
                             .child(div().whitespace_nowrap().child(if line.text.is_empty() {
                                 " ".into()
                             } else {
-                                line.text.clone()
+                                if line.text.chars().count() > 2_000 {
+                                    format!(
+                                        "{} … [긴 줄: 코드 탭에서 전체 보기]",
+                                        line.text.chars().take(2_000).collect::<String>()
+                                    )
+                                } else {
+                                    line.text.clone()
+                                }
                             }))
                             .on_click(move |event, window, cx| {
-                                if event.click_count() == 2 {
-                                    if let Some(line_number) = line.new_line {
-                                        let _ = target.update(cx, |this, cx| {
-                                            if let Some(path) = this.selected() {
-                                                this.open_file(
-                                                    path,
-                                                    true,
-                                                    Some(Position::new(
-                                                        line_number.saturating_sub(1) as u32,
-                                                        0,
-                                                    )),
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                        });
-                                    }
+                                if event.click_count() == 2
+                                    && let Some(line_number) = line.new_line
+                                {
+                                    let _ = target.update(cx, |this, cx| {
+                                        if let Some(path) = this.selected() {
+                                            this.open_file(
+                                                path,
+                                                true,
+                                                Some(Position::new(
+                                                    line_number.saturating_sub(1) as u32,
+                                                    0,
+                                                )),
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    });
                                 }
                             })
                             .into_any_element()
@@ -1677,6 +2327,8 @@ impl Pokarak {
                     .collect::<Vec<_>>()
             })
             .track_scroll(&session.scroll)
+            .with_width_from_item(widest)
+            .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
             .size_full()
             .into_any_element()
         } else {
@@ -1727,7 +2379,10 @@ impl Pokarak {
         let results = Arc::new(self.results.clone());
         let weak = cx.entity().downgrade();
         let root = self.current.clone().unwrap_or_default();
+        let cursor = self.result_cursor;
         div()
+            .id("results-panel")
+            .track_focus(&self.results_focus)
             .h(px(210.))
             .flex_none()
             .v_flex()
@@ -1757,6 +2412,8 @@ impl Pokarak {
                             .small()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.results_open = false;
+                                this.navigation_request += 1;
+                                this.navigating = false;
                                 cx.notify();
                             })),
                     ),
@@ -1773,6 +2430,8 @@ impl Pokarak {
                         .map(|ix| {
                             let hit = results[ix].clone();
                             let target = weak.clone();
+                            let accessible_target = weak.clone();
+                            let accessible_hit = hit.clone();
                             let label = format!(
                                 "{}:{}",
                                 hit.path.strip_prefix(&root).unwrap_or(&hit.path).display(),
@@ -1780,6 +2439,14 @@ impl Pokarak {
                             );
                             div()
                                 .id(("hit", ix))
+                                .role(accesskit::Role::Button)
+                                .aria_label(label.clone())
+                                .bg(if ix == cursor { rgb(PANEL) } else { rgb(SIDE) })
+                                .on_a11y_action(accesskit::Action::Click, move |_, window, cx| {
+                                    let _ = accessible_target.update(cx, |this, cx| {
+                                        this.open_location(accessible_hit.clone(), window, cx)
+                                    });
+                                })
                                 .h(px(40.))
                                 .px_3()
                                 .cursor_pointer()
@@ -1842,7 +2509,7 @@ impl Pokarak {
             )
             .child(
                 Button::new("welcome-open")
-                    .label("Git 저장소 열기")
+                    .label("프로젝트 열기")
                     .icon(IconName::FolderOpen)
                     .on_click(cx.listener(|this, _, w, cx| this.choose_repository(w, cx))),
             );
@@ -1876,7 +2543,7 @@ impl Render for Pokarak {
                     resizable_panel()
                         .size(px(285.))
                         .size_range(px(200.)..px(600.))
-                        .child(self.render_files(cx)),
+                        .child(self.render_files(window, cx)),
                 )
                 .child(resizable_panel().child(self.render_reader(window, cx)))
                 .into_any_element()
@@ -1889,7 +2556,15 @@ impl Render for Pokarak {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "로컬 저장소 전용".into());
         div().id("pokarak").key_context("Pokarak").track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(rgb(BG)).text_color(rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
+            .capture_key_down(cx.listener(Self::handle_list_key))
             .on_action(cx.listener(|this,_:&OpenRepository,w,cx|this.choose_repository(w,cx)))
+            .on_action(cx.listener(|this,_:&CloseFile,w,cx|{if let Some(path)=this.selected(){this.close_file(path,w,cx)}else if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
+            .on_action(cx.listener(|this,_:&CloseProject,w,cx|{if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
+            .on_action(cx.listener(|this,_:&CloseAllProjects,w,cx|this.close_all_projects(w,cx)))
+            .on_action(cx.listener(|this,_:&NextWorktree,w,cx|this.cycle_worktree(true,w,cx)))
+            .on_action(cx.listener(|this,_:&PreviousWorktree,w,cx|this.cycle_worktree(false,w,cx)))
+            .on_action(cx.listener(|this,_:&NextProject,w,cx|this.cycle_project(true,w,cx)))
+            .on_action(cx.listener(|this,_:&PreviousProject,w,cx|this.cycle_project(false,w,cx)))
             .on_action(cx.listener(|this,_:&Refresh,w,cx|this.refresh(w,cx)))
             .on_action(cx.listener(|this,_:&Back,w,cx|this.navigate_history(true,w,cx)))
             .on_action(cx.listener(|this,_:&Forward,w,cx|this.navigate_history(false,w,cx)))
@@ -1899,6 +2574,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&FindDefinition,w,cx|this.request_navigation(NavigationKind::Definition,None,w,cx)))
             .on_action(cx.listener(|this,_:&ToggleCode,_,cx|{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}))
             .child(self.render_toolbar(cx))
+            .when(!self.projects.is_empty(),|d|d.child(self.render_projects(cx)))
             .when(self.current.is_some(),|d|d.child(self.render_comparison(cx)))
             .when(self.external_change,|d|d.child(div().h(px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(rgb(0x3b3326)).text_color(rgb(0xe4c28c)).text_size(px(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")
@@ -1915,7 +2591,7 @@ impl Render for Pokarak {
             .when(self.results_open,|d|d.child(self.render_results(cx)))
             .child(div().h(px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(rgb(LINE)).bg(rgb(SIDE)).text_size(px(11.)).text_color(rgb(MUTED))
                 .child(div().flex_1().min_w_0().text_ellipsis().child(context))
-                .child(self.status.clone())
+                .child(div().max_w(px(400.)).min_w_0().text_ellipsis().child(self.status.clone()))
                 .child("⌘클릭 정의  /  ⌥F7 사용처"))
     }
 }

@@ -9,6 +9,25 @@ pub struct Preferences {
     pub last_root: Option<PathBuf>,
     pub worktrees: HashMap<PathBuf, SavedView>,
     pub trusted: Vec<PathBuf>,
+    pub open_projects: Vec<SavedProject>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedProject {
+    pub root: PathBuf,
+    pub last_worktree: PathBuf,
+    pub worktrees: Vec<PathBuf>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedPosition {
+    pub diff_row: usize,
+    pub line: u32,
+    pub column: u32,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -18,12 +37,15 @@ pub struct SavedView {
     pub tabs: Vec<PathBuf>,
     pub code: bool,
     pub all_files: bool,
+    pub filter: String,
+    pub text_search: bool,
     pub comparison: CompareMode,
     pub diff_row: usize,
     pub line: u32,
     pub column: u32,
     pub scroll_x: f32,
     pub scroll_y: f32,
+    pub positions: HashMap<PathBuf, SavedPosition>,
 }
 
 pub fn config_path() -> PathBuf {

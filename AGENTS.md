@@ -18,3 +18,8 @@ Read PRODUCT.md and DESIGN.md. Native macOS Rust/GPUI application; do not replac
 ## App behavior
 Worktree list, comparison baseline, changed files, unified diff, whole-file read-only editor, file/text search, back/forward, explicit language analysis, and external-change notification. Use real filesystem data. Save local UI state outside the inspected repository.
 
+
+## Feature worktree policy (user request)
+Every new feature/fix is developed in its own branch and worktree, with an interactive worker visible in a Herdr pane. Main is for integration and verification. After the scoped commit is validated and integrated, close that worker's pane; preserve the branch/worktree unless removal is requested. Keep a maximum of three workers beside the coordinating agent. Follow the installed Herdr skill and inspect real pane IDs before changing the layout.
+
+User-authorized Git write features are allowed only through explicit application actions in a separate operations layer. Inspection functions remain read-only. Automated write/network-operation tests use authored temporary repositories and local bare remotes, never the user's real remotes or global Git configuration. No implicit force push, reset, discard, stash, or checkout as a side effect of viewing.

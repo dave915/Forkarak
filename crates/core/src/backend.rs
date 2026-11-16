@@ -1,0 +1,474 @@
+use anyhow::{Context, Result, ensure};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    os::unix::ffi::OsStrExt,
+    path::{Path, PathBuf},
+};
+
+use crate::{
+    ChangedFile, CompareMode, DiffDocument, DiffKind, FileStatus, Snapshot, SourceLocation,
+    filesystem::{self, Node, feed},
+    git::{self, Entry, Index, Tree},
+    text,
+};
+
+struct Capture {
+    head: Option<String>,
+    head_tree: Tree,
+    index: Index,
+    current: Tree,
+    files: Vec<PathBuf>,
+    fingerprint: String,
+}
+
+impl Capture {
+    fn read(root: &Path, extra: &Tree) -> Result<Self> {
+        let head = git::head(root)?;
+        let head_tree = git::tree(root, head.as_deref())?;
+        let index = git::index(root)?;
+        let untracked = git::untracked(root)?;
+        let sha256 =
+            git::line(&git::words(root, &["rev-parse", "--show-object-format"])?)? == "sha256";
+        let filemode = git::run(
+            root,
+            &[
+                "config".as_ref(),
+                "--bool".as_ref(),
+                "--get".as_ref(),
+                "core.filemode".as_ref(),
+            ],
+            256,
+        )?;
+        let filemode = !filemode.success || git::line(&filemode.bytes)? != "false";
+        let listed = index
+            .keys()
+            .cloned()
+            .chain(untracked)
+            .collect::<BTreeSet<_>>();
+        let paths = listed
+            .iter()
+            .chain(head_tree.keys())
+            .chain(extra.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut current = Tree::new();
+        let mut files = Vec::new();
+        let mut fingerprint = Sha256::new();
+        feed(&mut fingerprint, root.as_os_str().as_bytes());
+        feed(&mut fingerprint, head.as_deref().unwrap_or("").as_bytes());
+        for path in paths {
+            let stages = index.get(&path);
+            let indexed = stages.and_then(|s| s.get(&0));
+            let submodule = indexed.filter(|e| e.mode == "160000");
+            // Submodules are opaque; never recurse into a separately owned repo.
+            let state = if let Some(entry) = submodule {
+                Some(entry.clone())
+            } else {
+                filesystem::inspect(root, &path, sha256, filemode)?
+            };
+            feed(&mut fingerprint, path.as_os_str().as_bytes());
+            if let Some(stages) = stages {
+                for (stage, entry) in stages {
+                    feed(&mut fingerprint, &[*stage]);
+                    feed(&mut fingerprint, entry.mode.as_bytes());
+                    feed(&mut fingerprint, entry.oid.as_bytes());
+                }
+            }
+            if let Some(mut entry) = state {
+                if !filemode
+                    && entry.mode == "100644"
+                    && let Some(original) = indexed
+                        .or_else(|| head_tree.get(&path))
+                        .filter(|e| e.mode == "100755")
+                {
+                    entry.mode.clone_from(&original.mode);
+                }
+                feed(&mut fingerprint, entry.mode.as_bytes());
+                feed(&mut fingerprint, entry.oid.as_bytes());
+                if listed.contains(&path) && submodule.is_none() {
+                    files.push(path.clone());
+                }
+                current.insert(path, entry);
+            } else {
+                feed(&mut fingerprint, b"missing");
+            }
+        }
+        Ok(Self {
+            head,
+            head_tree,
+            index,
+            current,
+            files,
+            fingerprint: format!("{:x}", fingerprint.finalize()),
+        })
+    }
+
+    fn changes(&self, root: &Path, baseline: &Tree, uncommitted: bool) -> Result<Vec<ChangedFile>> {
+        let paths = baseline
+            .keys()
+            .chain(self.current.keys())
+            .chain(self.index.keys())
+            .chain(self.head_tree.keys())
+            .collect::<BTreeSet<_>>();
+        let mut changes = Vec::new();
+        for path in paths {
+            let old = baseline.get(path);
+            let new = self.current.get(path);
+            let stages = self.index.get(path);
+            let indexed = stages.and_then(|s| s.get(&0));
+            let conflict = stages.is_some_and(|s| s.keys().any(|stage| *stage != 0));
+            let staged = indexed != self.head_tree.get(path) || conflict;
+            let unstaged = indexed != new || conflict;
+            if old == new && !conflict && !(uncommitted && (staged || unstaged)) {
+                continue;
+            }
+            let status = if conflict {
+                FileStatus::Conflicted
+            } else if old.is_none() && new.is_some() {
+                if stages.is_none() && !self.head_tree.contains_key(path) {
+                    FileStatus::Untracked
+                } else {
+                    FileStatus::Added
+                }
+            } else if new.is_none() {
+                FileStatus::Deleted
+            } else {
+                FileStatus::Modified
+            };
+            changes.push(ChangedFile {
+                path: path.clone(),
+                status,
+                staged,
+                unstaged,
+                ..ChangedFile::default()
+            });
+        }
+        detect_renames(root, baseline, &self.index, &self.current, &mut changes)?;
+        Ok(changes)
+    }
+}
+
+pub(crate) fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
+    let root = git::repository_root(path)?;
+    let head = git::head(&root)?;
+    let baseline = git::baseline(&root, compare, head.as_deref())?;
+    let base_tree = git::tree(&root, baseline.as_deref())?;
+    let capture = Capture::read(&root, &base_tree)?;
+    ensure!(
+        head == capture.head,
+        "HEAD changed during refresh; refresh again"
+    );
+    let mut changes = capture.changes(
+        &root,
+        &base_tree,
+        matches!(compare, CompareMode::Uncommitted),
+    )?;
+    for change in &mut changes {
+        let document = document(&root, change, &base_tree)?;
+        change.binary = document.binary;
+        change.additions = document
+            .lines
+            .iter()
+            .filter(|line| line.kind == DiffKind::Addition)
+            .count();
+        change.deletions = document
+            .lines
+            .iter()
+            .filter(|line| line.kind == DiffKind::Deletion)
+            .count();
+    }
+    let mut worktrees = git::worktrees(&root)?;
+    let mut fingerprint = Sha256::new();
+    feed(&mut fingerprint, capture.fingerprint.as_bytes());
+    feed(
+        &mut fingerprint,
+        baseline.as_deref().unwrap_or("").as_bytes(),
+    );
+    feed(&mut fingerprint, format!("{compare:?}").as_bytes());
+    for worktree in &mut worktrees {
+        if worktree.path == root {
+            worktree.changed_files = if matches!(compare, CompareMode::Uncommitted) {
+                changes.len()
+            } else {
+                capture.changes(&root, &capture.head_tree, true)?.len()
+            };
+        } else if !worktree.is_prunable && worktree.branch != "(bare)" && worktree.path.is_dir() {
+            let other = Capture::read(&worktree.path, &Tree::new())
+                .with_context(|| format!("Cannot inspect worktree {}", worktree.path.display()))?;
+            worktree.changed_files = other.changes(&worktree.path, &other.head_tree, true)?.len();
+            feed(&mut fingerprint, other.fingerprint.as_bytes());
+        }
+        feed(&mut fingerprint, worktree.path.as_os_str().as_bytes());
+        feed(&mut fingerprint, worktree.branch.as_bytes());
+        feed(&mut fingerprint, worktree.head.as_bytes());
+        feed(
+            &mut fingerprint,
+            &[
+                worktree.is_main as u8,
+                worktree.is_locked as u8,
+                worktree.is_prunable as u8,
+                worktree.is_detached as u8,
+            ],
+        );
+        feed(&mut fingerprint, &worktree.changed_files.to_le_bytes());
+    }
+    let worktree = worktrees
+        .iter()
+        .find(|w| w.path == root)
+        .cloned()
+        .context("Selected worktree disappeared; reopen the repository")?;
+    let branches = git::branches(&root)?;
+    for branch in &branches {
+        feed(&mut fingerprint, branch.as_bytes());
+    }
+    Ok(Snapshot {
+        worktree,
+        worktrees,
+        changes,
+        files: capture.files,
+        branches,
+        compare: compare.clone(),
+        fingerprint: format!("{:x}", fingerprint.finalize()),
+    })
+}
+
+pub(crate) fn diff(root: &Path, file: &ChangedFile, compare: &CompareMode) -> Result<DiffDocument> {
+    let root = git::repository_root(root)?;
+    let mut file = file.clone();
+    file.path = filesystem::relative(&root, &file.path)?;
+    file.old_path = file
+        .old_path
+        .map(|path| filesystem::relative(&root, &path))
+        .transpose()?;
+    let head = git::head(&root)?;
+    let baseline = git::baseline(&root, compare, head.as_deref())?;
+    document(&root, &file, &git::tree(&root, baseline.as_deref())?)
+}
+
+fn document(root: &Path, file: &ChangedFile, baseline: &Tree) -> Result<DiffDocument> {
+    let old_path = file.old_path.as_ref().unwrap_or(&file.path);
+    let old = baseline
+        .get(old_path)
+        .map(|entry| git::blob(root, entry))
+        .transpose()?
+        .unwrap_or_default();
+    let new = if let Some(entry) = gitlink(root, &file.path)? {
+        Some(git::blob(root, &entry)?)
+    } else {
+        filesystem::read(root, &file.path)?
+    };
+    ensure!(
+        baseline.contains_key(old_path)
+            || new.is_some()
+            || git::index(root)?.contains_key(&file.path),
+        "{} is absent from the comparison and working tree, or is beneath a symlink; refresh and select an accessible file",
+        file.path.display()
+    );
+    let mut document = DiffDocument {
+        path: file.path.clone(),
+        old_path: file.old_path.clone(),
+        ..DiffDocument::default()
+    };
+    text::render(&mut document, old, new.unwrap_or_default());
+    Ok(document)
+}
+
+fn gitlink(root: &Path, path: &Path) -> Result<Option<Entry>> {
+    if !matches!(filesystem::open(root, path)?, Node::Directory) {
+        return Ok(None);
+    }
+    // Only submodule directories have content in Git's index.
+    Ok(git::index(root)?
+        .get(path)
+        .and_then(|stages| stages.get(&0))
+        .filter(|e| e.mode == "160000")
+        .cloned())
+}
+
+pub(crate) fn read_file(root: &Path, path: &Path) -> Result<String> {
+    let root = git::repository_root(root)?;
+    let path = filesystem::relative(&root, path)?;
+    let (bytes, truncated) = filesystem::read(&root, &path)?.with_context(|| {
+        format!(
+            "{} does not exist, is a directory, or is beneath a symlink; refresh the file list",
+            path.display()
+        )
+    })?;
+    ensure!(
+        !truncated,
+        "{} exceeds the 2 MiB preview limit; open it in an external editor",
+        path.display()
+    );
+    text::decode(bytes, false)
+        .with_context(|| format!("{} is binary or is not valid UTF-8 text", path.display()))
+}
+
+pub(crate) fn search(root: &Path, query: &str, limit: usize) -> Result<Vec<SourceLocation>> {
+    if query.is_empty() || limit == 0 || query.contains(['\n', '\r']) {
+        return Ok(Vec::new());
+    }
+    let root = git::repository_root(root)?;
+    let paths = git::index(&root)?
+        .into_keys()
+        .chain(git::untracked(&root)?)
+        .collect::<BTreeSet<_>>();
+    let mut hits = Vec::new();
+    for path in paths {
+        if !matches!(filesystem::open(&root, &path)?, Node::File(_)) {
+            continue;
+        }
+        let Some((bytes, truncated)) = filesystem::read(&root, &path)? else {
+            continue;
+        };
+        if truncated {
+            continue;
+        }
+        let Some(text) = text::decode(bytes, false) else {
+            continue;
+        };
+        for (line_number, line) in text.lines().enumerate() {
+            for (offset, _) in line.match_indices(query) {
+                let start = line[..offset]
+                    .char_indices()
+                    .rev()
+                    .nth(60)
+                    .map_or(0, |(i, _)| i);
+                hits.push(SourceLocation {
+                    path: root.join(&path),
+                    line: line_number as u32,
+                    column: line[..offset].encode_utf16().count() as u32,
+                    preview: line[start..].chars().take(240).collect(),
+                });
+                if hits.len() >= limit.min(10_000) {
+                    return Ok(hits);
+                }
+            }
+        }
+    }
+    Ok(hits)
+}
+
+// Rename inference operates only on bounded contents. Exact moves (including
+// moves subsequently edited in the working tree) are matched before similarity.
+fn detect_renames(
+    root: &Path,
+    baseline: &Tree,
+    index: &Index,
+    current: &Tree,
+    changes: &mut Vec<ChangedFile>,
+) -> Result<()> {
+    let deletions = changes
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.status == FileStatus::Deleted && baseline.contains_key(&f.path))
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+    let additions = changes
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| matches!(f.status, FileStatus::Added | FileStatus::Untracked))
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+    let mut matched = BTreeSet::new();
+    let mut pairs = Vec::new();
+    for &added in &additions {
+        let destination = &changes[added].path;
+        let new = current.get(destination);
+        let staged = index.get(destination).and_then(|s| s.get(&0));
+        if let Some(&deleted) = deletions.iter().find(|&&i| {
+            !matched.contains(&i) && {
+                let old = baseline.get(&changes[i].path);
+                old == new || (staged.is_some() && old == staged)
+            }
+        }) {
+            matched.insert(deleted);
+            matched.insert(added);
+            pairs.push((deleted, added));
+        }
+    }
+    // Similarity detection has a fixed budget, independent of repository size.
+    // Large/ambiguous sets remain explicit adds/deletes instead of guessing.
+    if deletions.len() <= 16 && additions.len() <= 16 {
+        let mut old_profiles = Vec::new();
+        let mut new_profiles = Vec::new();
+        for &i in &deletions {
+            if !matched.contains(&i) {
+                let entry = &baseline[&changes[i].path];
+                if let Some(profile) = profile(git::blob(root, entry)?) {
+                    old_profiles.push((i, entry.mode.clone(), profile));
+                }
+            }
+        }
+        for &i in &additions {
+            if !matched.contains(&i)
+                && let Some(bytes) = filesystem::read(root, &changes[i].path)?
+                && let Some(profile) = profile(bytes)
+            {
+                new_profiles.push((i, current[&changes[i].path].mode.clone(), profile));
+            }
+        }
+        let mut scores = Vec::new();
+        for (deleted, old_mode, old) in &old_profiles {
+            for (added, new_mode, new) in &new_profiles {
+                if old_mode != new_mode || old.total == 0 || new.total == 0 {
+                    continue;
+                }
+                let common: usize = old
+                    .lines
+                    .iter()
+                    .map(|(line, n)| n.min(new.lines.get(line).unwrap_or(&0)) * line.len())
+                    .sum();
+                let score = common * 100 / old.total.max(new.total);
+                if score >= 50 {
+                    scores.push((score, *deleted, *added));
+                }
+            }
+        }
+        scores.sort_by_key(|&(score, deleted, added)| (std::cmp::Reverse(score), deleted, added));
+        for (_, deleted, added) in scores {
+            if !matched.contains(&deleted) && !matched.contains(&added) {
+                matched.insert(deleted);
+                matched.insert(added);
+                pairs.push((deleted, added));
+            }
+        }
+    }
+    let mut removed = BTreeSet::new();
+    for (deleted, added) in pairs {
+        changes[added].old_path = Some(changes[deleted].path.clone());
+        changes[added].status = FileStatus::Renamed;
+        changes[added].staged |= changes[deleted].staged;
+        changes[added].unstaged |= changes[deleted].unstaged;
+        removed.insert(deleted);
+    }
+    let mut i = 0;
+    changes.retain(|_| {
+        let retain = !removed.contains(&i);
+        i += 1;
+        retain
+    });
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(())
+}
+
+struct Profile {
+    total: usize,
+    lines: BTreeMap<Vec<u8>, usize>,
+}
+fn profile((bytes, truncated): (Vec<u8>, bool)) -> Option<Profile> {
+    if truncated || bytes.len() > 256 * 1024 || bytes.contains(&0) {
+        return None;
+    }
+    let mut result = Profile {
+        total: bytes.len(),
+        lines: BTreeMap::new(),
+    };
+    for (i, line) in bytes.split_inclusive(|b| *b == b'\n').enumerate() {
+        if i >= 10_000 {
+            return None;
+        }
+        *result.lines.entry(line.to_vec()).or_default() += 1;
+    }
+    Some(result)
+}

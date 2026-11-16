@@ -1,10 +1,23 @@
 //! Read-only Git and filesystem operations. No shell evaluation; all paths are argv.
-use std::path::{Path, PathBuf};
+//!
+//! Paths in snapshots are relative to the canonical worktree root. Diff line
+//! numbers are one-based; search/navigation locations are zero-based UTF-16.
+//! Working files are compared as stored on disk: repository clean/textconv
+//! filters are deliberately never executed. Gitlinks are opaque index entries.
+mod backend;
+mod filesystem;
+mod git;
+mod text;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum CompareMode { #[default] Uncommitted, Branch(String) }
+pub enum CompareMode {
+    #[default]
+    Uncommitted,
+    Branch(String),
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Worktree {
@@ -19,7 +32,15 @@ pub struct Worktree {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum FileStatus { Added, Deleted, Renamed, Untracked, Conflicted, #[default] Modified }
+pub enum FileStatus {
+    Added,
+    Deleted,
+    Renamed,
+    Untracked,
+    Conflicted,
+    #[default]
+    Modified,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChangedFile {
@@ -45,7 +66,12 @@ pub struct Snapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DiffKind { Context, Addition, Deletion, Header }
+pub enum DiffKind {
+    Context,
+    Addition,
+    Deletion,
+    Header,
+}
 
 #[derive(Debug, Clone)]
 pub struct DiffLine {
@@ -76,9 +102,32 @@ pub struct SourceLocation {
     pub preview: String,
 }
 
-pub fn repository_root(_path: &Path) -> Result<PathBuf> { anyhow::bail!("Git backend is not initialized") }
-pub fn snapshot(_path: &Path, _compare: &CompareMode) -> Result<Snapshot> { anyhow::bail!("Git backend is not initialized") }
-pub fn diff(_root: &Path, _file: &ChangedFile, _compare: &CompareMode) -> Result<DiffDocument> { anyhow::bail!("Git backend is not initialized") }
-pub fn read_file(_root: &Path, _path: &Path) -> Result<String> { anyhow::bail!("Git backend is not initialized") }
-pub fn search(_root: &Path, _query: &str, _limit: usize) -> Result<Vec<SourceLocation>> { anyhow::bail!("Search backend is not initialized") }
+/// Find the canonical root of this worktree (including linked worktrees).
+pub fn repository_root(path: &Path) -> Result<PathBuf> {
+    git::repository_root(path)
+}
+/// Capture index, HEAD, working bytes, and worktree inventory without refreshing
+/// the index. Inventory counts are uncommitted counts, independent of comparison.
+pub fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
+    backend::snapshot(path, compare)
+}
+/// Compare against HEAD, or merge-base(base, HEAD), including working changes.
+/// Large text is returned as a bounded preview with `truncated = true`; its
+/// omitted diff has zero line counts. Binary contents are never decoded as text.
+pub fn diff(root: &Path, file: &ChangedFile, compare: &CompareMode) -> Result<DiffDocument> {
+    backend::diff(root, file, compare)
+}
+/// Read UTF-8 text, or a symlink's target spelling, without following symlinks.
+/// Returns an actionable error for binary, oversized, or unsafe paths.
+pub fn read_file(root: &Path, path: &Path) -> Result<String> {
+    backend::read_file(root, path)
+}
+/// Literal, case-sensitive text search over tracked and nonignored untracked
+/// files. Skips binary files, symlinks, and files above `MAX_TEXT_BYTES`.
+/// At most 10,000 matches are returned; empty or multiline queries return none.
+pub fn search(root: &Path, query: &str, limit: usize) -> Result<Vec<SourceLocation>> {
+    backend::search(root, query, limit)
+}
 
+/// Maximum bytes retained from either side of a diff or a whole-file read.
+pub const MAX_TEXT_BYTES: usize = 2 * 1024 * 1024;

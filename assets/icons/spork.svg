@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <title>포카락 스포크</title>
+  <desc>A spoon bowl with four short fork tines and a straight handle.</desc>
+  <g stroke="#e5eaf0" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 9V20C20 29 24 34 32 34C40 34 44 29 44 20V9"/>
+    <path d="M28 9V19M36 9V19M32 34V55"/>
+  </g>
+</svg>

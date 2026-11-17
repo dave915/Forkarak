@@ -1224,7 +1224,7 @@ impl Pokarak {
         }
     }
 
-    fn compare_code_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn compare_code_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.file_loading || self.loading || self.git_is_busy() || window.has_active_dialog(cx) {
             return;
         }
@@ -1340,7 +1340,7 @@ impl Pokarak {
         Ok(())
     }
 
-    fn discard_code_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn discard_code_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
             return;
         };
@@ -1376,82 +1376,106 @@ impl Pokarak {
     }
 
     pub(super) fn code_edit_controls(&self, path: &Path, cx: &mut Context<Self>) -> AnyElement {
-        let buffer = self
+        let Some(buffer) = self
             .current
             .as_ref()
-            .and_then(|root| self.code_edits.buffer(root, path));
-        let Some(buffer) = buffer else {
+            .and_then(|root| self.code_edits.buffer(root, path))
+        else {
             return div().into_any_element();
         };
         let busy = buffer.saving || self.file_loading || self.loading || self.git_is_busy();
-        div()
-            .id("code-edit-controls")
-            .flex()
-            .flex_wrap()
+        let save = buffer.editing || buffer.dirty();
+        let name = if buffer.saving {
+            "저장 중…"
+        } else if buffer.dirty() {
+            "● 저장"
+        } else if save {
+            "편집 중"
+        } else {
+            "편집"
+        };
+        let minimal = self
+            .command_bar_density
+            .get("working-reader")
+            .copied()
+            .unwrap_or_default()
+            == reader_toolbar::Density::Minimal;
+        Button::new(if save { "save-code" } else { "edit-file" })
+            .icon(if save {
+                IconName::Save
+            } else {
+                IconName::Pencil
+            })
+            .when(!minimal, |b| b.label(name))
+            .accessibility_label(name)
+            .tooltip(if save {
+                "파일 저장  ⌘S"
+            } else {
+                "현재 작업 파일 편집"
+            })
+            .ghost()
+            .small()
             .flex_none()
-            .px_2()
-            .py_1()
-            .border_b_1()
-            .border_color(Palette::new(cx).rgb(LINE))
-            .items_center()
-            .gap_2()
-            .child(self.editor_tool_buttons(path, cx))
-            .child(
-                Button::new("edit-file")
-                    .label(if buffer.editing {
-                        "편집 중"
-                    } else {
-                        "편집"
-                    })
-                    .ghost()
-                    .small()
-                    .selected(buffer.editing)
-                    .disabled(busy || buffer.editing || self.code_edits.unreadable_storage)
-                    .on_click(cx.listener(|app, _, w, cx| app.start_code_edit(w, cx))),
-            )
-            .child(
-                Button::new("save-code")
-                    .label(if buffer.saving {
-                        "저장 중…"
-                    } else {
-                        "저장"
-                    })
-                    .small()
-                    .ghost()
-                    .tooltip("파일 저장  ⌘S")
-                    .disabled(busy || !buffer.dirty())
-                    .on_click(cx.listener(|app, _, w, cx| app.save_code_file(false, w, cx))),
-            )
-            .child(
-                Button::new("save-code-commit")
-                    .label("저장 + 커밋…")
-                    .small()
-                    .ghost()
-                    .tooltip("파일 저장 후 Stage / 커밋 열기. 스테이징과 커밋은 직접 실행합니다.")
-                    .disabled(busy || !buffer.dirty())
-                    .on_click(cx.listener(|app, _, w, cx| app.save_code_file(true, w, cx))),
-            )
-            .when(buffer.dirty() || buffer.stale, |bar| {
-                bar.child(
-                    Button::new("compare-code-draft")
-                        .label("디스크와 비교…")
-                        .small()
-                        .ghost()
-                        .disabled(busy)
-                        .on_click(cx.listener(|app, _, w, cx| app.compare_code_draft(w, cx))),
-                )
-            })
-            .when(buffer.dirty(), |bar| {
-                bar.child(
-                    Button::new("discard-code-draft")
-                        .label("초안 버리기…")
-                        .small()
-                        .ghost()
-                        .disabled(busy)
-                        .on_click(cx.listener(|app, _, w, cx| app.discard_code_draft(w, cx))),
-                )
-            })
+            .h(ui_px(28.))
+            .when(minimal, |b| b.w(ui_px(28.)))
+            .loading(buffer.saving)
+            .disabled(busy || self.code_edits.unreadable_storage || (save && !buffer.dirty()))
+            .on_click(cx.listener(move |app, _, w, cx| {
+                if save {
+                    app.save_code_file(false, w, cx)
+                } else {
+                    app.start_code_edit(w, cx)
+                }
+            }))
             .into_any_element()
+    }
+
+    pub(super) fn reader_draft_menu(
+        &self,
+        mut menu: gpui_kit::component::native_menu::NativeMenu,
+        identity: &reader_toolbar::Identity,
+        path: &Path,
+    ) -> gpui_kit::component::native_menu::NativeMenu {
+        use reader_toolbar::Command;
+        let buffer = self
+            .current
+            .as_ref()
+            .and_then(|r| self.code_edits.buffer(r, path));
+        let busy = self.loading
+            || self.file_loading
+            || self.git_is_busy()
+            || buffer.is_none_or(|b| b.saving)
+            || self.code_edits.unreadable_storage;
+        for (label, command, disabled) in [
+            (
+                "편집",
+                Command::Edit,
+                busy || buffer.is_none_or(|b| b.editing),
+            ),
+            (
+                "저장  ⌘S",
+                Command::Save,
+                busy || buffer.is_none_or(|b| !b.dirty()),
+            ),
+            (
+                "저장 + 커밋…",
+                Command::SaveCommit,
+                busy || buffer.is_none_or(|b| !b.dirty()),
+            ),
+            (
+                "디스크와 비교…",
+                Command::CompareDraft,
+                busy || buffer.is_none_or(|b| !b.dirty() && !b.stale),
+            ),
+            (
+                "초안 버리기…",
+                Command::DiscardDraft,
+                busy || buffer.is_none_or(|b| !b.dirty()),
+            ),
+        ] {
+            menu = identity.item(menu, label, command, disabled, false);
+        }
+        menu
     }
 
     pub(super) fn code_draft_notice(&self, path: &Path, cx: &App) -> Option<AnyElement> {

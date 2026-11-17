@@ -257,7 +257,7 @@ impl Pokarak {
         wrap::configured(&self.prefs, self.current_project.as_deref(), path)
     }
 
-    fn toggle_word_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn toggle_word_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
         }
@@ -321,7 +321,7 @@ impl Pokarak {
             self.code_edits.tools.preview.remove(root);
         }
     }
-    fn pin_code_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn pin_code_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
         }
@@ -438,81 +438,78 @@ impl Pokarak {
         Ok(())
     }
 
-    pub(super) fn editor_tool_buttons(&self, path: &Path, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .flex()
-            .flex_wrap()
-            .gap_1()
-            .child(
-                Button::new("editor-palette")
-                    .small()
-                    .ghost()
-                    .label("명령…")
-                    .tooltip("명령 팔레트  ⌘⇧P")
-                    .on_click(cx.listener(|a, _, w, cx| a.open_command_palette(w, cx))),
-            )
-            .child(
-                Button::new("editor-files")
-                    .small()
-                    .ghost()
-                    .label("파일 관리…")
-                    .on_click(cx.listener(|a, _, w, cx| a.open_file_tools(w, cx))),
-            )
-            .child(
-                Button::new("editor-line")
-                    .small()
-                    .ghost()
-                    .label("줄 이동…")
-                    .tooltip("⌘L")
-                    .on_click(cx.listener(|a, _, w, cx| a.open_go_to_line(w, cx))),
-            )
-            .child(
-                Button::new("editor-wrap")
-                    .small()
-                    .ghost()
-                    .label("줄바꿈")
-                    .selected(
-                        self.current
-                            .as_ref()
-                            .is_some_and(|r| self.word_wrap(r, path)),
-                    )
-                    .on_click(cx.listener(|a, _, w, cx| a.toggle_word_wrap(w, cx))),
-            )
-            .when(
+    pub(super) fn editor_tool_buttons(&self, _path: &Path, cx: &mut Context<Self>) -> AnyElement {
+        toolbar::toolbar_icon("editor-palette", IconName::Command, "명령 팔레트")
+            .tooltip("명령 팔레트  ⌘⇧P")
+            .on_click(cx.listener(|a, _, w, cx| a.open_command_palette(w, cx)))
+            .into_any_element()
+    }
+
+    pub(super) fn reader_editor_menu(
+        &self,
+        identity: &reader_toolbar::Identity,
+        path: &Path,
+        cx: &App,
+    ) -> gpui_kit::component::native_menu::NativeMenu {
+        use gpui_kit::component::native_menu::NativeMenu;
+        use reader_toolbar::Command;
+        let code = self.code_tools_target(cx).is_some();
+        let ready =
+            self.current.is_some() && !self.loading && !self.file_loading && !self.git_is_busy();
+        let mut menu = self
+            .reader_draft_menu(NativeMenu::new(), identity, path)
+            .separator();
+        for (label, command, disabled, checked) in [
+            ("파일 관리…", Command::Files, !ready, false),
+            ("줄 이동…  ⌘L", Command::Line, !code, false),
+            (
+                "줄바꿈",
+                Command::Wrap,
+                !code,
                 self.current
                     .as_ref()
-                    .is_some_and(|r| self.is_preview_tab(r, path)),
-                |bar| {
-                    bar.child(
-                        Button::new("editor-pin")
-                            .small()
-                            .ghost()
-                            .label("탭 고정")
-                            .on_click(cx.listener(|a, _, w, cx| a.pin_code_tab(w, cx))),
-                    )
-                },
-            )
-            .child(
-                Button::new("editor-previous")
-                    .small()
-                    .ghost()
-                    .label("이전 코드")
-                    .tooltip("커서가 있는 변경 구간의 이전 코드 펼치기")
-                    .disabled(
-                        !self
-                            .current
-                            .as_ref()
-                            .and_then(|r| FileKey::new(r, path))
-                            .is_some_and(|k| {
-                                self.code_edits
-                                    .tools
-                                    .changes
-                                    .get(&k)
-                                    .is_some_and(|c| !c.is_empty())
-                            }),
-                    )
-                    .on_click(cx.listener(|a, _, w, cx| a.toggle_previous_code(w, cx))),
-            )
-            .into_any_element()
+                    .is_some_and(|r| self.word_wrap(r, path)),
+            ),
+            (
+                "탭 고정",
+                Command::Pin,
+                !code
+                    || !self
+                        .current
+                        .as_ref()
+                        .is_some_and(|r| self.is_preview_tab(r, path)),
+                false,
+            ),
+            (
+                "이전 코드 펼치기",
+                Command::PreviousCode,
+                !code
+                    || !self
+                        .current
+                        .as_ref()
+                        .and_then(|r| FileKey::new(r, path))
+                        .is_some_and(|k| {
+                            self.code_edits
+                                .tools
+                                .changes
+                                .get(&k)
+                                .is_some_and(|c| !c.is_empty())
+                        }),
+                false,
+            ),
+            (
+                "파일 포맷…",
+                Command::Format,
+                !code
+                    || !self
+                        .current
+                        .as_ref()
+                        .is_some_and(|r| self.code_edits.editing(r, path)),
+                false,
+            ),
+        ] {
+            menu = identity.item(menu, label, command, disabled, checked);
+        }
+        menu
     }
 }

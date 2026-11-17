@@ -355,20 +355,66 @@ impl Pokarak {
         }
         let hidden = self.hides_diff_whitespace();
         let empty = diff.view(hidden).hunks.is_empty();
-        Some(div().id(if history { "history-diff-tools" } else { "working-diff-tools" }).flex_none().flex().flex_wrap().items_center().gap_2().px_2().py_1().border_b_1().border_color(Palette::new(cx).rgb(LINE))
-            .child(Button::new("previous-diff-hunk").label("이전 변경").accessibility_label("이전 변경 블록").tooltip("이전 변경 블록  ⌥↑").ghost().small().disabled(empty).on_click(cx.listener(|app,_,window,cx|app.jump_diff_hunk(false,window,cx))))
-            .child(Button::new("next-diff-hunk").label("다음 변경").accessibility_label("다음 변경 블록").tooltip("다음 변경 블록  ⌥↓").ghost().small().disabled(empty).on_click(cx.listener(|app,_,window,cx|app.jump_diff_hunk(true,window,cx))))
-            .child(Button::new("hide-whitespace-diff").label("공백 변경 숨김").tooltip("공백만 바뀐 줄을 표시에서 제외합니다. 실제 변경과 스테이징에는 영향을 주지 않습니다.").ghost().small().selected(hidden).on_click(cx.listener(|app,_,_,cx| {
-                if let Some(root) = app.current.clone()
-                    && let Some(session) = app.sessions.get_mut(&root)
-                {
-                    session.saved.diff_hide_whitespace = !session.saved.diff_hide_whitespace;
-                    app.persist(cx);
-                    cx.notify();
-                }
-            })))
-            .when(hidden,|row|row.child(div().text_size(ui_text(11.)).text_color(Palette::new(cx).rgb(MUTED)).child("표시 필터 적용 중")))
-            .into_any_element())
+        Some(
+            div()
+                .id(if history {
+                    "history-diff-tools"
+                } else {
+                    "working-diff-tools"
+                })
+                .flex_none()
+                .flex()
+                .items_center()
+                .child(
+                    toolbar::toolbar_icon(
+                        "previous-diff-hunk",
+                        IconName::ChevronUp,
+                        "이전 변경 블록",
+                    )
+                    .tooltip("이전 변경 블록  ⌥↑")
+                    .disabled(empty)
+                    .on_click(
+                        cx.listener(|app, _, window, cx| app.jump_diff_hunk(false, window, cx)),
+                    ),
+                )
+                .child(
+                    toolbar::toolbar_icon(
+                        "next-diff-hunk",
+                        IconName::ChevronDown,
+                        "다음 변경 블록",
+                    )
+                    .tooltip("다음 변경 블록  ⌥↓")
+                    .disabled(empty)
+                    .on_click(
+                        cx.listener(|app, _, window, cx| app.jump_diff_hunk(true, window, cx)),
+                    ),
+                )
+                .when(hidden, |bar| {
+                    bar.child(
+                        toolbar::toolbar_icon(
+                            "hide-whitespace-diff",
+                            IconName::EyeOff,
+                            "공백 변경 숨김 적용 중",
+                        )
+                        .selected(true)
+                        .tooltip("공백 변경 숨김 적용 중 · 클릭하여 모든 변경 표시")
+                        .on_click(cx.listener(|app, _, _, cx| app.toggle_diff_whitespace(cx))),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
+    pub(super) fn toggle_diff_whitespace(&mut self, cx: &mut Context<Self>) {
+        if let Some(session) = self
+            .current
+            .as_ref()
+            .and_then(|root| self.sessions.get_mut(root))
+        {
+            session.saved.diff_hide_whitespace = !session.saved.diff_hide_whitespace;
+            self.persist(cx);
+            cx.notify();
+        }
     }
 
     pub(super) fn jump_diff_hunk(

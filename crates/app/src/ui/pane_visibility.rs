@@ -177,6 +177,19 @@ impl Pokarak {
             .map(|session| &session.saved)
             .unwrap_or(&defaults);
         let layout = self.effective_pane_layout(window, saved);
+        // Fixed sidebars must leave room for the reader even when widths were
+        // retained in a larger window. Clamp presentation, not the saved choice.
+        let width = theme::logical_px(window.viewport_size().width);
+        let reader_min = if layout.graph { 330. } else { 160. };
+        let sidebar_max =
+            (width - reader_min - if layout.files { 160. } else { 0. }).clamp(130., 420.);
+        let sidebar_width = saved.sidebar_width.unwrap_or(210.).clamp(130., sidebar_max);
+        let files_max = (width - reader_min - if layout.sidebar { sidebar_width } else { 0. })
+            .clamp(160., 600.);
+        let files_width = saved
+            .code_files_width
+            .unwrap_or(285.)
+            .clamp(160., files_max);
         let zoom = self.prefs.display.ui_zoom_percent;
         let target = root.to_path_buf();
         let view = cx.weak_entity();
@@ -214,8 +227,8 @@ impl Pokarak {
         if layout.sidebar {
             panels = panels.child(
                 resizable_panel()
-                    .size(ui_px(saved.sidebar_width.unwrap_or(210.)))
-                    .size_range(ui_px(130.)..ui_px(420.))
+                    .size(ui_px(sidebar_width))
+                    .size_range(ui_px(130.)..ui_px(sidebar_max))
                     .fixed()
                     .child(self.render_worktrees(cx)),
             );
@@ -223,20 +236,24 @@ impl Pokarak {
         if layout.files {
             panels = panels.child(
                 resizable_panel()
-                    .size(ui_px(saved.code_files_width.unwrap_or(285.)))
-                    .size_range(ui_px(160.)..ui_px(600.))
+                    .size(ui_px(files_width))
+                    .size_range(ui_px(160.)..ui_px(files_max))
                     .fixed()
                     .child(self.render_files(window, cx)),
             );
         }
         // Omitted panels have no slot, separator or resize handle. The final
-        // unconstrained pane receives all of the reclaimed space.
+        // reader keeps its commands reachable and receives the reclaimed space.
         panels
-            .child(resizable_panel().child(if layout.graph {
-                self.render_git_graph(window, cx)
-            } else {
-                self.render_reader(window, cx)
-            }))
+            .child(
+                resizable_panel()
+                    .size_range(ui_px(160.)..ui_px(10000.))
+                    .child(if layout.graph {
+                        self.render_git_graph(window, cx)
+                    } else {
+                        self.render_reader(window, cx)
+                    }),
+            )
             .into_any_element()
     }
 }

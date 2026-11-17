@@ -20,6 +20,7 @@ mod language_tools;
 mod pane_visibility;
 mod patch;
 mod reader_navigation;
+mod reader_toolbar;
 mod result_presentation;
 mod reviewed_files;
 mod search_options;
@@ -286,6 +287,7 @@ impl Session {
 }
 
 pub struct Pokarak {
+    command_bar_density: HashMap<&'static str, reader_toolbar::Density>,
     inline_blame: Option<Entity<file_inspector::InlineBlame>>,
     reviewed_files: reviewed_files::ReviewedFiles,
     auto_refresh: auto_refresh::AutoRefresh,
@@ -643,6 +645,7 @@ impl Pokarak {
             code_edits: code_edit::CodeEdits::load(),
             workflow: git_workflow::WorkflowUi::default(),
             git_history: git_history::HistoryUi::default(),
+            command_bar_density: HashMap::new(),
             focus: cx.focus_handle(),
             legacy_split_diff: prefs.split_diff,
             prefs,
@@ -1878,28 +1881,6 @@ impl Pokarak {
         self.render_graph_sidebar(cx)
     }
 
-    fn code_analysis_control(&self, cx: &mut Context<Self>) -> Button {
-        Button::new("analysis")
-            .label(if self.navigation.is_some() {
-                "코드 탐색 켜짐"
-            } else {
-                "코드 탐색"
-            })
-            .icon(IconName::Waypoints)
-            .ghost()
-            .small()
-            .disabled(self.current.is_none())
-            .on_click(cx.listener(|this, _, _, cx| {
-                if this.navigation.is_some() {
-                    this.stop_analysis(cx);
-                    this.status = "코드 탐색 중지됨".into();
-                } else {
-                    this.trust_prompt = true;
-                }
-                cx.notify();
-            }))
-    }
-
     fn render_reader(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::new(cx);
         let Some(session) = self.session() else {
@@ -1947,6 +1928,7 @@ impl Pokarak {
             let close = tab.clone();
             tabs = tabs.child(
                 div()
+                    .flex_none()
                     .flex()
                     .items_center()
                     .child(
@@ -1994,54 +1976,14 @@ impl Pokarak {
                     ),
             );
         }
-        let head = div()
-            .id("reader-controls")
-            .flex_wrap()
-            .min_h(ui_px(34.))
-            .flex_none()
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(palette.rgb(LINE))
-            .child(self.code_analysis_control(cx))
-            .child(self.reviewed_file_button(cx))
-            .child(
-                Button::new("diff")
-                    .label("변경")
-                    .ghost()
-                    .small()
-                    .selected(!code && !self.prefs.split_diff)
-                    .disabled(diff.is_none())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.set_split_diff(false);
-                        this.select_reader_mode(false, window, cx)
-                    })),
-            )
-            .child(
-                Button::new("work-split")
-                    .label("좌우")
-                    .tooltip("변경 전후를 좌우로 비교")
-                    .small()
-                    .ghost()
-                    .selected(!code && self.prefs.split_diff)
-                    .disabled(diff.is_none_or(|d| d.binary))
-                    .on_click(cx.listener(|app, _, window, cx| {
-                        app.set_split_diff(true);
-                        app.select_reader_mode(false, window, cx)
-                    })),
-            )
-            .child(
-                Button::new("code")
-                    .label("코드")
-                    .ghost()
-                    .small()
-                    .selected(code)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_code(true, cx))),
-            )
-            .when_some(
-                self.current.as_ref().and_then(|root| {
+        let head = self.reader_command_bar(
+            reader_toolbar::ReaderView {
+                path,
+                code,
+                history: false,
+                deleted,
+                diff,
+                target: self.current.as_ref().and_then(|root| {
                     let relative = if path.is_absolute() {
                         path.strip_prefix(root).ok()?
                     } else {
@@ -2058,33 +2000,9 @@ impl Pokarak {
                             .filter(|s| !s.is_empty()),
                     })
                 }),
-                |bar, target| bar.child(self.file_inspection_buttons(target, cx)),
-            )
-            .when(code, |bar| {
-                bar.child(
-                    Button::new("refs")
-                        .label("사용처")
-                        .ghost()
-                        .small()
-                        .disabled(!code || deleted || self.navigating)
-                        .tooltip("선택한 심볼의 사용처  ⌥F7")
-                        .on_click(cx.listener(|this, _, w, cx| {
-                            this.request_navigation(NavigationKind::References, None, w, cx)
-                        })),
-                )
-            })
-            .when(code, |bar| {
-                bar.child(
-                    Button::new("impl")
-                        .label("구현체")
-                        .ghost()
-                        .small()
-                        .disabled(!code || deleted || self.navigating)
-                        .on_click(cx.listener(|this, _, w, cx| {
-                            this.request_navigation(NavigationKind::Implementation, None, w, cx)
-                        })),
-                )
-            });
+            },
+            cx,
+        );
         let content = if diff.map(|d| d.binary).unwrap_or(false) && !dirty {
             div()
                 .p_6()
@@ -2153,24 +2071,7 @@ impl Pokarak {
             .v_flex()
             .overflow_hidden()
             .child(tabs)
-            .child(
-                div()
-                    .id("reader-file-path")
-                    .flex_none()
-                    .min_h(ui_px(28.))
-                    .px_3()
-                    .py_1()
-                    .text_size(ui_text(11.))
-                    .font_family("JetBrains Mono")
-                    .child(path.to_string_lossy().to_string()),
-            )
             .child(head)
-            .when(code && !deleted, |d| d.child(self.language_buttons(cx)))
-            .children(self.inline_blame_controls(cx))
-            .when(!code, |reader| {
-                reader.children(diff.and_then(|doc| self.diff_reading_controls(doc, false, cx)))
-            })
-            .when(code, |d| d.child(self.code_edit_controls(path, cx)))
             .when(code, |d| d.children(self.code_previous_panel(path, cx)))
             .children(self.code_draft_notice(path, cx))
             .when(deleted && code && !dirty, |d| {
@@ -2395,6 +2296,8 @@ impl Render for Pokarak {
         );
         root.key_context(self.diff_key_context()).track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(ui_text(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
+            .on_action(cx.listener(|this, action: &toolbar::RunToolbar, w, cx| this.run_toolbar_command(action,w,cx)))
+            .on_action(cx.listener(|this, action: &reader_toolbar::Run, w, cx| this.run_reader_command(action,w,cx)))
             .on_action(cx.listener(|this,_:&SearchGitGraph,w,cx|this.open_graph_search(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitHistory,w,cx|this.open_git_history(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitWorkflow,w,cx|this.open_git_workflow(w,cx)))

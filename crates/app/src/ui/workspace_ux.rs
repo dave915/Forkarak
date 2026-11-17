@@ -285,20 +285,24 @@ impl Pokarak {
         Some(
             div()
                 .flex_none()
-                .min_h(ui_px(30.))
+                .h(ui_px(32.))
                 .px_2()
                 .flex()
-                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .border_b_1()
                 .border_color(Palette::new(cx).rgb(LINE))
                 .child(
                     Button::new("active-worktree-picker")
-                        .label(format!(
-                            "작업 워크트리 · {}",
-                            root.file_name().unwrap_or_default().to_string_lossy()
-                        ))
+                        .icon(IconName::FolderGit2)
+                        .label(
+                            root.file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string(),
+                        )
+                        .max_w(ui_px(220.))
+                        .overflow_hidden()
                         .tooltip(root.display().to_string())
                         .ghost()
                         .small()
@@ -309,6 +313,15 @@ impl Pokarak {
                         .min_w_0()
                         .flex_1()
                         .text_size(ui_text(11.))
+                        .text_ellipsis()
+                        .id("workspace-comparison-label")
+                        .tooltip({
+                            let label = self.visible_comparison_label();
+                            move |w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(label.clone())
+                                    .build(w, cx)
+                            }
+                        })
                         .child(self.visible_comparison_label()),
                 )
                 .children(self.branch_review_controls(cx))

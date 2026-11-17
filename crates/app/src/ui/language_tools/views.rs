@@ -1,54 +1,25 @@
 use super::*;
-use gpui_kit::component::menu::DropdownMenu;
 
 impl Pokarak {
     pub(in crate::ui) fn language_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
-        let weak = cx.weak_entity();
-        let enabled = self.language_target(cx).is_some();
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                Button::new("language-tools")
-                    .label("코드 지원…")
-                    .tooltip("자동완성 · 오류 확인 · 함수 도움말 · 코드 탐색")
-                    .ghost()
-                    .small()
-                    .disabled(!enabled)
-                    .dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu, _, _| {
-                        for (label, tool) in [
-                            ("자동완성  ⌃Space", Tool::Complete),
-                            ("오류 확인", Tool::Diagnostics),
-                            ("파일 구조 검색  ⌘⇧O", Tool::Symbols),
-                            ("함수 도움말  ⌃⇧Space", Tool::Signature),
-                            ("타입 · 설명  ⌥F1", Tool::Hover),
-                        ] {
-                            let owner = weak.clone();
-                            menu =
-                                menu.item(PopupMenuItem::new(label).on_click(move |_, w, cx| {
-                                    let _ = owner.update(cx, |a, cx| {
-                                        a.request_language(tool.clone(), None, w, cx)
-                                    });
-                                }));
-                        }
-                        let owner = weak.clone();
-                        menu.item(PopupMenuItem::new("코드 지원 설정…").on_click(
-                            move |_, w, cx| {
-                                let _ = owner
-                                    .update(cx, |a, cx| a.open_settings_section("language", w, cx));
-                            },
-                        ))
-                    }),
-            )
-            .when_some(self.language_tools.pending.as_ref(), |d, tool| {
-                d.child(
-                    div()
-                        .text_size(ui_text(11.))
-                        .child(format!("{}…", tool.title())),
-                )
-            })
+        let full =
+            self.command_bar_density.get("working-reader") == Some(&reader_toolbar::Density::Full);
+        Button::new("language-tools")
+            .icon(IconName::Waypoints)
+            .when(full, |b| b.label("코드 지원…"))
+            .accessibility_label("코드 지원")
+            .tooltip("코드 지원 · 자동완성, 오류 확인, 함수 도움말, 코드 탐색")
+            .ghost()
+            .small()
+            .flex_none()
+            .h(ui_px(28.))
+            .when(!full, |b| b.w(ui_px(28.)))
+            .disabled(!self.code_support_available(cx))
+            .on_click(cx.listener(|app, _, w, cx| app.show_code_support_menu(w, cx)))
             .into_any_element()
+    }
+    pub(in crate::ui) fn code_support_available(&self, cx: &App) -> bool {
+        self.language_target(cx).is_some()
     }
     pub(super) fn prepare_language_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.language_tools

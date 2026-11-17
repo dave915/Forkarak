@@ -468,10 +468,11 @@ impl Pokarak {
         let text = query.read(cx).value().to_string();
         let header = div()
             .flex()
-            .flex_wrap()
+            .flex_none()
+            .h(ui_px(36.))
             .items_center()
             .gap_2()
-            .p_2()
+            .px_2()
             .border_b_1()
             .border_color(palette.rgb(LINE))
             .child(
@@ -494,15 +495,12 @@ impl Pokarak {
                         cx.notify();
                     })),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(ui_px(180.))
-                    .child(Input::new(&query).small()),
-            )
+            .child(div().flex_1().min_w_0().child(Input::new(&query).small()))
             .child(
                 Button::new("execution-close")
-                    .label("닫기")
+                    .icon(IconName::X)
+                    .accessibility_label("작업·로그 닫기")
+                    .tooltip("닫기")
                     .small()
                     .on_click(cx.listener(|app, _, w, cx| {
                         app.execution.visible = false;
@@ -650,7 +648,6 @@ impl Pokarak {
             list = list.child(
                 div()
                     .flex()
-                    .flex_wrap()
                     .items_center()
                     .gap_2()
                     .px_2()
@@ -660,11 +657,13 @@ impl Pokarak {
                     .child(
                         div()
                             .flex_1()
-                            .min_w(ui_px(160.))
+                            .min_w_0()
                             .v_flex()
-                            .child(profile.name.clone())
+                            .child(div().min_w_0().text_ellipsis().child(profile.name.clone()))
                             .child(
                                 div()
+                                    .min_w_0()
+                                    .text_ellipsis()
                                     .text_size(ui_text(11.))
                                     .text_color(palette.rgb(MUTED))
                                     .child(format!("{} · {status}", profile.command.join(" "))),
@@ -672,7 +671,9 @@ impl Pokarak {
                     )
                     .child(
                         Button::new(("task-run", index))
-                            .label("실행")
+                            .icon(IconName::Play)
+                            .accessibility_label("실행")
+                            .tooltip("실행")
                             .small()
                             .disabled(
                                 active
@@ -685,7 +686,9 @@ impl Pokarak {
                     )
                     .child(
                         Button::new(("task-stop", index))
-                            .label("중지")
+                            .icon(IconName::Square)
+                            .accessibility_label("중지")
+                            .tooltip("중지")
                             .small()
                             .disabled(!active)
                             .on_click(cx.listener(move |app, _, _, cx| {
@@ -703,7 +706,9 @@ impl Pokarak {
                     )
                     .child(
                         Button::new(("task-restart", index))
-                            .label("재시작")
+                            .icon(IconName::RotateCw)
+                            .accessibility_label("재시작")
+                            .tooltip("재시작")
                             .small()
                             .disabled(!self.execution_trusted(root))
                             .on_click(cx.listener(move |app, _, _, cx| {
@@ -712,7 +717,9 @@ impl Pokarak {
                     )
                     .child(
                         Button::new(("task-logs", index))
-                            .label("로그")
+                            .icon(IconName::ScrollText)
+                            .accessibility_label("로그")
+                            .tooltip("로그")
                             .small()
                             .disabled(id.is_none())
                             .on_click(cx.listener(move |app, _, _, cx| {
@@ -725,7 +732,9 @@ impl Pokarak {
                     )
                     .child(
                         Button::new(("task-edit", index))
-                            .label("편집")
+                            .icon(IconName::Pencil)
+                            .accessibility_label("편집")
+                            .tooltip("편집")
                             .small()
                             .on_click(cx.listener(move |app, _, w, cx| {
                                 app.edit_task(Some(edit.clone()), w, cx)
@@ -733,7 +742,9 @@ impl Pokarak {
                     )
                     .child(
                         Button::new(("task-remove", index))
-                            .label("삭제")
+                            .icon(IconName::Trash)
+                            .accessibility_label("삭제")
+                            .tooltip("삭제")
                             .small()
                             .disabled(active)
                             .on_click(cx.listener(move |app, _, _, cx| {
@@ -836,14 +847,15 @@ impl Pokarak {
         let q = query.to_string();
         let controls = div()
             .flex()
-            .flex_wrap()
+            .flex_none()
+            .h(ui_px(34.))
             .items_center()
-            .gap_3()
+            .gap_2()
             .px_2()
             .child("실행 로그")
             .child(
                 Checkbox::new("logs-scroll")
-                    .label("자동 스크롤")
+                    .label("따라가기")
                     .checked(options.auto_scroll)
                     .on_click(move |value, _, cx| {
                         let mut b = opts.lock().unwrap();
@@ -867,7 +879,7 @@ impl Pokarak {
             )
             .child(
                 Button::new("logs-limit")
-                    .label(format!("보관 {}줄", options.max_lines))
+                    .label(format!("{}줄", options.max_lines))
                     .small()
                     .on_click(move |_, _, cx| {
                         let mut b = opts3.lock().unwrap();
@@ -883,7 +895,9 @@ impl Pokarak {
             )
             .child(
                 Button::new("logs-copy")
-                    .label("검색 로그 복사")
+                    .icon(IconName::Copy)
+                    .accessibility_label("검색 로그 복사")
+                    .tooltip("검색 로그 복사")
                     .small()
                     .on_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(
@@ -899,6 +913,9 @@ impl Pokarak {
             )
             .child(
                 div()
+                    .min_w_0()
+                    .flex_1()
+                    .text_ellipsis()
                     .text_size(ui_text(11.))
                     .text_color(palette.rgb(MUTED))
                     .child(format!("검색 {count}줄 · 최근 {}줄 표시", lines.len())),

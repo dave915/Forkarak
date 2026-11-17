@@ -42,16 +42,14 @@ impl Pokarak {
             div()
                 .id("branch-review-controls")
                 .flex_none()
-                .min_h(ui_px(32.))
+                .h(ui_px(28.))
                 .px_1()
-                .py_1()
                 .flex()
-                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .child(
                     Button::new("compare-branch")
-                        .label("브랜치 비교…")
+                        .icon(IconName::GitCompare)
                         .accessibility_label("브랜치 전체 변경 비교")
                         .tooltip(
                             "기준 브랜치와 HEAD의 공통 조상부터 현재 파일까지 코드 보기에서 비교",
@@ -67,7 +65,8 @@ impl Pokarak {
                 .when(branch, |bar| {
                     bar.child(
                         Button::new("compare-head")
-                            .label("HEAD로 돌아가기")
+                            .icon(IconName::Undo2)
+                            .tooltip("비교 기준을 HEAD로 변경")
                             .accessibility_label("비교 기준을 HEAD로 변경")
                             .ghost()
                             .small()

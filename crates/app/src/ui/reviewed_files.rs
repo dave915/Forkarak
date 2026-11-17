@@ -487,7 +487,7 @@ impl Pokarak {
         }
     }
 
-    fn toggle_reviewed_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn toggle_reviewed_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((key, expected)) = self.selected_review() else {
             return;
         };
@@ -546,6 +546,10 @@ impl Pokarak {
         })
         .detach();
         cx.notify();
+    }
+
+    pub(super) fn reader_review_available(&self) -> bool {
+        self.review_disabled_reason().is_none() && self.selected_review().is_some()
     }
 
     pub(super) fn reviewed_file_button(&self, cx: &mut Context<Self>) -> Button {

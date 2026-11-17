@@ -494,6 +494,13 @@ impl Pokarak {
                         .ghost()
                         .selected(ui.code),
                     )
+                    .when_some(ui.selected.as_ref(), |bar,path| {
+                        let deleted = detail.files.iter().any(|f| &f.path==path && f.status==FileStatus::Deleted);
+                        bar.child(self.file_inspection_buttons(file_inspector::Target {
+                            path:path.clone(), revision:Some(detail.commit.oid.clone()),
+                            blame_revision: if deleted { detail.parent.clone() } else { Some(detail.commit.oid.clone()) },
+                        },cx))
+                    })
                     .child(
                         div()
                             .ml_2()

@@ -40,6 +40,10 @@ impl Pokarak {
         let Some(root) = self.current.clone().filter(|_| self.opening_path.is_none()) else {
             return;
         };
+        let config = crate::terminal::TerminalConfig::from_preferences(
+            &self.prefs,
+            self.current_project.as_deref(),
+        );
         let Some(session) = self.sessions.get_mut(&root) else {
             return;
         };
@@ -50,7 +54,8 @@ impl Pokarak {
             return;
         }
         let terminal = session.terminal.get_or_insert_with(|| {
-            let dock = cx.new(|cx| TerminalSessions::new(root.clone(), window, cx));
+            let dock =
+                cx.new(|cx| TerminalSessions::configured(root.clone(), config, None, window, cx));
             cx.subscribe_in(&dock, window, move |app, _, action, w, cx| {
                 let Some(session) = app.sessions.get_mut(&root) else {
                     return;
@@ -69,6 +74,55 @@ impl Pokarak {
         });
         terminal.focus_handle(cx).focus(window, cx);
         session.terminal_visible = true;
+        cx.notify();
+    }
+
+    pub(super) fn start_worktree_command(
+        &mut self,
+        root: &Path,
+        command: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.current.as_deref() != Some(root) || self.opening_path.is_some() {
+            return;
+        }
+        let config = crate::terminal::TerminalConfig::from_preferences(
+            &self.prefs,
+            self.current_project.as_deref(),
+        );
+        let Some(session) = self.sessions.get_mut(root) else {
+            return;
+        };
+        let terminal = if let Some(terminal) = &session.terminal {
+            terminal.update(cx, |terminal, cx| {
+                terminal.set_launch_config(config.clone());
+                terminal.add_command(Some(command), window, cx)
+            });
+            terminal.clone()
+        } else {
+            let root = root.to_path_buf();
+            let terminal = cx.new(|cx| {
+                TerminalSessions::configured(root.clone(), config, Some(command), window, cx)
+            });
+            cx.subscribe_in(&terminal, window, move |app, _, action, window, cx| {
+                if let Some(session) = app.sessions.get_mut(&root) {
+                    session.terminal_visible = false;
+                    if matches!(action, DockAction::Close) {
+                        session.terminal = None;
+                    }
+                }
+                if app.current.as_ref() == Some(&root) {
+                    app.focus.focus(window, cx);
+                }
+                cx.notify();
+            })
+            .detach();
+            session.terminal = Some(terminal.clone());
+            terminal
+        };
+        session.terminal_visible = true;
+        terminal.focus_handle(cx).focus(window, cx);
         cx.notify();
     }
 

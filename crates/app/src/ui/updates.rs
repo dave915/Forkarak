@@ -106,6 +106,9 @@ impl Updates {
 
 impl Pokarak {
     fn check_update(&mut self, manual: bool, cx: &mut Context<Self>) {
+        if !manual && !self.prefs.option_bool(None, "updates.auto_check", true) {
+            return;
+        }
         if let Check::Running { manual: show } = &mut self.updates.check {
             *show |= manual;
             return;

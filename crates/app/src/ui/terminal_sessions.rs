@@ -113,6 +113,7 @@ impl<T> Tabs<T> {
 
 pub(super) struct TerminalSessions {
     root: PathBuf,
+    config: crate::terminal::TerminalConfig,
     tabs: Tabs<Entity<TerminalDock>>,
     controls_focus: FocusHandle,
 }
@@ -128,13 +129,31 @@ impl Focusable for TerminalSessions {
 }
 
 impl TerminalSessions {
+    #[allow(dead_code)] // Retained constructor for existing integrations.
     pub(super) fn new(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::configured(
+            root,
+            crate::terminal::TerminalConfig::default(),
+            None,
+            window,
+            cx,
+        )
+    }
+
+    pub(super) fn configured(
+        root: PathBuf,
+        config: crate::terminal::TerminalConfig,
+        command: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut this = Self {
             root,
+            config,
             tabs: Tabs::default(),
             controls_focus: cx.focus_handle(),
         };
-        this.add(window, cx);
+        this.add_command(command, window, cx);
         this
     }
 
@@ -155,7 +174,37 @@ impl TerminalSessions {
     }
 
     fn add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let dock = cx.new(|cx| TerminalDock::embedded(self.root.clone(), window, cx));
+        self.config = crate::terminal::TerminalConfig::from_preferences(
+            &Preferences::load(),
+            self.config.project.as_deref(),
+        );
+        self.add_command(None, window, cx);
+    }
+
+    pub(super) fn set_launch_config(&mut self, config: crate::terminal::TerminalConfig) {
+        self.config = config;
+    }
+
+    pub(super) fn add_command(
+        &mut self,
+        command: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut config = self.config.clone();
+        if let Some(command) = command {
+            // A separate foreground login shell loads PATH and startup files, then execs
+            // the explicitly requested CLI. Never inject into an existing session.
+            config.shell = "/bin/zsh".into();
+            config.args = vec![
+                "-l".into(),
+                "-i".into(),
+                "-c".into(),
+                format!("exec {command}"),
+            ];
+        }
+        let dock =
+            cx.new(|cx| TerminalDock::embedded_configured(self.root.clone(), config, window, cx));
         let id = self.tabs.push(dock.clone());
         // Observe exit/restart status on background tabs as well as the selected tab.
         cx.observe(&dock, |_, _, cx| cx.notify()).detach();

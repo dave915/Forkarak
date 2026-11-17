@@ -12,7 +12,7 @@ use alacritty_terminal::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     component::{
-        ActiveTheme, Sizable, StyledExt,
+        Sizable, StyledExt,
         button::{Button, ButtonVariants},
     },
     *,
@@ -32,6 +32,7 @@ pub enum DockAction {
 }
 pub struct TerminalDock {
     root: PathBuf,
+    config: super::TerminalConfig,
     pub(super) shell: Option<Shell>,
     error: Option<String>,
     wake: Option<Task<()>>,
@@ -66,7 +67,7 @@ impl TerminalDock {
             } else if shell.exited() {
                 "종료".into()
             } else {
-                "zsh".into()
+                self.config.shell.clone()
             }
         } else {
             "종료".into()
@@ -78,15 +79,35 @@ impl TerminalDock {
         self.shell = None;
     }
 
+    #[allow(dead_code)] // Retained constructor for existing integrations.
     pub(crate) fn embedded(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut dock = Self::new(root, window, cx);
+        Self::embedded_configured(root, super::TerminalConfig::default(), window, cx)
+    }
+
+    pub(crate) fn embedded_configured(
+        root: PathBuf,
+        config: super::TerminalConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut dock = Self::configured(root, config, window, cx);
         dock.embedded = true;
         dock
     }
 
+    #[allow(dead_code)] // Retained constructor for existing integrations.
     pub fn new(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::configured(root, super::TerminalConfig::default(), window, cx)
+    }
+    fn configured(
+        root: PathBuf,
+        config: super::TerminalConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut dock = Self {
             root,
+            config,
             shell: None,
             error: None,
             wake: None,
@@ -116,7 +137,7 @@ impl TerminalDock {
         self.shell = None;
         self.marked.clear();
         self.ime_selection = 0..0;
-        match Shell::open(&self.root, Default::default()) {
+        match Shell::open_configured(&self.root, Default::default(), &self.config) {
             Ok((shell, events)) => {
                 self.shell = Some(shell);
                 self.error = None;
@@ -290,7 +311,7 @@ impl Render for TerminalDock {
         let weak = cx.weak_entity();
         let focus = self.focus.clone();
         let exited = self.shell.as_ref().is_none_or(Shell::exited);
-        let font_size = cx.theme().mono_font_size;
+        let font_size = ui_px(self.config.font_size);
         let surface = canvas(
             |_, _, _| (),
             move |bounds, _, w, cx| {
@@ -332,13 +353,11 @@ impl Render for TerminalDock {
                         .text_color(rgb(FOREGROUND))
                         .text_size(ui_text(12.))
                         .child("터미널")
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_ellipsis()
-                                .child(format!("zsh · {}", self.root.display())),
-                        )
+                        .child(div().flex_1().min_w_0().text_ellipsis().child(format!(
+                            "{} · {}",
+                            self.config.shell,
+                            self.root.display()
+                        )))
                         .when(exited, |bar| {
                             bar.child(
                                 Button::new("terminal-restart")

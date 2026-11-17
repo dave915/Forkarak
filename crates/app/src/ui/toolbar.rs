@@ -118,6 +118,7 @@ impl Pokarak {
     }
 
     fn project_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> TabBar {
+        let palette = Palette::new(cx);
         let active = self
             .projects
             .iter()
@@ -134,11 +135,11 @@ impl Pokarak {
         }
 
         TabBar::new("project-tabs")
-            .pill()
+            .underline()
             .small()
             .min_w_0()
             .w_full()
-            .menu(true)
+            .menu(self.projects.len() > 1)
             .max_width(px(200.))
             .track_scroll(&scroll)
             .when_some(active, |bar, index| bar.selected_index(index))
@@ -151,8 +152,15 @@ impl Pokarak {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.clone());
+                // Tab::icon renders an icon-only tab. The prefix lets the label
+                // determine the width while keeping both actions visible.
                 Tab::new()
-                    .icon(Icon::new(IconName::FolderGit2))
+                    .min_w(px(112.))
+                    .prefix(
+                        Icon::new(IconName::FolderGit2).size(px(14.)).text_color(
+                            palette.rgb(if active == Some(index) { BLUE } else { MUTED }),
+                        ),
+                    )
                     .label(label.clone())
                     .aria_label(format!("프로젝트 {path}"))
                     .tooltip(move |w, cx| {
@@ -160,7 +168,11 @@ impl Pokarak {
                     })
                     .suffix(
                         Button::new(("close-project", index))
-                            .icon(IconName::X)
+                            .icon(
+                                Icon::new(IconName::X)
+                                    .size(px(13.))
+                                    .text_color(palette.rgb(MUTED)),
+                            )
                             .ghost()
                             .xsmall()
                             .accessibility_label(format!("{label} 프로젝트 닫기"))

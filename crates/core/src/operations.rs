@@ -15,6 +15,7 @@ pub mod history_actions;
 pub mod integration;
 pub mod preview;
 pub mod recovery;
+pub mod repository;
 pub mod sync;
 pub mod tags;
 pub mod workflow;
@@ -615,6 +616,12 @@ impl GitOperations {
     }
 
     fn command(&self, args: &[&str]) -> Command {
+        self.command_at(args, None)
+    }
+
+    // Explicit new-repository operations pin cwd with fchdir before exec.
+    // Git then uses ., without resolving the destination pathname again.
+    fn command_at(&self, args: &[&str], directory: Option<libc::c_int>) -> Command {
         let mut command = Command::new("git");
         // Remove repository/config injection, preserving credentials, SSH agent,
         // SSH command, and GIT_CONFIG_GLOBAL/SYSTEM (also used by test fixtures).
@@ -672,12 +679,29 @@ impl GitOperations {
                 "submodule.recurse=false",
                 "-C",
             ])
-            .arg(&self.root)
+            .arg(if directory.is_some() {
+                Path::new(".")
+            } else {
+                &self.root
+            })
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        if let Some(descriptor) = directory {
+            // SAFETY: the caller keeps this directory FD alive until capture
+            // returns; fchdir is async-signal-safe and needs no allocation.
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::fchdir(descriptor) != 0 {
+                        Err(io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+        }
         command
     }
 
@@ -1044,6 +1068,10 @@ mod tests {
         include!("operations/tags_tests.rs");
     }
 
+    mod repository_actions {
+        use super::*;
+        include!("operations/repository_tests.rs");
+    }
 
     mod progress_tests {
         use super::*;

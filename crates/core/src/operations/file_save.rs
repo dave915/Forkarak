@@ -96,7 +96,7 @@ impl Target {
         Ok(())
     }
 
-    fn read(&self) -> Result<DiskFile> {
+    pub(super) fn read(&self) -> Result<DiskFile> {
         let mut file = open_at(&self.parent, &self.name, libc::O_RDONLY).context(
             "Cannot safely open working file; missing files and symlinks cannot be saved",
         )?;
@@ -130,10 +130,10 @@ impl Target {
     }
 }
 
-struct DiskFile {
+pub(super) struct DiskFile {
     _file: File,
     metadata: Metadata,
-    bytes: Vec<u8>,
+    pub(super) bytes: Vec<u8>,
 }
 
 struct PreparedSave {
@@ -241,7 +241,7 @@ pub(super) fn unchanged(a: &Metadata, b: &Metadata) -> bool {
             == (b.mtime(), b.mtime_nsec(), b.ctime(), b.ctime_nsec())
 }
 
-fn open_directory(path: &Path) -> Result<File> {
+pub(super) fn open_directory(path: &Path) -> Result<File> {
     let path = CString::new(path.as_os_str().as_bytes())?;
     // SAFETY: path is terminated; successful descriptor is uniquely owned below.
     let fd = unsafe {

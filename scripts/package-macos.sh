@@ -1,9 +1,11 @@
 #!/bin/bash
-# Build an Apple Silicon executable and assemble a local development app bundle.
+# Build an Apple Silicon executable and assemble a signed app bundle.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="${HOME}/.cargo/bin:${PATH}"
+# Extract the quoted workspace version without requiring Cargo for --binary.
+VERSION="$(/usr/bin/sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\([^"]*\)".*/\1/p' "$ROOT_DIR/Cargo.toml")"
 TARGET="aarch64-apple-darwin"
 PROFILE="release"
 RUN_APP=false
@@ -19,8 +21,9 @@ Usage: ./scripts/package-macos.sh [--debug] [--run] [--binary PATH]
   --binary PATH  Package an existing arm64 executable; skip all Cargo commands
   -h, --help     Show this help
 
-Output: dist/포카락.app (dev.pokarak.app, version 0.1.0)
-Honors CARGO_TARGET_DIR. Signs the bundle ad hoc for local development only.
+Output: dist/포카락.app (dev.pokarak.app, version from Cargo.toml)
+Honors CARGO_TARGET_DIR. Ad-hoc signing by default. Set SIGNING_IDENTITY to a
+Developer ID Application identity for hardened-runtime signing with timestamp.
 USAGE
 }
 
@@ -42,6 +45,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$(uname -s)" == Darwin ]] || fail "macOS is required"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Invalid workspace version: $VERSION"
 [[ -z "$BINARY" || "$PROFILE" == release ]] || fail "--debug cannot be combined with --binary"
 PLIST="$ROOT_DIR/assets/macos/Info.plist"
 ICON="$ROOT_DIR/assets/icons/Pokarak.icns"
@@ -52,7 +56,7 @@ if [[ -z "$BINARY" ]]; then
     command -v cargo >/dev/null 2>&1 || fail "Cargo not found; add \$HOME/.cargo/bin to PATH"
     # Keep the binary deployment target consistent with the bundle declaration.
     export MACOSX_DEPLOYMENT_TARGET=13.0
-    BUILD_ARGS=(build --manifest-path "$ROOT_DIR/Cargo.toml" --package pokarak --bin pokarak --target "$TARGET")
+    BUILD_ARGS=(build --locked --manifest-path "$ROOT_DIR/Cargo.toml" --package pokarak --bin pokarak --target "$TARGET")
     if [[ "$PROFILE" == release ]]; then BUILD_ARGS+=(--release); fi
     cargo "${BUILD_ARGS[@]}"
     METADATA="$(cargo metadata --manifest-path "$ROOT_DIR/Cargo.toml" --format-version 1 --no-deps)"
@@ -98,13 +102,22 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 /bin/cp "$BINARY" "$CONTENTS/MacOS/pokarak"
 /bin/chmod 755 "$CONTENTS/MacOS/pokarak"
 /bin/cp "$PLIST" "$CONTENTS/Info.plist"
+/usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$CONTENTS/Info.plist"
+/usr/bin/plutil -replace CFBundleVersion -string "$VERSION" "$CONTENTS/Info.plist"
 /bin/cp "$ICON" "$CONTENTS/Resources/Pokarak.icns"
 /bin/cp "$ROOT_DIR/assets/icons/spork.svg" "$CONTENTS/Resources/spork.svg"
 /bin/cp "$ROOT_DIR/LICENSE" "$CONTENTS/Resources/LICENSE"
 /usr/bin/ditto "$ROOT_DIR/assets/fonts" "$CONTENTS/Resources/fonts"
+/bin/cp "$ROOT_DIR/scripts/install.sh" "$CONTENTS/Resources/install.sh"
+/bin/cp "$ROOT_DIR/scripts/pokarak-cli.sh" "$CONTENTS/Resources/pokarak-cli.sh"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
-/usr/bin/codesign --force --sign - "$STAGED_APP"
+if [[ -n "${SIGNING_IDENTITY:-}" ]]; then
+    /usr/bin/codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$STAGED_APP"
+else
+    echo 'Signing ad hoc: this is not Apple Developer ID signing or notarization.'
+    /usr/bin/codesign --force --sign - "$STAGED_APP"
+fi
 /usr/bin/codesign --verify --strict "$STAGED_APP"
 if [[ -e "$APP_PATH" ]]; then /bin/mv "$APP_PATH" "$WORK_DIR/previous.app"; fi
 /bin/mv "$STAGED_APP" "$APP_PATH"

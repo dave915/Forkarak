@@ -9,6 +9,7 @@ pub(super) struct FileSelection {
     side: Option<Side>,
     selected: BTreeSet<PathBuf>,
     anchor: Option<PathBuf>,
+    explicit: bool,
 }
 
 pub(super) fn side_files(snapshot: &IndexSnapshot, side: Side) -> &[ChangedFile] {
@@ -25,6 +26,9 @@ impl FileSelection {
     }
     pub(super) fn is_empty(&self) -> bool {
         self.selected.is_empty()
+    }
+    pub(super) fn defers_refresh(&self) -> bool {
+        self.explicit && !self.is_empty()
     }
     pub(super) fn contains(&self, side: Side, path: &Path) -> bool {
         self.side == Some(side) && self.selected.contains(path)
@@ -60,6 +64,7 @@ impl FileSelection {
         let Some(end) = files.iter().position(|f| f.path == path) else {
             return;
         };
+        self.explicit = toggle || range;
         if range
             && let Some(start) = self
                 .anchor
@@ -158,6 +163,39 @@ mod tests {
         assert_eq!(selection.count(Side::Unstaged), 2);
         selection.clear();
         assert!(selection.is_empty());
+    }
+    #[test]
+    fn ordinary_preview_keeps_live_refresh_but_explicit_batch_marks_defer_it() {
+        let mut selection = FileSelection::default();
+        let files = files();
+        let root = Path::new("/w");
+        selection.select(
+            root,
+            1,
+            Side::Unstaged,
+            &files,
+            Path::new("a"),
+            false,
+            false,
+        );
+        assert_eq!(selection.count(Side::Unstaged), 1);
+        assert!(!selection.defers_refresh());
+        selection.select(root, 1, Side::Unstaged, &files, Path::new("b"), true, false);
+        assert!(selection.defers_refresh());
+        selection.select(
+            root,
+            1,
+            Side::Unstaged,
+            &files,
+            Path::new("c"),
+            false,
+            false,
+        );
+        assert!(!selection.defers_refresh());
+        selection.select(root, 1, Side::Unstaged, &files, Path::new("d"), false, true);
+        assert!(selection.defers_refresh());
+        selection.clear();
+        assert!(!selection.defers_refresh());
     }
     #[test]
     fn root_side_and_snapshot_changes_cannot_reuse_file_marks() {

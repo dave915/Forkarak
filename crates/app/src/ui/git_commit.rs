@@ -131,7 +131,7 @@ impl Pokarak {
     pub(super) fn commit_defers_auto_refresh(&self, window: &Window, cx: &App) -> bool {
         self.commit_ui.reading
             || !self.commit_ui.marked.is_empty()
-            || !self.commit_ui.files.is_empty()
+            || self.commit_ui.files.defers_refresh()
             || (self.inline_commit_active()
                 && self
                     .current

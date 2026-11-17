@@ -4,6 +4,7 @@
 //! bounded by a deadline and output limits. Credentials/SSH configuration are
 //! inherited. Explicit Git writes honor configured Git hooks; submodule operations
 //! are not recursive.
+pub mod branches;
 pub mod commit_actions;
 mod file_save;
 pub mod history_actions;
@@ -975,6 +976,11 @@ mod tests {
     mod branch_integration {
         use super::*;
         include!("operations/integration/tests.rs");
+    }
+
+    mod branch_basics {
+        use super::*;
+        include!("operations/branches/tests.rs");
     }
 
     mod branch_sync {

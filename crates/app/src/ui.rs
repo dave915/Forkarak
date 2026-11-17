@@ -985,6 +985,7 @@ impl Pokarak {
                                 .map(|(_, view)| view);
                             this.open_workspace_screen(view, window, cx);
                             this.refresh_branch_sync(window, cx);
+                            this.refresh_workflow_status(window, cx);
                             this.restore_git_completion(cx);
                         }
                         this.prefs.last_root = Some(root);
@@ -1126,6 +1127,7 @@ impl Pokarak {
                         app.status = "준비됨".into();
                         app.sync_git_history(window, cx);
                         app.refresh_branch_sync(window, cx);
+                        app.refresh_workflow_status(window, cx);
                     }
                     Err(error) => {
                         if app.auto_refresh.failed(token) {

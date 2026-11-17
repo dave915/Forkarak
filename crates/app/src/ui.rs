@@ -1,4 +1,5 @@
 mod analysis_feedback;
+mod language_manager;
 mod auto_refresh;
 mod branch_review;
 mod cli_control;
@@ -174,6 +175,7 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("워크트리 선택…", ChooseWorktree),
             MenuItem::action("작업·로그…", execution::ManageTasks),
             MenuItem::action("확장 관리…", execution::ManageExtensions),
+            MenuItem::action("언어 지원 관리…", language_manager::ManageLanguages),
             MenuItem::separator(),
             MenuItem::action("파일 찾기", FindFile),
             MenuItem::action("본문 검색", FindText),
@@ -311,6 +313,7 @@ pub struct Pokarak {
     updates: updates::Updates,
     error: Option<String>,
     analysis_feedback: AnalysisFeedback,
+    language_manager: language_manager::LanguageManager,
     status: String,
     results: Arc<[ResultExcerpt]>,
     result_revisions: HashMap<PathBuf, FileRevision>,
@@ -657,6 +660,7 @@ impl Pokarak {
             updates: updates::Updates::new(cx),
             error: None,
             analysis_feedback: AnalysisFeedback::default(),
+            language_manager: language_manager::LanguageManager::default(),
             status: "저장소를 열어 시작하세요".into(),
             results: Arc::default(),
             result_revisions: HashMap::new(),
@@ -690,6 +694,7 @@ impl Pokarak {
         this.install_git_lifecycle(window, cx);
         this.install_cli_control(window, cx);
         cx.on_release(|this, cx| {
+            this.cancel_language_installers(cx).detach();
             this.cancel_git_job();
             this.execution.shutdown();
             #[cfg(target_os = "macos")]
@@ -701,6 +706,7 @@ impl Pokarak {
         })
         .detach();
         cx.on_app_quit(|this, cx| {
+            let language_installers = this.cancel_language_installers(cx);
             this.cancel_git_job();
             this.execution.shutdown();
             this.persist(cx);
@@ -710,6 +716,7 @@ impl Pokarak {
             #[cfg(target_os = "macos")]
             let terminals = this.shutdown_terminals(cx);
             async move {
+                language_installers.await;
                 #[cfg(target_os = "macos")]
                 for terminal in terminals {
                     terminal.wait().await;
@@ -1590,6 +1597,7 @@ impl Pokarak {
     }
 
     fn stop_analysis(&mut self, cx: &mut Context<Self>) {
+        self.cancel_managed_language_request();
         self.navigation_request += 1;
         if let Some(cancel) = self.cancellation.take() {
             let _ = cancel.cancel();
@@ -2490,6 +2498,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&OpenGitHistory,w,cx|this.open_git_history(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitWorkflow,w,cx|this.open_git_workflow(w,cx)))
             .on_action(cx.listener(|this,_:&OpenSettings,w,cx|this.open_settings(w,cx)))
+            .on_action(cx.listener(|this,_:&language_manager::ManageLanguages,w,cx|this.open_language_manager(w,cx)))
             .on_action(cx.listener(|this,_:&execution::ManageTasks,w,cx|this.open_tasks(w,cx)))
             .on_action(cx.listener(|this,_:&execution::ManageExtensions,w,cx|this.open_extensions(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitActions,w,cx|this.open_git_actions(w,cx)))

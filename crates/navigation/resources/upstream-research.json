@@ -1,0 +1,139 @@
+{
+  "checked_on": "2026-11-18",
+  "warning": "Repository SPDX metadata is not a complete binary redistribution grant. Kotlin remains official first-use download only. Full Java distribution review is handled by packaging.",
+  "repositories": [
+    {
+      "repo": "typescript-language-server/typescript-language-server",
+      "updated_at": "2026-11-17T05:42:05Z",
+      "archived": false,
+      "url": "https://github.com/typescript-language-server/typescript-language-server",
+      "root_spdx_only": "NOASSERTION"
+    },
+    {
+      "repo": "eclipse-jdtls/eclipse.jdt.ls",
+      "updated_at": "2026-11-17T08:15:32Z",
+      "archived": false,
+      "url": "https://github.com/eclipse-jdtls/eclipse.jdt.ls",
+      "root_spdx_only": "EPL-2.0"
+    },
+    {
+      "repo": "Kotlin/kotlin-lsp",
+      "updated_at": "2026-11-17T05:42:25Z",
+      "archived": false,
+      "url": "https://github.com/Kotlin/kotlin-lsp",
+      "root_spdx_only": "Apache-2.0"
+    },
+    {
+      "repo": "rust-lang/rust-analyzer",
+      "updated_at": "2026-11-17T06:02:26Z",
+      "archived": false,
+      "url": "https://github.com/rust-lang/rust-analyzer",
+      "root_spdx_only": "Apache-2.0"
+    },
+    {
+      "repo": "microsoft/pyright",
+      "updated_at": "2026-11-17T06:56:12Z",
+      "archived": false,
+      "url": "https://github.com/microsoft/pyright",
+      "root_spdx_only": "NOASSERTION"
+    },
+    {
+      "repo": "golang/tools",
+      "updated_at": "2026-11-17T05:23:40Z",
+      "archived": false,
+      "url": "https://github.com/golang/tools",
+      "root_spdx_only": "BSD-3-Clause"
+    },
+    {
+      "repo": "GroovyLanguageServer/groovy-language-server",
+      "updated_at": "2026-05-19T20:41:56Z",
+      "archived": false,
+      "url": "https://github.com/GroovyLanguageServer/groovy-language-server",
+      "root_spdx_only": "Apache-2.0"
+    },
+    {
+      "repo": "hrsh7th/vscode-langservers-extracted",
+      "updated_at": "2024-06-04T09:21:12Z",
+      "archived": false,
+      "url": "https://github.com/hrsh7th/vscode-langservers-extracted",
+      "root_spdx_only": "MIT"
+    },
+    {
+      "repo": "vuejs/language-tools",
+      "updated_at": "2026-11-12T10:11:04Z",
+      "archived": false,
+      "url": "https://github.com/vuejs/language-tools",
+      "root_spdx_only": "MIT"
+    },
+    {
+      "repo": "sveltejs/language-tools",
+      "updated_at": "2026-11-16T00:53:47Z",
+      "archived": false,
+      "url": "https://github.com/sveltejs/language-tools",
+      "root_spdx_only": "MIT"
+    },
+    {
+      "repo": "redhat-developer/yaml-language-server",
+      "updated_at": "2026-11-11T15:56:36Z",
+      "archived": false,
+      "url": "https://github.com/redhat-developer/yaml-language-server",
+      "root_spdx_only": "MIT"
+    },
+    {
+      "repo": "tamasfe/taplo",
+      "updated_at": "2026-07-28T10:20:09Z",
+      "archived": false,
+      "url": "https://github.com/tamasfe/taplo",
+      "root_spdx_only": "MIT"
+    },
+    {
+      "repo": "eclipse-lemminx/lemminx",
+      "updated_at": "2026-11-17T09:00:38Z",
+      "archived": false,
+      "url": "https://github.com/eclipse-lemminx/lemminx",
+      "root_spdx_only": "EPL-2.0"
+    },
+    {
+      "repo": "sqls-server/sqls",
+      "updated_at": "2026-08-20T14:16:36Z",
+      "archived": false,
+      "url": "https://github.com/sqls-server/sqls",
+      "root_spdx_only": "MIT"
+    },
+    {
+      "repo": "artempyanykh/marksman",
+      "updated_at": "2026-09-14T20:33:04Z",
+      "archived": false,
+      "url": "https://github.com/artempyanykh/marksman",
+      "root_spdx_only": "MIT"
+    },
+    {
+      "repo": "bash-lsp/bash-language-server",
+      "updated_at": "2026-11-16T21:50:33Z",
+      "archived": false,
+      "url": "https://github.com/bash-lsp/bash-language-server",
+      "root_spdx_only": "MIT"
+    },
+    {
+      "repo": "rcjsuen/dockerfile-language-server",
+      "updated_at": "2025-10-15T20:56:10Z",
+      "archived": false,
+      "url": "https://github.com/rcjsuen/dockerfile-language-server",
+      "root_spdx_only": "MIT"
+    },
+    {
+      "repo": "owenrumney/make-ls",
+      "updated_at": "2026-10-31T11:14:39Z",
+      "archived": false,
+      "url": "https://github.com/owenrumney/make-ls",
+      "root_spdx_only": "MIT"
+    },
+    {
+      "repo": "spring-projects/spring-tools",
+      "root_spdx": "not inferred for binaries",
+      "extension_license": "EPL-1.0 plus embedded third-party licenses",
+      "url": "https://github.com/spring-projects/spring-tools/blob/main/vscode-extensions/vscode-spring-boot/README.md",
+      "properties_support": "application*.properties completion/validation/hover; requires STS Java classpath/data bridge and JDT extension bundles not yet implemented in Forkarak"
+    }
+  ]
+}

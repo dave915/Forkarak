@@ -174,12 +174,22 @@ fn java(
     c: &InstallControl,
     artifacts: &mut Vec<ToolArtifact>,
 ) -> Result<PathBuf> {
-    let source = "https://api.github.com/repos/adoptium/temurin25-binaries/releases/latest";
-    let release = io::json(source, scratch, c)?;
+    java_version(payload, scratch, c, artifacts, 25)
+}
+fn java_version(
+    payload: &Path,
+    scratch: &Path,
+    c: &InstallControl,
+    artifacts: &mut Vec<ToolArtifact>,
+    major: u16,
+) -> Result<PathBuf> {
+    let source =
+        format!("https://api.github.com/repos/adoptium/temurin{major}-binaries/releases/latest");
+    let release = io::json(&source, scratch, c)?;
     let prefix = if arch()? == "arm64" {
-        "OpenJDK25U-jdk_aarch64_mac_hotspot_"
+        format!("OpenJDK{major}U-jdk_aarch64_mac_hotspot_")
     } else {
-        "OpenJDK25U-jdk_x64_mac_hotspot_"
+        format!("OpenJDK{major}U-jdk_x64_mac_hotspot_")
     };
     let name = release["assets"]
         .as_array()
@@ -188,9 +198,9 @@ fn java(
         .find_map(|a| {
             a["name"]
                 .as_str()
-                .filter(|n| n.starts_with(prefix) && n.ends_with(".tar.gz"))
+                .filter(|n| n.starts_with(&prefix) && n.ends_with(".tar.gz"))
         })
-        .context("No Temurin JDK25 macOS asset")?;
+        .context("No compatible Temurin macOS asset")?;
     let asset = release["assets"]
         .as_array()
         .unwrap()
@@ -208,7 +218,7 @@ fn java(
             io::checksum(&format!("{url}.sha256.txt"), 64, scratch, c)?
         ),
     };
-    let a = descriptor(str_field(&release, "tag_name")?, url, &digest, source);
+    let a = descriptor(str_field(&release, "tag_name")?, url, &digest, &source);
     unpack(&a, &payload.join("java"), scratch, c)?;
     artifacts.push(a);
     find(&payload.join("java"), "/Contents/Home/bin/java")
@@ -754,6 +764,65 @@ fn go_tool(
         "sql" => "sqls",
         _ => "make-ls",
     });
+    let build_info = io::run(
+        &go,
+        &[
+            "version".into(),
+            "-m".into(),
+            exe.to_string_lossy().into_owned(),
+        ],
+        &work,
+        &env,
+        c,
+        None,
+    )?;
+    for line in build_info.lines() {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.first() == Some(&"dep") && fields.len() >= 4 && fields[3].starts_with("h1:") {
+            let escaped: String = fields[1]
+                .chars()
+                .flat_map(|ch| {
+                    if ch.is_ascii_uppercase() {
+                        vec!['!', ch.to_ascii_lowercase()]
+                    } else {
+                        vec![ch]
+                    }
+                })
+                .collect();
+            artifacts.push(descriptor(
+                fields[2],
+                &format!("https://proxy.golang.org/{escaped}/@v/{}.zip", fields[2]),
+                fields[3],
+                &format!("https://sum.golang.org/lookup/{escaped}@{}", fields[2]),
+            ));
+        }
+    }
+    // Retain source module metadata and dependency legal files alongside built tools.
+    let license_root = payload.join("licenses");
+    fs::create_dir(&license_root)?;
+    let modules = scratch.join("gopath/pkg/mod");
+    for legal in files(&modules, &|p| {
+        p.file_name().is_some_and(|name| {
+            let n = name.to_string_lossy().to_ascii_lowercase();
+            n.starts_with("license")
+                || n.starts_with("notice")
+                || n.starts_with("copying")
+                || n == "copyright"
+                || n == "patents"
+        })
+    })? {
+        c.check()?;
+        let relative = legal.strip_prefix(&modules)?;
+        let target = license_root.join(relative);
+        fs::create_dir_all(target.parent().context("Missing legal file parent")?)?;
+        fs::copy(&legal, target)?;
+    }
+    let source = PathBuf::from(str_field(&record, "Dir")?);
+    for name in ["go.mod", "go.sum"] {
+        if source.join(name).is_file() {
+            fs::copy(source.join(name), license_root.join(name))?;
+        }
+    }
     let config = env_config(
         match package {
             "go" => "go",
@@ -887,6 +956,20 @@ fn rust_toolchain(
                 )?;
             }
         }
+        let legal = payload.join("licenses").join(name);
+        fs::create_dir_all(&legal)?;
+        for entry in fs::read_dir(&root)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if entry.file_type()?.is_file()
+                && (name.starts_with("license")
+                    || name == "copyright"
+                    || name == "notice"
+                    || name == "readme.md")
+            {
+                fs::copy(entry.path(), legal.join(entry.file_name()))?;
+            }
+        }
         artifacts.push(a);
     }
     Ok(destination)
@@ -918,7 +1001,7 @@ fn groovy(
         fs::copy(file, &target)?;
         jars.push(target);
     }
-    let java = java(payload, scratch, c, artifacts)?;
+    let java = java_version(payload, scratch, c, artifacts, 21)?;
     let javac = java.parent().unwrap().join("javac");
     let classes = payload.join("classes");
     fs::create_dir(&classes)?;
@@ -1078,7 +1161,13 @@ pub(super) fn install(
     let mut notices: Vec<String> = files(payload, &|p| {
         p.file_name().is_some_and(|s| {
             let n = s.to_string_lossy().to_ascii_lowercase();
-            n.starts_with("license") || n.starts_with("notice") || n == "legal" || n == "release"
+            n.starts_with("license")
+                || n.starts_with("notice")
+                || n.starts_with("copying")
+                || n == "copyright"
+                || n == "patents"
+                || n == "legal"
+                || n == "release"
         })
     })?
     .iter()

@@ -670,7 +670,11 @@ fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
     file.write_all(b"\n")?;
     file.as_file().sync_all()?;
     file.persist(path).map_err(|e| e.error)?;
-    fs::File::open(path.parent().unwrap())?.sync_all()?;
+    // The rename is the commit point. A directory-fsync error after it must not
+    // make callers delete the now-active payload. File data was synced above.
+    if let Ok(parent) = fs::File::open(path.parent().unwrap()) {
+        let _ = parent.sync_all();
+    }
     Ok(())
 }
 
@@ -802,6 +806,34 @@ mod tests {
             "2.0"
         );
         assert!(Path::new(&old.servers[0].program).exists());
+    }
+    #[test]
+    fn public_update_cancel_while_locked_retains_active_install() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().canonicalize().unwrap();
+        let tools = ManagedTools::new(root.clone(), None).unwrap();
+        let old = tool(&root, "1.0");
+        let mut manifest = Manifest {
+            schema_version: 1,
+            ..Default::default()
+        };
+        manifest.packages.insert("python".into(), old);
+        atomic_json(&root.join("managed-tools.json"), &manifest).unwrap();
+        let before = fs::read(root.join("managed-tools.json")).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join("install.lock"))
+            .unwrap();
+        fs2::FileExt::lock_exclusive(&lock).unwrap();
+        let update = tools.begin_update("python").unwrap();
+        update.cancel().unwrap();
+        assert!(update.wait().is_err());
+        assert_eq!(update.snapshot().phase, InstallPhase::Cancelled);
+        assert_eq!(fs::read(root.join("managed-tools.json")).unwrap(), before);
+        fs2::FileExt::unlock(&lock).unwrap();
     }
     #[test]
     fn bundle_requires_internal_resources_and_preserves_distribution() {

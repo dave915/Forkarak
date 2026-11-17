@@ -336,12 +336,16 @@ pub fn language_catalog() -> Vec<LanguageSupport> {
             })
         })
         .collect();
-    for (language, name) in [
-        ("properties", "Properties"),
-        ("dotenv", "Environment files"),
-    ] {
-        result.push(LanguageSupport{language:language.into(),name:name.into(),package:None,license:String::new(),source_url:String::new(),limitations:vec!["Viewing and text search only; no suitable maintained standalone language server verified.".into()]});
-    }
+    result.push(LanguageSupport {
+        language:"properties".into(),name:"Properties / Spring Boot configuration".into(),package:None,
+        license:"Spring Tools extension: EPL-1.0 plus included dependency notices".into(),
+        source_url:"https://github.com/spring-projects/spring-tools/blob/main/vscode-extensions/vscode-spring-boot/README.md".into(),
+        limitations:vec!["Generic Properties: viewing and text search in this backend. Maintained free Spring Tools supports application*.properties completion, validation and hover, but requires Java project classpath metadata. Forkarak does not yet supply the STS addClasspathListener/javaType/javaLocation bridge or matching JDT extension bundles; a managed JVM alone is insufficient. No Spring semantic support is claimed until that bridge and explicit import flow are integrated.".into()],
+    });
+    result.push(LanguageSupport {
+        language:"dotenv".into(),name:"Environment files".into(),package:None,license:String::new(),source_url:String::new(),
+        limitations:vec!["Viewing and text search in this backend. No generic standalone dotenv adapter has been verified; framework-specific language servers do not establish general dotenv semantic support.".into()],
+    });
     result
 }
 

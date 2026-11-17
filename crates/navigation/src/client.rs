@@ -132,6 +132,25 @@ impl Client {
                     .replace("{workspace}", &workspace_path.to_string_lossy())
             })
             .collect();
+        let managed_tsserver = if crate::config::family(&config.language) == "typescript"
+            && config.args.iter().any(|arg| arg == "FORKARAK_MANAGED=1")
+        {
+            if let Some(index) = args.iter().position(|arg| arg == "--tsserver-path") {
+                let path = args
+                    .get(index + 1)
+                    .context("Managed TypeScript SDK path missing")?
+                    .clone();
+                if !Path::new(&path).is_absolute() || !Path::new(&path).is_file() {
+                    bail!("Managed TypeScript SDK is unavailable");
+                }
+                args.drain(index..=index + 1);
+                Some(path)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         if config.language == "vue"
             && let Some(index) = args.iter().position(|a| a == "--tsdk")
         {
@@ -182,8 +201,13 @@ impl Client {
                 "references": {"includeDecompiledSources": false}
             },
             "rust-analyzer": {"cargo":{"buildScripts":{"enable":false},"autoreload":false},"procMacro":{"enable":false},"checkOnSave":false,"check":{"enable":false}},
-            "yaml": {"schemaStore":{"enable":false},"schemaDownload":{"enable":false}},
-            "xml": {"downloadExternalResources":{"enabled":false},"validation":{"resolveExternalEntities":false}},
+            "json":{"validate":{"enable":true},"format":{"enable":true},"schemas":[]},
+            "html":{"validate":{"scripts":true,"styles":true},"format":{"enable":true}},
+            "css":{"validate":true,"format":{"enable":true}},
+            "scss":{"validate":true,"format":{"enable":true}},
+            "less":{"validate":true,"format":{"enable":true}},
+            "yaml": {"validate":true,"completion":true,"hover":true,"schemaStore":{"enable":false},"schemaDownload":{"enable":false}},
+            "xml": {"downloadExternalResources":{"enabled":false},"validation":{"enabled":true,"resolveExternalEntities":false}},
             "bashIde":{"shellcheckPath":"","shfmt":{"path":""}}
         });
         let mut client = Self {
@@ -216,6 +240,9 @@ impl Client {
                 "settings": client.settings,
                 "provideFormatter": true
             });
+            if let Some(path) = &managed_tsserver {
+                init_options["tsserver"]["path"] = json!(path);
+            }
             // No build, installation, executable-command, edit, or dynamic-registration capability.
             if jetbrains {
                 init_options = json!({"indexDir": workspace_path.join("index").to_string_lossy()});

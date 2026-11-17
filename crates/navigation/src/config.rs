@@ -264,7 +264,7 @@ fn installed_java(program: &str) -> Option<PathBuf> {
 pub(crate) fn java_program(config: &ServerConfig) -> Result<PathBuf> {
     installed_java(&config.program).ok_or_else(|| {
         anyhow!(
-            "Language server unavailable for java: {} 실행 파일을 찾을 수 없거나 실행 권한이 없습니다.\nJDT LS 설치 명령은 brew install jdtls 입니다. 또는 Forkarak 소스 디렉터리에서 scripts/setup-language-servers.sh를 직접 실행하세요. 직접 설치했다면 ~/.config/pokarak/language-servers.json의 java program에 실행 파일의 절대 경로와 필요한 args를 지정하고 분석을 다시 활성화하세요.",
+            "Language server unavailable for java: {} 실행 파일을 찾을 수 없거나 실행 권한이 없습니다.\n설정의 언어 도구 관리에서 Java 지원을 설치한 뒤 분석을 다시 활성화하세요. 앱이 필요한 런타임을 관리하므로 터미널 설치는 필요하지 않습니다. 선택적인 기존 수동 설정: brew install jdtls 또는 scripts/setup-language-servers.sh. 직접 설치했다면 ~/.config/pokarak/language-servers.json의 java program에 실행 파일의 절대 경로와 필요한 args를 지정하고 분석을 다시 활성화하세요.",
             config.program
         )
     })
@@ -280,7 +280,7 @@ pub(crate) fn kotlin_program(config: &ServerConfig) -> Result<PathBuf> {
     };
     let unavailable = |path: &Path| {
         anyhow!(
-            "Language server unavailable for kotlin: {} 실행 파일을 찾을 수 없거나 실행 권한이 없습니다.\nJetBrains Kotlin LSP 설치 명령은 brew install JetBrains/utils/kotlin-lsp 입니다. 직접 설치했다면 ~/.config/pokarak/language-servers.json의 kotlin program에 bin/intellij-server의 절대 경로를 지정하고 분석을 다시 활성화하세요.",
+            "Language server unavailable for kotlin: {} 실행 파일을 찾을 수 없거나 실행 권한이 없습니다.\n설정의 언어 도구 관리에서 Kotlin 지원을 공식 배포본으로 설치한 뒤 분석을 다시 활성화하세요. 프로젝트 가져오기 허용은 별도로 유지됩니다. 선택적인 기존 수동 설정: brew install JetBrains/utils/kotlin-lsp. 직접 설치했다면 ~/.config/pokarak/language-servers.json의 kotlin program에 bin/intellij-server의 절대 경로를 지정하고 분석을 다시 활성화하세요.",
             path.display()
         )
     };

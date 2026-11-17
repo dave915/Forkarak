@@ -22,14 +22,14 @@ v0.2.0까지의 `포카락.app`은 앱을 종료한 뒤 위 설치 명령을 한
 ~/.local/bin/pokarak update
 ```
 
-v0.2.1 이하에서 최신 버전 확인이 403으로 실패하면 `~/.local/bin/pokarak update --version v0.2.2`로 해당 조회를 건너뛸 수 있다. v0.2.2부터는 공개 릴리스 페이지의 리디렉션으로 태그를 확인한다. 패키지 또는 체크섬 다운로드 자체가 거부되면 설치 프로그램이 실패한 URL을 표시한다.
+v0.2.1 이하에서 최신 버전 확인이 403으로 실패하면 `~/.local/bin/pokarak update --version v0.2.3`로 해당 조회를 건너뛸 수 있다. v0.2.2부터는 공개 릴리스 페이지의 리디렉션으로 태그를 확인한다. 패키지 또는 체크섬 다운로드 자체가 거부되면 설치 프로그램이 실패한 URL을 표시한다.
 
 설치 스크립트를 내려받아 옵션을 지정할 수도 있다. `--version`은 버전을 고정할 때 사용하며 해당 GitHub 릴리스가 있어야 한다.
 
 ```sh
 installer="$(mktemp)"
 curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh -o "$installer" && \
-  /bin/bash "$installer" --version v0.2.2 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
+  /bin/bash "$installer" --version v0.2.3 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
 rm -f "$installer"
 ```
 
@@ -69,8 +69,8 @@ git push origin HEAD v0.2.0
 로컬 패키징은 다음과 같다. `--binary`는 기존 arm64 실행 파일을 사용하며 다시 빌드하지 않는다.
 
 ```sh
-./scripts/release-macos.sh --version v0.2.2
-./scripts/release-macos.sh --version v0.2.2 --binary /absolute/path/to/pokarak
+./scripts/release-macos.sh --version v0.2.3
+./scripts/release-macos.sh --version v0.2.3 --binary /absolute/path/to/pokarak
 python3 scripts/test-distribution.py
 ```
 
@@ -83,7 +83,7 @@ python3 scripts/test-distribution.py
 ```sh
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 NOTARY_KEYCHAIN_PROFILE='pokarak-notary' \
-./scripts/release-macos.sh --version v0.2.2
+./scripts/release-macos.sh --version v0.2.3
 ```
 
 이 경로는 hardened runtime과 timestamp로 서명하고, `notarytool submit --wait` 성공 후 ticket을 staple한 번들을 배포한다. 실제 계정이 없어 공증 경로의 Apple 서비스 연동은 검증되지 않았다. 기본 GitHub 워크플로는 인증서와 공증 자격 증명을 구성하지 않으며 ad-hoc 빌드를 게시한다. 공증에는 [Apple이 요구하는 Developer ID 서명](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)이 필요하다. 공증한 앱에도 일반적인 첫 실행 확인창은 남을 수 있다.

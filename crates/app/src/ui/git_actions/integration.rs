@@ -103,7 +103,7 @@ impl Pokarak {
         });
     }
 
-    fn confirm_integration(
+    pub(super) fn confirm_integration(
         &mut self,
         kind: IntegrationKind,
         target: BranchIntegration,

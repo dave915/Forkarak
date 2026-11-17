@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import plistlib
 import select
+import shlex
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,21 @@ class DistributionTests(unittest.TestCase):
         shutil.copy2(ROOT / "LICENSE", cls.source / "LICENSE")
         # The authored fixture version stays stable across application releases.
         (cls.source / "Cargo.toml").write_text('[workspace]\n[workspace.package]\nversion = "0.1.0"\n')
+        # Redirect only this authored helper copy: the suite must never invoke
+        # the activating system open CLI. Execute the signed C fixture directly
+        # while preserving the exact LaunchServices argv and error/EOF contract.
+        fixture_open = cls.base / "fixture-open"
+        fixture_open.write_text("#!" + sys.executable + "\n" + '''import json,os,pathlib,sys
+args=sys.argv[1:]
+assert args[0]=='-n'
+app=pathlib.Path(args[1])
+assert not args[2:] or args[2]=='--args'
+with open(os.environ['FORKARAK_OPEN_LOG'],'a') as log: log.write(json.dumps(args)+'\\n')
+os.execv(str(app/'Contents/MacOS/forkarak'),[str(app/'Contents/MacOS/forkarak'),*args[3:]])
+''')
+        fixture_open.chmod(0o755)
+        helper = cls.source / "scripts/update-handoff.sh"
+        helper.write_text(helper.read_text().replace("/usr/bin/open", shlex.quote(str(fixture_open))))
         cls.args_file = cls.base / "launched-arguments.txt"
         cls.launched_exe = cls.base / "launched-executable.txt"
         cfile = cls.base / "stub.c"
@@ -109,7 +125,7 @@ else:
         self.log = self.case / "curl.log"
         self.release = self.case / "release"
         shutil.copytree(self.good_release, self.release)
-        self.env = {**os.environ, "HOME": str(self.home), "PATH": str(self.mockbin) + ":" + os.environ["PATH"], "FORKARAK_FIXTURE_RELEASE": str(self.release), "FORKARAK_CURL_LOG": str(self.log), "FORKARAK_LANGUAGE_RESOURCES": str(self.language_resources)}
+        self.env = {**os.environ, "HOME": str(self.home), "PATH": str(self.mockbin) + ":" + os.environ["PATH"], "FORKARAK_FIXTURE_RELEASE": str(self.release), "FORKARAK_CURL_LOG": str(self.log), "FORKARAK_OPEN_LOG": str(self.case / "open-argv.jsonl"), "FORKARAK_LANGUAGE_RESOURCES": str(self.language_resources)}
 
     def install(self, *args, expected=0):
         result = subprocess.run(["/bin/bash", str(self.source / "scripts/install.sh"), *args], capture_output=True, text=True, env=self.env)
@@ -220,6 +236,8 @@ else:
                 break
             time.sleep(0.05)
         self.assertEqual(self.args_file.read_text().splitlines(), ["--session-dir", str(session)])
+        self.assertEqual(json.loads((self.case / "open-argv.jsonl").read_text().splitlines()[-1]),
+                         ["-n", str(self.app.resolve()), "--args", "--session-dir", str(session)])
         self.assertTrue(self.app.joinpath("Contents/MacOS/forkarak").samefile(self.launched_exe.read_text()))
         self.assertNotEqual(self.app.stat().st_ino, original)
         self.assertEqual(legacy.stat().st_ino, legacy_inode)
@@ -295,8 +313,9 @@ else:
 
     def test_failed_relaunch_restores_and_reopens_original_with_session(self):
         self.zip_install()
-        # Simulate LaunchServices rejecting the new bundle precisely once. The
-        # rollback and reopening of the original use the real system tools.
+        # Simulate the launch transport rejecting the new bundle exactly once.
+        # Validators and rollback file operations are real; the authored launch
+        # transport directly executes the C fixture and records its exact argv.
         helper = self.app / "Contents/Resources/update-handoff.sh"
         helper.write_text(helper.read_text().replace(
             "reopen_app() {", 'reopen_app() {\n    [[ "$(bundle_identity "$APP_PATH")" == "$ORIGINAL_ID" ]] || return 1'))

@@ -1,4 +1,4 @@
-# 포카락
+# Forkarak · 포카락
 <!-- impeccable:product-schema 1 -->
 
 ## Platform
@@ -11,7 +11,7 @@ User selected Rust and delegated the UI choice. The confirmed UI is GPUI + GPUI 
 A Java/Kotlin/Spring developer who also reads frontend code and uses AI agents across Git worktrees.
 
 ## Product Purpose
-Quickly understand AI-produced code changes, inspect surrounding code, follow definitions and usages, and return to the original review location.
+Forkarak is a native macOS Git client for exploring commit graphs, comparing worktrees, and staging individual files, hunks or lines. Developers can inspect AI-generated changes, follow definitions and usages, and return to the original review location.
 
 ## Operating Context
 Local Git repositories and multiple worktrees. AI or an external IDE can continue modifying files during review. Users need to inspect both uncommitted changes and changes already committed on a branch.
@@ -31,7 +31,7 @@ Local Git repositories and multiple worktrees. AI or an external IDE can continu
 - The graph's working-changes row supports line, hunk and file staging and unstaging, a per-worktree commit draft and commit submission. Advanced history editing and Spring-specific analysis are later scope.
 
 ## Brand Commitments
-Name: 포카락. Project/English spelling: pokarak. Mark: the user's spork reference, a spoon ending in short fork tines.
+The English name is Forkarak and the Korean name is 포카락. The mark is a spork with a spoon bowl and short fork tines.
 
 ## Product Principles
 1. Preserve the reading location across worktrees and live updates.

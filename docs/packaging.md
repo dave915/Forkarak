@@ -15,20 +15,20 @@
 `--run`은 `--debug` 또는 `--binary`와 함께 쓸 수 있다. `--debug`와 `--binary`는 함께 쓰지 않는다. `--binary`의 상대 경로는 명령을 실행한 디렉터리를 기준으로 한다.
 
 ```text
-dist/Pokarak.app/
+dist/Forkarak.app/
   Contents/
     Info.plist
     PkgInfo
-    MacOS/pokarak
+    MacOS/forkarak
     Resources/
-      Pokarak.icns
+      Forkarak.icns
       spork.svg
       LICENSE
       fonts/                 TTF, OFL 원문, 출처, 체크섬
     _CodeSignature/          로컬 ad-hoc 서명
 ```
 
-메타데이터 원본은 `assets/macos/Info.plist`다. 이름 `Pokarak`, 식별자 `dev.pokarak.app`, 최소 OS `13.0`, 선호 아키텍처 `arm64`를 선언한다. 버전은 패키징할 때 `Cargo.toml`의 `workspace.package.version`으로 갱신한다. 실행 파일은 `pokarak`이다. 앱의 창 제목은 별도로 앱 코드에서 지정한다. CLI 설치·업데이트 스크립트도 `Contents/Resources/`에 포함된다.
+메타데이터 원본은 `assets/macos/Info.plist`다. 이름 `Forkarak`, 식별자 `dev.pokarak.app`, 최소 OS `13.0`, 선호 아키텍처 `arm64`를 선언한다. 버전은 패키징할 때 `Cargo.toml`의 `workspace.package.version`으로 갱신한다. 실행 파일은 `forkarak`이다. 앱의 창 제목은 별도로 앱 코드에서 지정한다. CLI 설치·업데이트 스크립트도 `Contents/Resources/`에 포함된다.
 
 ## 빌드와 교체 과정
 
@@ -37,7 +37,7 @@ dist/Pokarak.app/
 3. `cargo metadata --no-deps`의 `target_directory`를 사용한다. 따라서 `CARGO_TARGET_DIR` 또는 Cargo 설정의 target 디렉터리를 반영한다.
 4. 입력 바이너리의 실행 권한과 `lipo -archs`를 확인한다. Intel 전용 및 universal 바이너리는 거부한다.
 5. `dist/` 아래 임시 디렉터리에서 새 번들을 구성하고 서명·서명 검증을 한다. 기본은 ad-hoc이며 `SIGNING_IDENTITY`가 있으면 hardened runtime과 timestamp를 포함한 서명을 사용한다.
-6. 기존 출력이 Pokarak 번들인지 확인한 뒤 교체한다. 새 번들이 준비되기 전에 기존 앱을 지우지 않으며, 교체 중 오류가 나면 기존 번들의 복원을 시도한다. 출력 경로가 심볼릭 링크면 중단한다.
+6. 기존 출력이 Forkarak 번들인지 확인한 뒤 교체한다. 새 번들이 준비되기 전에 기존 앱을 지우지 않으며, 교체 중 오류가 나면 기존 번들의 복원을 시도한다. 출력 경로가 심볼릭 링크면 중단한다.
 7. `--run`이면 `open`으로 번들을 실행한다.
 
 `--binary`는 기존 바이너리를 다시 컴파일하지 않는다. 해당 바이너리의 최소 OS, 외부 라이브러리 의존성, 리소스 요구사항은 빌드를 담당한 쪽에서 확인해야 한다. 번들 폰트는 런타임 폰트 등록을 대신하지 않는다. 이 스크립트는 별도의 외부 dylib 수집을 수행하지 않는다.
@@ -57,10 +57,10 @@ dist/Pokarak.app/
 
 ```sh
 ./scripts/package-macos.sh --binary /absolute/path/to/pokarak
-plutil -lint "dist/Pokarak.app/Contents/Info.plist"
-lipo -archs "dist/Pokarak.app/Contents/MacOS/pokarak"
-codesign --verify --strict --verbose=2 "dist/Pokarak.app"
-open "dist/Pokarak.app"
+plutil -lint "dist/Forkarak.app/Contents/Info.plist"
+lipo -archs "dist/Forkarak.app/Contents/MacOS/forkarak"
+codesign --verify --strict --verbose=2 "dist/Forkarak.app"
+open "dist/Forkarak.app"
 ```
 
 Dock/Finder의 이름·아이콘, 한글 표시, 폰트 굵기와 코드 서체, 실제 저장소 열기를 별도로 확인한다. 화면 검증 항목은 DESIGN.md를 따른다. 기본 생성 결과는 ad-hoc 서명이며 Apple 공증이 없다. GitHub 릴리스용 압축, CLI 설치·업데이트, 선택적 Developer ID 서명·공증 경로는 [배포 문서](distribution.md)를 참고한다. DMG 생성과 앱 내부 자동 업데이트는 지원하지 않는다.

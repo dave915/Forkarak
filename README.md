@@ -1,28 +1,24 @@
-<h1 align="center"><img src="assets/icons/app-icon-1024.png" width="48" alt="" valign="middle"> 포카락 · Pokarak</h1>
+<h1 align="center"><img src="assets/icons/app-icon-1024.png" width="48" alt="" valign="middle"> Forkarak · 포카락</h1>
 
-<p align="center">여러 워크트리의 변경 사항을 커밋 그래프에서 살펴보고, 원하는 줄만 골라 커밋하는 macOS용 Git 클라이언트입니다.</p>
+<p align="center">Forkarak은 커밋 그래프에서 브랜치와 워크트리를 탐색하고, 변경 전후를 비교해 원하는 줄만 커밋할 수 있는 macOS용 Git 클라이언트입니다.</p>
 
-<p align="center"><a href="#설치"><strong>macOS 설치 방법</strong></a> · <a href="https://github.com/dave915/pokarak/releases/latest/download/Pokarak-macos-arm64.zip">Pokarak.app 다운로드</a> · <a href="https://github.com/dave915/pokarak/releases/latest">최신 릴리스</a></p>
+<p align="center"><a href="#설치"><strong>macOS 설치 방법</strong></a> · <a href="https://github.com/dave915/Forkarak/releases/latest/download/Forkarak-macos-arm64.zip">Forkarak.app 다운로드</a> · <a href="https://github.com/dave915/Forkarak/releases/latest">최신 릴리스</a></p>
 
 ![포카락 전체 화면. 상단에 Git 작업 아이콘과 터미널 버튼이 있고, 커밋 그래프 아래에는 선택한 배송비 변경 커밋의 좌우 diff가 열려 있습니다.](docs/images/graph-toolbar.png)
 
-*Pokarak v0.2.4에서 배송 옵션 변경 커밋을 선택하고 TypeScript 파일을 좌우로 비교한 화면입니다.*
+*배송 옵션을 수정한 커밋을 선택해 TypeScript 파일의 변경 전후를 비교하는 화면입니다.*
 
 ## 설치
 
 Apple Silicon Mac(M1 이상), macOS 13 이상에서 터미널에 다음 명령을 붙여 넣으세요.
 
 ```sh
-/bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh | /bin/bash'
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/Forkarak/releases/latest/download/install.sh | /bin/bash'
 ```
 
-기존에 `포카락.app`으로 설치했다면 앱을 종료하고 위 설치 명령을 한 번 실행하세요. 같은 위치의 앱 이름이 `Pokarak.app`으로 바뀝니다.
+설치 후 `~/Applications/Forkarak.app`을 열고 **⌘O**로 저장소를 선택하세요. 터미널에서는 저장소 폴더에서 `~/.local/bin/forkarak .`을 실행하세요. 이전 `Pokarak.app`을 사용했다면 위 명령으로 Forkarak을 새로 설치할 수 있습니다.
 
-`~/Applications/Pokarak.app`을 열고 **⌘O**로 저장소를 선택하세요. 터미널에서는 저장소 폴더에서 `~/.local/bin/pokarak .`으로 열 수 있습니다.
-
-v0.2.5부터 앱을 사용하는 동안 새 버전이 나오면 창에 알림이 표시됩니다. **업데이트 다운로드**를 누르고 작업을 계속하세요. 준비가 끝나면 **업데이트하고 재시작**을 눌러 보고 있던 워크트리로 돌아갈 수 있습니다. **설정 → 업데이트 확인**으로 직접 확인할 수도 있습니다.
-
-v0.2.4 이하에서는 앱을 종료하고 `~/.local/bin/pokarak update`를 한 번 실행하세요. v0.2.1 이하에서 403 오류가 나오면 위 설치 명령을 다시 실행하세요.
+앱을 사용하는 동안 새 버전이 나오면 창에 알림이 표시됩니다. **업데이트 다운로드**를 누르고 작업을 계속하세요. 준비가 끝나면 **업데이트하고 재시작**을 눌러 보고 있던 워크트리로 돌아갈 수 있습니다. **설정 → 업데이트 확인**으로 직접 확인할 수도 있습니다.
 
 ## 주요 기능
 

@@ -1,4 +1,4 @@
-# Pokarak engineering
+# Forkarak engineering
 
 Read PRODUCT.md and DESIGN.md. Native macOS Rust/GPUI application; do not replace with a webview.
 

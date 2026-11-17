@@ -53,8 +53,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           path: |
-            dist/release/Pokarak-macos-arm64.zip
-            dist/release/pokarak-macos-arm64.tar.gz
+            dist/release/Forkarak-macos-arm64.zip
+            dist/release/forkarak-macos-arm64.tar.gz
             dist/release/SHA256SUMS
             dist/release/install.sh
             dist/release/source-revision.txt
@@ -82,19 +82,19 @@ jobs:
             exit 1
           fi
           cat > release/notes.md <<'NOTES'
-          Apple Silicon Mac용 포카락입니다. macOS 13 이상이 필요합니다.
+          Forkarak(포카락)은 커밋 그래프, 워크트리 비교, 줄 단위 스테이징을 지원하는 Apple Silicon Mac용 Git 클라이언트입니다. macOS 13 이상이 필요합니다.
 
           설치 (Rust, Xcode, GitHub 로그인 불필요):
           ```sh
-          /bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh | /bin/bash'
+          /bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/Forkarak/releases/latest/download/install.sh | /bin/bash'
           ```
-          설치 후 앱은 `~/Applications/Pokarak.app`, 명령은 `~/.local/bin/pokarak`에 있습니다.
-          v0.2.5부터 앱에서 **설정 → 업데이트 확인**을 사용할 수 있습니다. 새 버전 알림에서 **업데이트 다운로드**를 누르고 준비가 끝나면 **업데이트하고 재시작**을 선택하세요. 터미널에서는 앱을 종료하고 `~/.local/bin/pokarak update`를 실행하세요.
+          설치 후 앱은 `~/Applications/Forkarak.app`, 명령은 `~/.local/bin/forkarak`에 있습니다.
+          v0.2.6부터 앱에서 **설정 → 업데이트 확인**을 사용할 수 있습니다. 새 버전 알림에서 **업데이트 다운로드**를 누르고 준비가 끝나면 **업데이트하고 재시작**을 선택하세요. 터미널에서는 앱을 종료하고 `~/.local/bin/forkarak update`를 실행하세요.
 
           이번 빌드는 ad-hoc 서명이며 Apple Developer ID 공증은 없습니다.
           NOTES
           gh release create "$RELEASE_TAG" \
-            release/Pokarak-macos-arm64.zip release/pokarak-macos-arm64.tar.gz release/SHA256SUMS \
+            release/Forkarak-macos-arm64.zip release/forkarak-macos-arm64.tar.gz release/SHA256SUMS \
             release/install.sh release/source-revision.txt \
-            --verify-tag --latest --title "Pokarak $RELEASE_TAG" \
+            --verify-tag --latest --title "Forkarak $RELEASE_TAG" \
             --notes-file release/notes.md

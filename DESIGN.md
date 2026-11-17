@@ -1,4 +1,4 @@
-# Pokarak native design
+# Forkarak native design
 
 Mode: operate/read. A compact developer review surface, with a steel spork mark and a cool blue-gray palette. The existing conversation supplies the product brief and authorizes the build.
 

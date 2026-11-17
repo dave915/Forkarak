@@ -1,6 +1,6 @@
 # Native macOS verification record
 
-Recorded 2026-11-17 (Asia/Seoul). Pokarak is a Rust, GPUI + GPUI Kit macOS desktop application. This record separates test logs, root-reported interaction checks, source inspection and pending work. It is not a web or iOS verification report.
+Recorded 2026-11-17 (Asia/Seoul). Forkarak is a Rust, GPUI + GPUI Kit macOS desktop application. This record separates test logs, root-reported interaction checks, source inspection and pending work. It is not a web or iOS verification report.
 
 The documentation pass inspected `PRODUCT.md`, `DESIGN.md`, `README.md` and the app source. The documentation worktree starts at `d46873b8b96a62c39de81b41abf6d3a9f3cb953f`; its app source is older than the implementation documented here. The updated `main.rs`, `prefs.rs`, `theme.rs`, settings/sidebar methods and reader/comparison rendering were read from `/Users/han/dev/pokarak`. They include applied comparison state, full diff lines, light/dark palettes, System appearance, persisted settings and the Worktrees/Branches selector. At inspection these root changes were uncommitted. The sidecar's `provenance.sourceSha256` records all five app source files; `ui.rs` was `bd1eba55a47b35713c1a93c4a5db1ab2d10dd7067257e6b6c092c832b13dd997` and `theme.rs` was `3f4261c2f1fc9b9f2c438258b361a2eec801827f9af62dd0590726bdbe1d0bc8`. These identify inspected source, not a release binary.
 
@@ -115,7 +115,7 @@ Managed tools default to `~/.local/share/pokarak/tools`; the real tests also acc
 Use an existing bundle for UI reproduction, so launching performs no Cargo build. Replace example project paths with disposable fixture repositories. A fresh `--session-dir` isolates UI state and trust from the normal session. These are separate launches; close the previous QA instance before changing cases.
 
 ```sh
-POKARAK_APP='/Users/han/dev/pokarak/dist/포카락.app'
+POKARAK_APP="$PWD/dist/Forkarak.app"
 
 # Empty/welcome at the default size, using a fresh session directory.
 open -n "$POKARAK_APP" --args \
@@ -129,7 +129,7 @@ open -n "$POKARAK_APP" --args \
 # Existing-bundle inspection; does not rebuild or re-sign.
 du -sh "$POKARAK_APP"
 plutil -lint "$POKARAK_APP/Contents/Info.plist"
-lipo -archs "$POKARAK_APP/Contents/MacOS/pokarak"
+lipo -archs "$POKARAK_APP/Contents/MacOS/forkarak"
 codesign --verify --deep --strict "$POKARAK_APP"
 ```
 

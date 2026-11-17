@@ -501,3 +501,70 @@ fn exact_copy_in_followed_history_identifies_the_copy_source() {
     assert_eq!(patch.patch, "copy from \"original\"\ncopy to \"copy\"\n");
     assert_eq!(patch.old_text, patch.new_text);
 }
+
+#[test]
+fn graph_search_and_neighborhood_follow_pinned_commits_past_first_page() {
+    let fixture = Fixture::new();
+    let mut input = String::new();
+    for i in 0..255 {
+        let message = if i == 42 {
+            "Distinct subject\n\nneed[le] in commit body".to_owned()
+        } else {
+            format!("Revision {i}")
+        };
+        let author = if i == 51 { "Other Author" } else { "Writer" };
+        input.push_str(&format!("commit refs/heads/main\nauthor {author} <writer@example.test> {} +0000\ncommitter Writer <writer@example.test> {} +0000\ndata {}\n{message}\n\n",i+1,i+1,message.len()));
+    }
+    fixture.input(&["fast-import", "--quiet"], input.as_bytes());
+    let (first, catalog) = navigation::open(&fixture.root, 100).unwrap();
+    let results = catalog.search(&fixture.root, "NEED[LE]").unwrap();
+    assert_eq!(results.commits.len(), 1);
+    let oid = &results.commits[0].oid;
+    assert!(!first.entries.iter().any(|e| &e.commit.oid == oid));
+    assert_eq!(
+        &catalog.search(&fixture.root, &oid[..8]).unwrap().commits[0].oid,
+        oid
+    );
+    assert_eq!(
+        catalog
+            .search(&fixture.root, "other author")
+            .unwrap()
+            .commits[0]
+            .subject,
+        "Revision 51"
+    );
+    assert!(catalog.search(&fixture.root, "writer").unwrap().truncated);
+    fixture.git(&["reset", "--hard", "HEAD~60"]);
+    let (neighborhood, ix) = catalog.around(&fixture.root, oid).unwrap();
+    assert_eq!(ix, 24);
+    assert_eq!(&neighborhood.entries[ix].commit.oid, oid);
+    assert_eq!(neighborhood.entries[ix - 1].commit.subject, "Revision 43");
+    assert_eq!(neighborhood.entries[ix + 1].commit.subject, "Revision 41");
+    let other = Fixture::new();
+    assert!(catalog.around(&other.root, oid).is_err());
+}
+
+#[test]
+fn graph_sidebar_pins_local_remote_annotated_tags_and_each_stash_entry() {
+    use navigation::RefGroup;
+    let f = Fixture::new();
+    let base = f.commit("file", "base\n");
+    f.git(&["tag", "-a", "release", "-m", "release"]);
+    f.git(&["update-ref", "refs/remotes/upstream/base", &base]);
+    for n in 0..2 {
+        fs::write(f.root.join("file"), format!("wip {n}")).unwrap();
+        f.git(&["stash", "push", "-m", &format!("draft {n}")]);
+    }
+    let expected = f.git(&["rev-parse", "stash@{1}"]);
+    let index = fs::read(f.root.join(".git/index")).unwrap();
+    let (_, cat) = navigation::open(&f.root, 1).unwrap();
+    for group in [RefGroup::Local, RefGroup::Remote, RefGroup::Tag] {
+        assert!(cat.refs.iter().any(|r| r.group == group && r.oid == base));
+    }
+    let older = cat.refs.iter().find(|r| r.name == "stash@{1}").unwrap();
+    assert_eq!(older.oid, expected);
+    assert!(older.label.contains("draft 0"));
+    let (page, ix) = cat.around(&f.root, &expected).unwrap();
+    assert_eq!(page.entries[ix].commit.oid, expected);
+    assert_eq!(fs::read(f.root.join(".git/index")).unwrap(), index);
+}

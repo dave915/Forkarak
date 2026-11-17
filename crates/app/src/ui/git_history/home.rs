@@ -101,6 +101,7 @@ impl Pokarak {
                             .child(status),
                     )
                     .child(div().flex_1())
+                    .child(self.graph_search_control(cx))
                     .child(
                         history_button(
                             &weak,

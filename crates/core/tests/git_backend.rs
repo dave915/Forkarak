@@ -240,6 +240,31 @@ fn branch_counts_are_separate_from_dirty_worktree_counts() {
 }
 
 #[test]
+fn graph_summary_distinguishes_tracked_changes_from_ignored_build_output() {
+    let repo = Repo::new();
+    repo.write(".gitignore", "**/build/\n.gradle/\n");
+    repo.write("module/build/keep.kt", "tracked build input");
+    repo.git(&["add", "-f", "--", "module/build/keep.kt"]);
+    repo.add(".gitignore");
+    repo.commit();
+    let summary = || pokarak_core::worktree_change_summary(&repo.root).unwrap();
+    let clean = summary();
+    assert_eq!(clean.0, 0);
+    repo.write("module/build/classes/Demo.class", "output");
+    repo.write(".gradle/caches/item", "cache");
+    assert_eq!(summary(), clean);
+    repo.write("module/build/keep.kt", "changed once");
+    let edited = summary();
+    assert_eq!(edited.0, 1);
+    repo.write("module/build/keep.kt", "changed twice");
+    let edited_again = summary();
+    assert_eq!(edited_again.0, 1);
+    assert_ne!(edited_again.1, edited.1);
+    repo.git(&["branch", "another"]);
+    assert_ne!(summary().1, edited_again.1);
+}
+
+#[test]
 fn paths_are_lossless_literal_and_nul_delimited() {
     let repo = Repo::new();
     let names = [
@@ -473,6 +498,16 @@ fn worktree_inventory_handles_linked_detached_locked_and_prunable() {
     ]);
     fs::write(linked.join("untracked.rs"), "linked\n").unwrap();
     fs::write(detached.join("src/code.rs"), "detached\n").unwrap();
+    let inventory = pokarak_core::worktree_inventory(&linked).unwrap();
+    assert_eq!(inventory.len(), 3);
+    assert!(
+        inventory
+            .iter()
+            .any(|tree| tree.is_locked && tree.branch == "linked")
+    );
+    assert_eq!(pokarak_core::worktree_change_count(&repo.root).unwrap(), 0);
+    assert_eq!(pokarak_core::worktree_change_count(&linked).unwrap(), 1);
+    assert_eq!(pokarak_core::worktree_change_count(&detached).unwrap(), 1);
     let snap = snapshot(&linked, &CompareMode::Uncommitted).unwrap();
     assert_eq!(snap.worktrees.len(), 3);
     assert!(!snap.worktree.is_main);

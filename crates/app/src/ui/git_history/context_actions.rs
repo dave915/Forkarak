@@ -16,8 +16,8 @@ pub(super) fn commit_context_menu(
                 || !app.git_history.active
                 || commit.parents.len() > 1
                 || app
-                    .snapshot()
-                    .is_none_or(|s| s.worktree.is_detached || s.worktree.head.is_empty())
+                    .active_worktree()
+                    .is_none_or(|tree| tree.is_detached || tree.head.is_empty())
         });
         menu = menu.label(format!("커밋 {}", short(&commit.oid)));
         for (action, label) in [

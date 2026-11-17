@@ -192,14 +192,18 @@ fn install_bindings(prefs: &Preferences, project: Option<&Path>, cx: &mut App) {
     bind!("save_file", "cmd-s", SaveCodeFile, None);
     bind!("toggle_code", "cmd-alt-d", ToggleCode, None);
     // Worktree switching and multiple cursors use distinct modifier chords.
-    cx.bind_keys([
-        KeyBinding::new("ctrl-alt-up", AddCursorAbove, Some("ForkarakCode > Input")),
-        KeyBinding::new(
-            "ctrl-alt-down",
-            AddCursorBelow,
-            Some("ForkarakCode > Input"),
-        ),
-    ]);
+    bind!(
+        "add_cursor_above",
+        "ctrl-alt-up",
+        AddCursorAbove,
+        Some("ForkarakCode > Input")
+    );
+    bind!(
+        "add_cursor_below",
+        "ctrl-alt-down",
+        AddCursorBelow,
+        Some("ForkarakCode > Input")
+    );
 }
 
 pub(super) fn actions(
@@ -536,7 +540,7 @@ impl Pokarak {
             tabs: !self.prefs.option_bool(project, "editor.use_spaces", true),
         };
         let text = editor.read(cx).value().to_string();
-        let submitted = text.clone();
+        editor.update(cx, |e, cx| e.set_tab_size(fallback.tab_size(), cx));
         let id = editor.entity_id();
         let editor = editor.clone();
         let target = key.clone();
@@ -555,7 +559,6 @@ impl Pokarak {
                         != Some(&key)
                     || app.code_edits.tools.indent_request.get(&key) != Some(&request)
                     || app.active_editor().is_none_or(|e| e.entity_id() != id)
-                    || editor.read(cx).value().as_ref() != submitted
                 {
                     return;
                 }

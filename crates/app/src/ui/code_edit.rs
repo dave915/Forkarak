@@ -760,6 +760,11 @@ impl CodeEdits {
         buffer.draft.text.clone()
     }
 
+    pub(super) fn expected_text(&self, root: &Path, path: &Path) -> Option<String> {
+        self.buffer(root, path)
+            .map(|buffer| buffer.draft.expected.clone())
+    }
+
     pub(super) fn can_edit(&self, root: &Path, path: &Path) -> bool {
         !self.unreadable_storage && self.buffer(root, path).is_some_and(|buffer| !buffer.saving)
     }

@@ -95,6 +95,18 @@ fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
         SelectNextWord
     );
     add!(
+        "편집: 위 줄에 커서 추가",
+        "add_cursor_above",
+        "ctrl-alt-up",
+        gpui_kit::base::input::AddCursorAbove
+    );
+    add!(
+        "편집: 아래 줄에 커서 추가",
+        "add_cursor_below",
+        "ctrl-alt-down",
+        gpui_kit::base::input::AddCursorBelow
+    );
+    add!(
         "편집: 파일 내 바꾸기",
         "replace_file",
         "cmd-alt-f",

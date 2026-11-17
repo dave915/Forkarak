@@ -121,6 +121,13 @@ impl Pokarak {
             .get(root)
             .and_then(|s| s.diffs.get(path))
             .map(|d| d.old_text.clone())
+            .or_else(|| {
+                self.sessions
+                    .get(root)
+                    .and_then(|s| s.snapshot.as_ref())
+                    .filter(|snapshot| !snapshot.changes.iter().any(|file| file.path == path))
+                    .and_then(|_| self.code_edits.expected_text(root, path))
+            })
         else {
             if let Some((_, gutter)) = self.code_edits.tools.gutters.remove(&key) {
                 gutter.dispose(cx);

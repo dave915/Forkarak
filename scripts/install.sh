@@ -139,7 +139,9 @@ PLIST="$STAGED_APP/Contents/Info.plist"
 [[ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$PLIST")" == "${TAG#v}" ]] || fail "Bundle version does not match release tag"
 [[ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$PLIST")" == pokarak ]] || fail "Unexpected bundle executable"
 [[ -x "$STAGED_APP/Contents/MacOS/pokarak" ]] || fail "Release executable is missing"
-[[ "$(/usr/bin/lipo -archs "$STAGED_APP/Contents/MacOS/pokarak")" == arm64 ]] || fail "Release executable is not Apple Silicon"
+# lipo is an Xcode/Command Line Tools shim on clean Macs. file ships with macOS
+# and identifies the thin Mach-O executable without invoking developer tools.
+[[ "$(LC_ALL=C /usr/bin/file -b "$STAGED_APP/Contents/MacOS/pokarak")" == 'Mach-O 64-bit executable arm64' ]] || fail "Release executable is not an arm64 Mach-O executable"
 [[ -f "$STAGED_APP/Contents/Resources/pokarak-cli.sh" && -f "$STAGED_APP/Contents/Resources/install.sh" ]] || fail "Release CLI resources are missing"
 /usr/bin/codesign --verify --strict "$STAGED_APP" || fail "App signature verification failed"
 

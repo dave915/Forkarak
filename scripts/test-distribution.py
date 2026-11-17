@@ -7,6 +7,7 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -49,7 +50,9 @@ class DistributionTests(unittest.TestCase):
         # Only curl is replaced. Every validation/packaging tool is the actual
         # system binary. This maps production URLs onto authored fixture assets.
         curl = cls.mockbin / "curl"
-        curl.write_text("#!/usr/bin/env python3\n" + '''import json,os,pathlib,shutil,sys
+        # Use the actual interpreter, not the /usr/bin/python3 CLT shim, so the
+        # curl fixture still works when the installer simulates a clean Mac.
+        curl.write_text("#!" + sys.executable + "\n" + '''import json,os,pathlib,shutil,sys
 args=sys.argv[1:]
 url=next(x for x in args if x.startswith('https://'))
 out=pathlib.Path(args[args.index('--output')+1])
@@ -140,8 +143,9 @@ else:
         self.assertTrue(self.app.is_dir())
         self.assertTrue(self.cli.exists())
 
-    def repack(self, app):
-        subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(app)], check=True, capture_output=True)
+    def repack(self, app, sign=True):
+        if sign:
+            subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(app)], check=True, capture_output=True)
         archive = self.release / "pokarak-macos-arm64.tar.gz"
         with tarfile.open(archive, "w:gz") as tar:
             tar.add(app, arcname="포카락.app")
@@ -227,6 +231,29 @@ else:
         result = subprocess.run(["/bin/bash", str(self.source / "scripts/release-macos.sh"), "--version", "v9.9.9", "--binary", str(self.binary)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertIn("workspace version", result.stderr)
+
+    def test_installer_works_without_developer_tools(self):
+        self.env["DEVELOPER_DIR"] = str(self.case / "developer-tools-not-installed")
+        shim = subprocess.run(["/usr/bin/lipo", "-archs", str(self.binary)], env=self.env, capture_output=True)
+        self.assertNotEqual(shim.returncode, 0, "Fixture must disable the lipo developer-tools shim")
+        self.install()
+        self.assertEqual(subprocess.check_output([str(self.cli), "--version"], env=self.env, text=True).strip(), "0.1.0")
+
+    def test_wrong_architecture_and_non_macho_are_rejected(self):
+        intel = self.case / "intel-stub"
+        subprocess.run(["/usr/bin/cc", "-arch", "x86_64", "-mmacosx-version-min=13.0", str(self.base / "stub.c"), "-o", str(intel)], check=True, capture_output=True)
+        self.assertEqual(subprocess.check_output(["/usr/bin/file", "-b", str(intel)], env={**os.environ, "LC_ALL": "C"}, text=True).strip(), "Mach-O 64-bit executable x86_64")
+        invalid = self.case / "invalid-executable"
+        invalid.write_text("#!/bin/bash\necho not-a-Mach-O\n")
+        invalid.chmod(0o755)
+        for name, binary in (("intel", intel), ("invalid", invalid)):
+            with self.subTest(executable=name):
+                app = self.case / name / "포카락.app"
+                shutil.copytree(self.source / "dist/포카락.app", app)
+                shutil.copy2(binary, app / "Contents/MacOS/pokarak")
+                self.repack(app, sign=False)
+                self.assertIn("not an arm64 Mach-O executable", self.install(expected=1).stderr)
+                self.assertFalse(self.app.exists())
 
     def test_release_builds_without_binary_on_system_bash(self):
         cargo_bin = self.case / "cargo-bin"

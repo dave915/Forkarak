@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize)]
 struct Screen {
     view: UpdateView,
+    #[serde(default)]
+    split_diff: Option<bool>,
 }
 
 fn screen_path() -> PathBuf {
@@ -35,7 +37,50 @@ pub(super) fn tab_label(path: &Path, tabs: &[PathBuf]) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn review_preferences(
+    remembered: Option<SavedView>,
+    remembered_split: Option<bool>,
+    legacy_split: bool,
+    default_split: bool,
+    default_hide: bool,
+) -> (SavedView, bool) {
+    let known = remembered.is_some();
+    let mut saved = remembered.unwrap_or_default();
+    if !known {
+        saved.diff_hide_whitespace = default_hide;
+    }
+    let split = remembered_split.unwrap_or(if known { legacy_split } else { default_split });
+    (saved, split)
+}
+
 impl Pokarak {
+    pub(super) fn initialize_review_preferences(
+        &mut self,
+        root: &Path,
+        remembered: Option<SavedView>,
+    ) -> SavedView {
+        let saved_split = read_screens()
+            .get(root)
+            .and_then(|screen| screen.split_diff);
+        let default_split =
+            self.prefs
+                .option_bool(self.current_project.as_deref(), "review.split_diff", false);
+        let default_hide = self.prefs.option_bool(
+            self.current_project.as_deref(),
+            "review.hide_whitespace",
+            false,
+        );
+        let (saved, split) = review_preferences(
+            remembered,
+            saved_split,
+            self.legacy_split_diff,
+            default_split,
+            default_hide,
+        );
+        self.prefs.split_diff = split;
+        saved
+    }
+
     pub(super) fn remember_workspace_screen(&self) {
         if self.opening_path.is_some() {
             return;
@@ -51,7 +96,13 @@ impl Pokarak {
             UpdateView::Code
         };
         let mut screens = read_screens();
-        screens.insert(root.clone(), Screen { view });
+        screens.insert(
+            root.clone(),
+            Screen {
+                view,
+                split_diff: Some(self.prefs.split_diff),
+            },
+        );
         let path = screen_path();
         if let Some(parent) = path.parent()
             && std::fs::create_dir_all(parent).is_ok()
@@ -440,6 +491,7 @@ mod tests {
         screens.insert(
             PathBuf::from("/a"),
             Screen {
+                split_diff: Some(false),
                 view: UpdateView::Graph(Some(SavedCommit {
                     oid: "abc".into(),
                     parent: 1,
@@ -452,6 +504,7 @@ mod tests {
             PathBuf::from("/b"),
             Screen {
                 view: UpdateView::Code,
+                split_diff: Some(true),
             },
         );
         let data = serde_json::to_vec(&screens).unwrap();
@@ -460,5 +513,56 @@ mod tests {
         assert!(
             matches!(&restored[Path::new("/a")].view,UpdateView::Graph(Some(s)) if s.parent==1 && s.code)
         );
+    }
+    #[test]
+    fn review_defaults_apply_only_to_new_worktrees_including_false_choices() {
+        use super::{SavedView, review_preferences};
+        let (fresh, split) = review_preferences(None, None, false, true, true);
+        assert!(split && fresh.diff_hide_whitespace);
+        let (fresh, split) = review_preferences(None, None, true, false, false);
+        assert!(!split && !fresh.diff_hide_whitespace);
+        let (known, split) =
+            review_preferences(Some(SavedView::default()), Some(false), true, true, true);
+        assert!(!split && !known.diff_hide_whitespace);
+        let (known, split) = review_preferences(
+            Some(SavedView {
+                diff_hide_whitespace: true,
+                ..Default::default()
+            }),
+            Some(true),
+            false,
+            false,
+            false,
+        );
+        assert!(split && known.diff_hide_whitespace);
+    }
+    #[test]
+    fn legacy_worktrees_keep_old_diff_mode_and_screen_records_still_decode() {
+        use super::{SavedView, review_preferences};
+        let (known, split) =
+            review_preferences(Some(SavedView::default()), None, true, false, true);
+        assert!(split);
+        assert!(!known.diff_hide_whitespace);
+        let screen: Screen = serde_json::from_str(r#"{"view":"Code"}"#).unwrap();
+        assert!(screen.split_diff.is_none());
+        let mut screens = HashMap::new();
+        screens.insert(
+            PathBuf::from("/a"),
+            Screen {
+                view: UpdateView::Code,
+                split_diff: Some(false),
+            },
+        );
+        screens.insert(
+            PathBuf::from("/b"),
+            Screen {
+                view: UpdateView::Code,
+                split_diff: Some(true),
+            },
+        );
+        let restored: HashMap<PathBuf, Screen> =
+            serde_json::from_slice(&serde_json::to_vec(&screens).unwrap()).unwrap();
+        assert_eq!(restored[Path::new("/a")].split_diff, Some(false));
+        assert_eq!(restored[Path::new("/b")].split_diff, Some(true));
     }
 }

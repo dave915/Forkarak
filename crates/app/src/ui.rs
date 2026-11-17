@@ -262,6 +262,7 @@ pub struct Pokarak {
     workflow: git_workflow::WorkflowUi,
     focus: FocusHandle,
     prefs: Preferences,
+    legacy_split_diff: bool,
     current: Option<PathBuf>,
     current_project: Option<PathBuf>,
     opening_path: Option<PathBuf>,
@@ -603,6 +604,7 @@ impl Pokarak {
             workflow: git_workflow::WorkflowUi::default(),
             git_history: git_history::HistoryUi::default(),
             focus: cx.focus_handle(),
+            legacy_split_diff: prefs.split_diff,
             prefs,
             current: None,
             current_project: None,
@@ -916,7 +918,12 @@ impl Pokarak {
                         this.prefs.recent.retain(|p| p != &project_root);
                         this.prefs.recent.insert(0, project_root);
                         this.prefs.recent.truncate(8);
-                        let saved = this.prefs.worktrees.get(&root).cloned().unwrap_or_default();
+                        let remembered = this
+                            .sessions
+                            .get(&root)
+                            .map(|session| session.saved.clone())
+                            .or_else(|| this.prefs.worktrees.get(&root).cloned());
+                        let saved = this.initialize_review_preferences(&root, remembered);
                         let session = this
                             .sessions
                             .entry(root.clone())
@@ -1523,6 +1530,7 @@ impl Pokarak {
 
     fn set_split_diff(&mut self, split: bool) {
         self.prefs.split_diff = split;
+        self.remember_workspace_screen();
         self.prefs.save();
     }
 

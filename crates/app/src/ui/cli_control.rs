@@ -48,8 +48,24 @@ impl Pokarak {
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
         if request.action == "status" {
+            let point = self.reading_point(cx).map(|point| {
+                json!({
+                    "line":point.line,"column":point.column,"scroll_x":point.scroll_x,
+                    "scroll_y":point.scroll_y,"diff_row":point.row
+                })
+            });
+            let dirty = self
+                .current
+                .as_ref()
+                .zip(self.selected())
+                .is_some_and(|(root, path)| self.code_edits.dirty(root, &path));
             return Ok(
-                json!({"pid":std::process::id(),"socket":self.cli_control.as_ref().map(|s| &s.socket),"repo":self.current,"opening_repo":self.opening_path,"loading":self.loading,"file_loading":self.file_loading,"view":if self.git_history.active {"graph"} else {"code"},"file":self.selected(),"error":self.error,"projects":self.projects.iter().map(|p| &p.root).collect::<Vec<_>>(),"worktrees":self.inventory}),
+                json!({"pid":std::process::id(),"socket":self.cli_control.as_ref().map(|s| &s.socket),"repo":self.current,"opening_repo":self.opening_path,"loading":self.loading,"file_loading":self.file_loading,"view":if self.git_history.active {"graph"} else {"code"},"file":self.selected(),"error":self.error,"projects":self.projects.iter().map(|p| &p.root).collect::<Vec<_>>(),"worktrees":self.inventory,
+                    "comparison":self.session().map(|session| &session.saved.comparison),
+                    "external_change":self.external_change,"auto_refresh_pending":self.auto_refresh.pending(),
+                    "auto_refresh_completed":self.auto_refresh.completed,"status":self.status,
+                    "reading_point":point,"draft_dirty":dirty,"history_loading":self.git_history.read_pending(),
+                    "graph_selection":self.git_history.selection(),"graph_scroll_y":self.git_history.scroll_y()}),
             );
         }
         if self.loading {

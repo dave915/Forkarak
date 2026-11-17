@@ -1,4 +1,5 @@
 mod analysis_feedback;
+mod auto_refresh;
 mod branch_review;
 mod cli_control;
 mod code_edit;
@@ -222,6 +223,7 @@ struct Session {
     saved: SavedView,
     documents: HashMap<PathBuf, Entity<EditorState>>,
     diffs: HashMap<PathBuf, ReviewDiff>,
+    split_positions: HashMap<PathBuf, (usize, f32)>,
     scroll: UniformListScrollHandle,
     history: Vec<ReadingPoint>,
     forward: Vec<ReadingPoint>,
@@ -239,6 +241,7 @@ impl Session {
             saved,
             documents: HashMap::new(),
             diffs: HashMap::new(),
+            split_positions: HashMap::new(),
             scroll: UniformListScrollHandle::new(),
             history: vec![],
             forward: vec![],
@@ -248,6 +251,7 @@ impl Session {
 }
 
 pub struct Pokarak {
+    auto_refresh: auto_refresh::AutoRefresh,
     code_edits: code_edit::CodeEdits,
     git_history: git_history::HistoryUi,
     workflow: git_workflow::WorkflowUi,
@@ -489,6 +493,7 @@ impl Pokarak {
     }
 
     fn reset_active(&mut self, cx: &mut Context<Self>) {
+        self.auto_refresh.reset(None);
         self.reset_git_history();
         self.invalidate_git_page();
         self.changed = Arc::new(AtomicBool::new(false));
@@ -581,6 +586,7 @@ impl Pokarak {
             }
         }));
         let mut this = Self {
+            auto_refresh: auto_refresh::AutoRefresh::default(),
             code_edits: code_edit::CodeEdits::load(),
             workflow: git_workflow::WorkflowUi::default(),
             git_history: git_history::HistoryUi::default(),
@@ -666,20 +672,11 @@ impl Pokarak {
         })
         .detach();
         let executor = cx.background_executor().clone();
-        cx.spawn(async move |view, cx| {
+        cx.spawn_in(window, async move |view, cx| {
             loop {
-                executor.timer(Duration::from_millis(800)).await;
+                executor.timer(Duration::from_millis(200)).await;
                 if view
-                    .update(cx, |this, cx| {
-                        if !this.loading
-                            && !this.checking_changes
-                            && !this.count_pending
-                            && this.changed.swap(false, Ordering::Relaxed)
-                        {
-                            this.check_code_disk_changes(cx);
-                            this.check_changes(cx);
-                        }
-                    })
+                    .update_in(cx, |this, window, cx| this.auto_refresh_tick(window, cx))
                     .is_err()
                 {
                     break;
@@ -757,6 +754,11 @@ impl Pokarak {
         {
             if session.restoring {
                 return;
+            }
+            for (path, diff) in &session.diffs {
+                if let Some(position) = diff.split_position(cx) {
+                    session.split_positions.insert(path.clone(), position);
+                }
             }
             for (path, doc) in &session.documents {
                 let editor = doc.read(cx);
@@ -969,110 +971,6 @@ impl Pokarak {
         }
     }
 
-    fn watch(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        self.watcher = None;
-        self.changed = Arc::new(AtomicBool::new(false));
-        let scope = self.changed.clone();
-        let changed = scope.clone();
-        let task = cx.background_spawn(async move {
-            let objects = root.join(".git/objects");
-            let mut watcher =
-                notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                    if let Ok(event) = event
-                        && !event.kind.is_access()
-                        && (event.need_rescan()
-                            || event.paths.iter().any(|path| !path.starts_with(&objects)))
-                    {
-                        changed.store(true, Ordering::Relaxed);
-                    }
-                })
-                .ok()?;
-            watcher.watch(&root, RecursiveMode::Recursive).ok()?;
-            Some(watcher)
-        });
-        cx.spawn(async move |view, cx| {
-            let watcher = task.await;
-            let _ = view.update(cx, |app, _| {
-                if Arc::ptr_eq(&app.changed, &scope) {
-                    app.watcher = watcher;
-                }
-            });
-        })
-        .detach();
-    }
-
-    fn check_graph_changes(&mut self, cx: &mut Context<Self>) {
-        let Some(root) = self.current.clone() else {
-            return;
-        };
-        if self.count_pending {
-            return;
-        }
-        let generation = self.request;
-        self.count_pending = true;
-        let target = root.clone();
-        let task =
-            cx.background_spawn(async move { pokarak_core::worktree_change_summary(&target) });
-        cx.spawn(async move |view, cx| {
-            let result = task.await;
-            let _ = view.update(cx, |app, cx| {
-                if app.request == generation && app.current.as_ref() == Some(&root) {
-                    app.count_pending = false;
-                    if let Ok((count, fingerprint)) = result {
-                        if let Some(previous) = &app.graph_fingerprint {
-                            app.external_change |= previous != &fingerprint;
-                        } else {
-                            app.graph_fingerprint = Some(fingerprint);
-                            app.change_count = Some(count);
-                        }
-                    }
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
-    fn check_changes(&mut self, cx: &mut Context<Self>) {
-        if self.checking_changes || self.external_change {
-            return;
-        }
-        let Some(root) = self.current.clone() else {
-            return;
-        };
-        if self.git_history.active {
-            if self.graph_page_loaded() {
-                self.check_graph_changes(cx);
-            }
-            return;
-        }
-        let Some(snapshot) = self.snapshot() else {
-            return;
-        };
-        let mode = snapshot.compare.clone();
-        let old_fingerprint = snapshot.fingerprint.clone();
-        let generation = self.request;
-        let check_root = root.clone();
-        self.checking_changes = true;
-        let task = cx.background_spawn(async move { pokarak_core::snapshot(&check_root, &mode) });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                if this.request != generation || this.current.as_ref() != Some(&root) {
-                    return;
-                }
-                this.checking_changes = false;
-                if let Ok(snapshot) = result
-                    && snapshot.fingerprint != old_fingerprint
-                {
-                    this.external_change = true;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.opening_path.is_some() {
             return;
@@ -1099,7 +997,7 @@ impl Pokarak {
         self.loading = true;
         self.error = None;
         self.status = "변경사항을 읽는 중…".into();
-        let task = cx.background_spawn(async move { pokarak_core::snapshot(&root, &mode) });
+        let task = cx.background_spawn(async move { pokarak_core::snapshot_current(&root, &mode) });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -1111,6 +1009,7 @@ impl Pokarak {
                     Ok(snapshot) => {
                         this.external_change = false;
                         this.install_snapshot(snapshot, window, cx);
+                        this.auto_refresh.installed(token);
                     }
                     Err(error) => {
                         this.error = Some(format!("{error:#}"));
@@ -1154,8 +1053,6 @@ impl Pokarak {
                                 trees.iter().map(|tree| tree.path.clone()).collect();
                         }
                         app.inventory = trees;
-                        app.change_count = None;
-                        app.graph_fingerprint = None;
                         if let Some(session) = app
                             .current
                             .as_ref()
@@ -1166,6 +1063,7 @@ impl Pokarak {
                         app.external_change = false;
                         app.status = "준비됨".into();
                         app.sync_git_history(window, cx);
+                        app.auto_refresh.installed(token);
                     }
                     Err(error) => {
                         app.error = Some(format!("{error:#}"));
@@ -1338,6 +1236,7 @@ impl Pokarak {
         let load_path = path.clone();
         self.capture_code_buffers(cx);
         let retained = self.code_edits.retained_text(&root, &path);
+        let preserve_focus = self.auto_refresh.preserves_focus(self.request);
         let live = retained.is_some()
             || !matches!(file.as_ref().map(|f| &f.status), Some(FileStatus::Deleted));
         let task = cx.background_spawn(async move {
@@ -1416,9 +1315,19 @@ impl Pokarak {
                             (live && text_file) || has_draft,
                         );
                         let editing = this.code_edits.editing(&root, &path);
+                        let review = diff.map(ReviewDiff::from);
+                        if let Some(review) = &review
+                            && let Some(position) = this
+                                .sessions
+                                .get(&root)
+                                .and_then(|session| session.split_positions.get(&path))
+                                .copied()
+                        {
+                            review.restore_split_position(this, position, cx);
+                        }
                         let session = this.sessions.get_mut(&root).unwrap();
-                        if let Some(diff) = diff {
-                            session.diffs.insert(path.clone(), diff.into());
+                        if let Some(review) = review {
+                            session.diffs.insert(path.clone(), review);
                         }
                         let editor = session
                             .documents
@@ -1481,7 +1390,7 @@ impl Pokarak {
                             .scroll_to_item_strict(diff_row, ScrollStrategy::Top);
                         let code = session.saved.code;
                         this.bind_code_editor(&root, &path, &editor, cx);
-                        if !code && !this.file_tree_focus.is_focused(window) {
+                        if !code && !preserve_focus && !this.file_tree_focus.is_focused(window) {
                             this.focus.focus(window, cx);
                         }
                         this.status = if this.navigation.is_some() {

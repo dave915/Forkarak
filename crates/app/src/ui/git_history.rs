@@ -54,6 +54,14 @@ pub(super) struct HistoryUi {
 }
 
 impl HistoryUi {
+    pub(super) fn read_pending(&self) -> bool {
+        self.loading || matches!(self.next_page, NextPage::Loading)
+    }
+
+    pub(super) fn scroll_y(&self) -> f32 {
+        self.scroll.0.borrow().base_handle.offset().y.into()
+    }
+
     pub(super) fn selection(&self) -> Option<crate::prefs::SavedCommit> {
         let detail = self.detail.as_ref()?;
         let parent = detail
@@ -92,8 +100,82 @@ impl HistoryUi {
     }
 }
 impl Pokarak {
-    pub(super) fn graph_page_loaded(&self) -> bool {
-        self.git_history.nav.catalog.is_some()
+    /// Reload refs/rows in place. Immutable selected commit readers, split diff
+    /// entities and both file/editor scroll handles remain untouched.
+    pub(in crate::ui) fn refresh_git_history_preserving(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let branch = self.graph_branch().map(str::to_owned);
+        let wanted = self.git_history.entries.len().max(100);
+        let offset = self.git_history.scroll.0.borrow().base_handle.offset();
+        let row_height: f32 = ui_px(30.).into();
+        let y: f32 = offset.y.into();
+        let top = (-y / row_height).max(0.).floor() as usize;
+        let anchor = self
+            .git_history
+            .entries
+            .get(top)
+            .map(|entry| entry.commit.oid.clone());
+        let remainder = (-y).max(0.) % row_height;
+        self.history_read(
+            move |root| {
+                let scoped = branch
+                    .as_ref()
+                    .map(|name| history::navigation::open_branch(root, name, 100))
+                    .transpose()?
+                    .flatten();
+                let (mut page, catalog, missing) = match scoped {
+                    Some((page, catalog)) => (page, catalog, None),
+                    None => {
+                        let (page, catalog) = history::navigation::open(root, 100)?;
+                        (page, catalog, branch)
+                    }
+                };
+                while page.entries.len() < wanted {
+                    let Some(cursor) = page.next.as_ref() else {
+                        break;
+                    };
+                    let next =
+                        history::next_page(root, cursor, (wanted - page.entries.len()).min(100))?;
+                    page.entries.extend(next.entries);
+                    page.next = next.next;
+                    page.loaded = next.loaded;
+                    page.limit_reached = next.limit_reached;
+                    page.shallow = next.shallow;
+                }
+                Ok((page, catalog, missing))
+            },
+            move |app, (page, catalog, missing), window, cx| {
+                if missing.is_some() {
+                    app.save_graph_branch(None, cx);
+                }
+                app.git_history.entries = Arc::default();
+                app.git_history.nav.catalog = Some(Arc::new(catalog));
+                app.git_history.in_neighborhood = false;
+                app.git_history.next_page = NextPage::Idle;
+                app.append_history_page(page, cx);
+                let row = anchor
+                    .as_ref()
+                    .and_then(|oid| {
+                        app.git_history
+                            .entries
+                            .iter()
+                            .position(|entry| &entry.commit.oid == oid)
+                    })
+                    .unwrap_or(top.min(app.git_history.entries.len().saturating_sub(1)));
+                app.git_history
+                    .scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(offset.x, px(-(row as f32 * row_height + remainder))));
+                app.refresh_inline_commit(window, cx);
+            },
+            window,
+            cx,
+        );
     }
 
     fn history_read<T: Send + 'static>(

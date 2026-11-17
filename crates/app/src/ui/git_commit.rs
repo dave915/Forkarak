@@ -125,6 +125,20 @@ impl CommitUi {
 }
 
 impl Pokarak {
+    pub(super) fn commit_defers_auto_refresh(&self, window: &Window, cx: &App) -> bool {
+        self.commit_ui.reading
+            || !self.commit_ui.marked.is_empty()
+            || (self.inline_commit_active()
+                && self
+                    .current
+                    .as_ref()
+                    .and_then(|root| self.commit_ui.messages.get(root))
+                    .is_some_and(|editor| {
+                        let editor = editor.read(cx);
+                        !editor.value().is_empty() && editor.focus_handle(cx).is_focused(window)
+                    }))
+    }
+
     pub(super) fn inline_commit_active(&self) -> bool {
         self.commit_ui.surface == Surface::Inline && self.commit_ui.root == self.current
     }

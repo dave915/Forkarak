@@ -19,11 +19,10 @@ impl Pokarak {
 
     pub(in crate::ui) fn sync_git_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.git_history.active;
-        self.git_history.reset(active);
         if active {
-            self.open_git_history(window, cx);
-            self.refresh_inline_commit(window, cx);
+            self.refresh_git_history_preserving(window, cx);
         } else {
+            self.git_history.reset(false);
             self.load_code_sidebar(cx);
         }
     }

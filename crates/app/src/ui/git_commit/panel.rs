@@ -110,16 +110,13 @@ impl Pokarak {
                     },
                 ))
             })
-            .child(
-                commit_button(
-                    weak,
-                    "commit-amend",
-                    "이전 커밋 수정…",
-                    disabled || snapshot.is_none_or(|s| s.has_conflicts || s.previous.is_none()),
-                    |app, w, cx| app.confirm_index_amend(w, cx),
-                )
-                .ghost(),
-            )
+            .child(commit_button(
+                weak,
+                "commit-amend",
+                "이전 커밋 수정…",
+                disabled || snapshot.is_none_or(|s| s.has_conflicts || s.previous.is_none()),
+                |app, w, cx| app.confirm_index_amend(w, cx),
+            ))
             .child(
                 commit_button(
                     weak,
@@ -198,22 +195,17 @@ impl Pokarak {
                                 if unstaged { "작업 파일" } else { "Staged" }
                             )),
                     )
-                    .child(
-                        commit_button(
-                            weak,
-                            if unstaged { "stage-all" } else { "unstage-all" },
-                            if unstaged {
-                                "모두 Stage"
-                            } else {
-                                "모두 Unstage"
-                            },
-                            disabled || count == 0,
-                            move |app, w, cx| {
-                                app.change_commit_index(unstaged, StageScope::All, w, cx)
-                            },
-                        )
-                        .ghost(),
-                    ),
+                    .child(commit_button(
+                        weak,
+                        if unstaged { "stage-all" } else { "unstage-all" },
+                        if unstaged {
+                            "모두 Stage"
+                        } else {
+                            "모두 Unstage"
+                        },
+                        disabled || count == 0,
+                        move |app, w, cx| app.change_commit_index(unstaged, StageScope::All, w, cx),
+                    )),
             );
         if let Some(snapshot) = snapshot.filter(|_| count > 0) {
             let target = weak.clone();
@@ -269,6 +261,11 @@ impl Pokarak {
                                     )
                                     .small()
                                     .disabled(disabled)
+                                    .cursor(if disabled {
+                                        CursorStyle::Arrow
+                                    } else {
+                                        CursorStyle::PointingHand
+                                    })
                                     .selected(selected.as_ref() == Some(&path))
                                     .tooltip(tooltip)
                                     .flex_1()
@@ -282,30 +279,27 @@ impl Pokarak {
                                         },
                                     ),
                                 )
-                                .child(
-                                    commit_button(
-                                        &target,
-                                        (
-                                            if unstaged {
-                                                "stage-file"
-                                            } else {
-                                                "unstage-file"
-                                            },
-                                            index,
-                                        ),
-                                        if unstaged { "Stage" } else { "Unstage" },
-                                        disabled,
-                                        move |app, w, cx| {
-                                            app.change_commit_index(
-                                                unstaged,
-                                                StageScope::Files(paths.clone()),
-                                                w,
-                                                cx,
-                                            )
+                                .child(commit_button(
+                                    &target,
+                                    (
+                                        if unstaged {
+                                            "stage-file"
+                                        } else {
+                                            "unstage-file"
                                         },
-                                    )
-                                    .ghost(),
-                                )
+                                        index,
+                                    ),
+                                    if unstaged { "Stage" } else { "Unstage" },
+                                    disabled,
+                                    move |app, w, cx| {
+                                        app.change_commit_index(
+                                            unstaged,
+                                            StageScope::Files(paths.clone()),
+                                            w,
+                                            cx,
+                                        )
+                                    },
+                                ))
                         })
                         .collect()
                 },
@@ -342,20 +336,17 @@ impl Pokarak {
                 })),
         );
         toolbar = toolbar
-            .child(
-                commit_button(
-                    weak,
-                    "index-split",
-                    if self.commit_ui.split.is_some() {
-                        "줄 선택"
-                    } else {
-                        "좌우"
-                    },
-                    disabled || self.commit_ui.partial.is_none(),
-                    |app, _, cx| app.toggle_partial_split(cx),
-                )
-                .ghost(),
-            )
+            .child(commit_button(
+                weak,
+                "index-split",
+                if self.commit_ui.split.is_some() {
+                    "줄 선택"
+                } else {
+                    "좌우"
+                },
+                disabled || self.commit_ui.partial.is_none(),
+                |app, _, cx| app.toggle_partial_split(cx),
+            ))
             .child(commit_button(
                 weak,
                 "apply-selected-lines",
@@ -371,16 +362,13 @@ impl Pokarak {
                 disabled || self.commit_ui.marked.is_empty() || self.commit_ui.partial.is_none(),
                 |app, w, cx| app.apply_line_selection(w, cx),
             ))
-            .child(
-                commit_button(
-                    weak,
-                    "index-refresh",
-                    "새로고침",
-                    self.git_is_busy() || self.commit_ui.reading,
-                    |app, w, cx| app.read_commit_index(w, cx),
-                )
-                .ghost(),
-            );
+            .child(commit_button(
+                weak,
+                "index-refresh",
+                "새로고침",
+                self.git_is_busy() || self.commit_ui.reading,
+                |app, w, cx| app.read_commit_index(w, cx),
+            ));
         let preview = if let Some(split) = &self.commit_ui.split {
             split.clone().into_any_element()
         } else if let Some(partial) = &self.commit_ui.partial {

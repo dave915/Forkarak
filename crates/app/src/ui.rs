@@ -2139,15 +2139,15 @@ impl Pokarak {
                                         .rounded(ui_px(5.))
                                         .cursor_pointer()
                                         .bg(if selected {
-                                            palette.rgb(0x2b3947)
+                                            palette.selected()
                                         } else {
                                             palette.rgb(SIDE)
                                         })
                                         .hover(|s| {
                                             s.bg(if selected {
-                                                palette.rgb(0x2b3947)
+                                                palette.selected_hover()
                                             } else {
-                                                palette.rgb(PANEL)
+                                                palette.hover()
                                             })
                                         })
                                         .focus_visible(|s| {
@@ -2288,11 +2288,17 @@ impl Pokarak {
                     .rounded(ui_px(5.))
                     .cursor_pointer()
                     .bg(if active {
-                        palette.rgb(0x2b3947)
+                        palette.selected()
                     } else {
                         palette.rgb(SIDE)
                     })
-                    .hover(|s| s.bg(palette.rgb(PANEL)))
+                    .hover(|s| {
+                        s.bg(if active {
+                            palette.selected_hover()
+                        } else {
+                            palette.hover()
+                        })
+                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if !missing {
                             this.open_repository(path.clone(), window, cx);
@@ -2497,11 +2503,17 @@ impl Pokarak {
                                 .gap_2()
                                 .cursor_pointer()
                                 .bg(if selected {
-                                    palette.rgb(0x2c3a48)
+                                    palette.selected()
                                 } else {
                                     palette.rgb(BG)
                                 })
-                                .hover(|s| s.bg(palette.rgb(PANEL)))
+                                .hover(|s| {
+                                    s.bg(if selected {
+                                        palette.selected_hover()
+                                    } else {
+                                        palette.hover()
+                                    })
+                                })
                                 .child(if row.directory {
                                     Icon::new(IconName::Folder)
                                         .size(ui_px(14.))

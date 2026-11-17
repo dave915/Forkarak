@@ -384,7 +384,7 @@ impl Pokarak {
                     let weak = weak.clone();
                     let state = state.clone();
                     row = row.child(
-                        Button::new((SharedString::from(heading), index))
+                        theme::action_button((SharedString::from(heading), index), false)
                             .label(label)
                             .on_click(move |_, window, cx| {
                                 let _ = weak.update(cx, |app, cx| {
@@ -473,14 +473,14 @@ impl Pokarak {
                 let target = weak.clone();
                 let root = state.root.clone();
                 let selected = branch.clone();
-                buttons = buttons.child(Button::new("git-force-delete").label("병합 안 된 브랜치 강제 삭제…").danger().disabled(empty).on_click(move |_, window, cx| {
+                buttons = buttons.child(theme::action_button("git-force-delete", empty).label("병합 안 된 브랜치 강제 삭제…").danger().on_click(move |_, window, cx| {
                     let Some(name) = selected.read(cx).selected_value().cloned() else { return; };
                     let operation = Operation::DeleteBranch { name: name.clone(), mode: DeleteMode::ForceUnmerged };
                     let detail = format!("로컬 브랜치: {name}\n병합되지 않은 커밋이 있어도 브랜치 참조를 삭제합니다 (-D). 해당 커밋을 찾기 어려워질 수 있습니다. 원격 브랜치는 삭제하지 않습니다.");
                     let _ = target.update(cx, |app, cx| app.confirm_git_operation(GitConfirmation { root: root.clone(), label: "브랜치 강제 삭제 (-D)".into(), detail, operation, destructive: true }, window, cx));
                 }));
             }
-            buttons = buttons.child(Button::new("git-branch-continue").label(if delete { "병합된 브랜치 삭제…" } else if create { "만들기…" } else { "체크아웃…" }).primary().disabled(!create && empty).on_click(move |_, window, cx| {
+            buttons = buttons.child(theme::action_button("git-branch-continue", !create && empty).label(if delete { "병합된 브랜치 삭제…" } else if create { "만들기…" } else { "체크아웃…" }).primary().on_click(move |_, window, cx| {
                 let selected_name = if create { Some(name.read(cx).value().trim().to_owned()) } else { selected.read(cx).selected_value().cloned() };
                 let Some(name) = selected_name.filter(|name| !name.is_empty()) else { return; };
                 let (operation, detail) = if create {
@@ -544,9 +544,8 @@ impl Pokarak {
                 let remote = remote.clone();
                 let branch = branch.clone();
                 let remote_branch = remote_branch.clone();
-                buttons = buttons.child(Button::new(if prune { "git-fetch-prune" } else { "git-network-next" })
+                buttons = buttons.child(theme::action_button(if prune { "git-fetch-prune" } else { "git-network-next" }, state.remotes.is_empty() || (!fetch && !push && state.current_branch.is_none()) || (push && state.local_branches.is_empty()))
                     .label(if prune { "Fetch + 원격 추적 정리…" } else { title })
-                    .disabled(state.remotes.is_empty() || (!fetch && !push && state.current_branch.is_none()) || (push && state.local_branches.is_empty()))
                     .on_click(move |_, window, cx| {
                         let Some(remote_name) = remote.read(cx).selected_value().cloned() else { return; };
                         let Some(config) = state.remotes.iter().find(|r| r.name == remote_name) else { return; };
@@ -595,7 +594,7 @@ impl Pokarak {
             let checkout_source = checkout_source.clone();
             let operation = operation.clone();
             let label_for_action = label.clone();
-            let action = Button::new("git-confirm").label(label.clone()).when(destructive, |b| b.danger()).when(!destructive, |b| b.primary()).on_click(move |_, window, cx| {
+            let action = theme::action_button("git-confirm", false).label(label.clone()).when(destructive, |b| b.danger()).when(!destructive, |b| b.primary()).on_click(move |_, window, cx| {
                 let _ = weak.update(cx, |app, cx| {
                     window.close_dialog(cx);
                     let operation = operation.clone();
@@ -633,7 +632,7 @@ impl Pokarak {
                     let target = weak.clone();
                     let root = state.root.clone();
                     let remote = remote.clone();
-                    actions = actions.child(Button::new((SharedString::from(label), index)).label(label).small().on_click(move |_, window, cx| {
+                    actions = actions.child(theme::action_button((SharedString::from(label), index), false).label(label).small().on_click(move |_, window, cx| {
                         let _ = target.update(cx, |app, cx| {
                             window.close_dialog(cx);
                             app.show_remote_url_form(root.clone(), Some(remote.clone()), kind, window, cx);
@@ -643,7 +642,7 @@ impl Pokarak {
                 let rename_target = weak.clone();
                 let rename_root = state.root.clone();
                 let rename_name = remote.name.clone();
-                actions = actions.child(Button::new(("git-remote-rename", index)).label("이름 변경…").small().on_click(move |_, window, cx| {
+                actions = actions.child(theme::action_button(("git-remote-rename", index), false).label("이름 변경…").small().on_click(move |_, window, cx| {
                     let _ = rename_target.update(cx, |app, cx| {
                         window.close_dialog(cx);
                         app.show_remote_rename_form(rename_root.clone(), rename_name.clone(), window, cx);
@@ -652,7 +651,7 @@ impl Pokarak {
                 let target = weak.clone();
                 let root = state.root.clone();
                 let name = remote.name.clone();
-                actions = actions.child(Button::new(("git-remote-remove", index)).label("제거…").small().danger().on_click(move |_, window, cx| {
+                actions = actions.child(theme::action_button(("git-remote-remove", index), false).label("제거…").small().danger().on_click(move |_, window, cx| {
                     let detail = format!("제거할 원격 설정: {name}\n이 저장소의 원격 설정과 해당 원격 추적 참조가 제거됩니다. 서버의 저장소는 삭제하지 않습니다.");
                     let operation = Operation::RemoveRemote { name: name.clone() };
                     let _ = target.update(cx, |app, cx| app.confirm_git_operation(GitConfirmation { root: root.clone(), label: "원격 설정 제거".into(), detail, operation, destructive: true }, window, cx));
@@ -667,7 +666,7 @@ impl Pokarak {
                 .child(scope(&state.root, None))
                 .child(note("이 저장소와 연결된 모든 워크트리가 공유하는 Git 설정입니다."))
                 .child(rows)
-                .child(div().flex().justify_between().child(Button::new("git-add-remote").label("원격 저장소 추가…").on_click(move |_, window, cx| {
+                .child(div().flex().justify_between().child(theme::action_button("git-add-remote", false).label("원격 저장소 추가…").on_click(move |_, window, cx| {
                     let _ = target.update(cx, |app, cx| {
                         window.close_dialog(cx);
                         app.show_remote_url_form(root.clone(), None, RemoteUrlKind::Fetch, window, cx);
@@ -726,7 +725,7 @@ impl Pokarak {
                 .child(if is_new { field("원격 이름", &name) } else { div().child(format!("원격: {initial_name}")) })
                 .child(field(if kind == RemoteUrlKind::Push { "Push URL" } else { "Fetch URL" }, &url))
                 .child(note(if multiple { "URL이 여러 개 설정되어 있습니다. 다른 URL을 덮어쓰지 않도록 외부 Git에서 편집하세요." } else { "저장소 로컬 설정만 변경합니다. 이 작업은 서버에 연결하지 않습니다." }))
-                .child(div().flex().justify_end().gap_2().child(close_button()).child(Button::new("git-remote-save").label("변경 확인…").primary().disabled(multiple).on_click(move |_, window, cx| {
+                .child(div().flex().justify_end().gap_2().child(close_button()).child(theme::action_button("git-remote-save", multiple).label("변경 확인…").primary().on_click(move |_, window, cx| {
                     let name = if is_new { name_for_action.read(cx).value().trim().to_owned() } else { initial_name.clone() };
                     let url = url_for_action.read(cx).value().trim().to_owned();
                     if name.is_empty() || url.is_empty() { return; }
@@ -753,7 +752,7 @@ impl Pokarak {
             let name_for_action = name.clone();
             dialog.title("원격 이름 변경").width(ui_px(600.)).child(div().v_flex().gap_4().child(scope(&root, None))
                 .child(format!("현재 원격 이름: {old_name}")).child(field("새 이름", &name))
-                .child(div().flex().justify_end().gap_2().child(close_button()).child(Button::new("git-remote-rename-confirm").label("변경 확인…").on_click(move |_, window, cx| {
+                .child(div().flex().justify_end().gap_2().child(close_button()).child(theme::action_button("git-remote-rename-confirm", false).label("변경 확인…").on_click(move |_, window, cx| {
                     let new_name = name_for_action.read(cx).value().trim().to_owned();
                     if new_name.is_empty() { return; }
                     let operation = Operation::RenameRemote { name: old_for_action.clone(), new_name: new_name.clone() };
@@ -790,7 +789,7 @@ impl Pokarak {
                 .child(note("커밋에 기록되는 작성자 정보입니다. 서버 로그인·인증 설정과는 별개입니다. 현재 유효한 값을 표시하며, 저장하면 이 저장소와 연결된 워크트리에 적용됩니다."))
                 .child(note(&format!("현재 저장소 로컬 값: 이름 {} / 이메일 {}", state.local_identity.name.as_deref().unwrap_or("미설정 (상위 설정 상속)"), state.local_identity.email.as_deref().unwrap_or("미설정 (상위 설정 상속)"))))
                 .child(field("이름 (user.name)", &name)).child(field("이메일 (user.email)", &email))
-                .child(div().flex().justify_end().gap_2().child(close_button()).child(Button::new("git-identity-save").label("이 저장소에 저장…").primary().on_click(move |_, window, cx| {
+                .child(div().flex().justify_end().gap_2().child(close_button()).child(theme::action_button("git-identity-save", false).label("이 저장소에 저장…").primary().on_click(move |_, window, cx| {
                     let name = name_for_action.read(cx).value().trim().to_owned();
                     let email = email_for_action.read(cx).value().trim().to_owned();
                     if name.is_empty() || email.is_empty() { return; }
@@ -840,21 +839,20 @@ fn select_field(label: &'static str, input: &Choice) -> Div {
         .v_flex()
         .gap_2()
         .child(div().font_weight(FontWeight::MEDIUM).child(label))
-        .child(Select::new(input).id(label).w_full())
+        .child(Select::new(input).id(label).w_full().cursor_pointer())
 }
 
 fn note(text: &str) -> Div {
     div().text_size(ui_text(12.)).child(text.to_owned())
 }
 fn close_button() -> Button {
-    Button::new("git-dialog-close")
+    theme::action_button("git-dialog-close", false)
         .label("취소")
-        .ghost()
         .on_click(|_, window, cx| window.close_dialog(cx))
 }
 fn close_row() -> Div {
     div().flex().justify_end().child(
-        Button::new("git-home-close")
+        theme::action_button("git-home-close", false)
             .label("닫기")
             .on_click(|_, window, cx| window.close_dialog(cx)),
     )

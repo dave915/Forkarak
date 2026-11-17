@@ -456,7 +456,7 @@ impl Pokarak {
                     .child(Editor::new(&message).aria_label("수정할 커밋 메시지").h(ui_px(82.)).font_family("IBM Plex Sans").text_size(ui_text(13.)))
                     .child(commit_note("작업 파일은 자동 stage하지 않습니다. 기존 작성자와 Git hooks를 사용합니다.")))
                 .footer(div().flex().justify_end().gap_2()
-                    .child(Button::new("amend-cancel").label("취소").small().on_click(|_,w,cx|w.close_dialog(cx)))
+                    .child(theme::action_button("amend-cancel", false).label("취소").small().on_click(|_,w,cx|w.close_dialog(cx)))
                     .child(commit_button(&weak,"amend-confirm","이 커밋 수정",disabled,move |app,w,cx| {
                         // Confirmation binds the displayed prior commit and index;
                         // a refresh while this sheet is open must not retarget it.
@@ -515,10 +515,9 @@ fn commit_button(
     action: impl Fn(&mut Pokarak, &mut Window, &mut Context<Pokarak>) + 'static,
 ) -> Button {
     let target = weak.clone();
-    Button::new(id)
+    theme::action_button(id, disabled)
         .label(label)
         .small()
-        .disabled(disabled)
         .on_click(move |_, w, cx| {
             let _ = target.update(cx, |app, cx| action(app, w, cx));
         })

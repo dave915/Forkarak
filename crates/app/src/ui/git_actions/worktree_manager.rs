@@ -112,26 +112,27 @@ impl Pokarak {
                     ""
                 };
                 let count = counts.get(&tree.path).copied();
-                let button = Button::new(("remove-worktree", index))
-                    .label(if tree.is_prunable {
-                        "등록 정리…"
-                    } else {
-                        "제거…"
-                    })
-                    .small()
-                    .ghost()
-                    .disabled(!can_remove(tree, &state.root, count))
-                    .tooltip(match count {
-                        Some(1..) => "변경사항을 먼저 정리하세요",
-                        None if !tree.is_main
-                            && !tree.is_locked
-                            && !tree.is_prunable
-                            && tree.path != state.root =>
-                        {
-                            "변경 상태를 확인할 수 없습니다"
-                        }
-                        _ => "연결된 워크트리 제거",
-                    });
+                let button = theme::action_button(
+                    ("remove-worktree", index),
+                    !can_remove(tree, &state.root, count),
+                )
+                .label(if tree.is_prunable {
+                    "등록 정리…"
+                } else {
+                    "제거…"
+                })
+                .small()
+                .tooltip(match count {
+                    Some(1..) => "변경사항을 먼저 정리하세요",
+                    None if !tree.is_main
+                        && !tree.is_locked
+                        && !tree.is_prunable
+                        && tree.path != state.root =>
+                    {
+                        "변경 상태를 확인할 수 없습니다"
+                    }
+                    _ => "연결된 워크트리 제거",
+                });
                 let target = tree.clone();
                 let weak = weak.clone();
                 let root = state.root.clone();
@@ -183,18 +184,20 @@ impl Pokarak {
                 let available = available.clone();
                 let weak = weak.clone();
                 buttons = buttons.child(
-                    Button::new(if new_branch {
-                        "new-worktree-branch"
-                    } else {
-                        "existing-worktree-branch"
-                    })
+                    theme::action_button(
+                        if new_branch {
+                            "new-worktree-branch"
+                        } else {
+                            "existing-worktree-branch"
+                        },
+                        head.is_empty() || (!new_branch && available.is_empty()),
+                    )
                     .label(if new_branch {
                         "새 브랜치로 생성…"
                     } else {
                         "기존 브랜치로 생성…"
                     })
                     .small()
-                    .disabled(head.is_empty() || (!new_branch && available.is_empty()))
                     .on_click(move |_, w, cx| {
                         let _ = weak.update(cx, |app, cx| {
                             w.close_dialog(cx);
@@ -243,7 +246,7 @@ impl Pokarak {
                         .justify_end()
                         .child(close_button())
                         .child(
-                            Button::new("confirm-worktree-remove")
+                            theme::action_button("confirm-worktree-remove", false)
                                 .label("워크트리 제거")
                                 .danger()
                                 .on_click(move |_, w, cx| {
@@ -324,10 +327,9 @@ impl Pokarak {
                         .justify_end()
                         .child(close_button())
                         .child(
-                            Button::new("confirm-worktree-create")
+                            theme::action_button("confirm-worktree-create", disabled)
                                 .label("워크트리 생성")
                                 .primary()
-                                .disabled(disabled)
                                 .on_click(move |_, w, cx| {
                                     let destination = PathBuf::from(path.read(cx).value().as_ref());
                                     let branch = if new_branch {

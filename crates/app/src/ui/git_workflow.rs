@@ -304,7 +304,7 @@ impl Pokarak {
     ) {
         let editor = workflow_editor(
             describe_content(Some(&content)),
-            Path::new(&title),
+            content_language(Path::new(&title), Some(&content)),
             true,
             window,
             cx,
@@ -407,15 +407,14 @@ impl Pokarak {
                 .working
                 .as_ref()
                 .is_none_or(|c| matches!(c, ConflictContent::Text(_)));
+        let base = snapshot
+            .stages
+            .iter()
+            .find(|s| s.entry.stage == 1)
+            .map(|s| &s.content);
         let source = workflow_editor(
-            describe_content(
-                snapshot
-                    .stages
-                    .iter()
-                    .find(|s| s.entry.stage == 1)
-                    .map(|s| &s.content),
-            ),
-            &snapshot.file.path,
+            describe_content(base),
+            content_language(&snapshot.file.path, base),
             true,
             window,
             cx,
@@ -426,7 +425,10 @@ impl Pokarak {
                 .as_ref()
                 .map(|c| describe_content(Some(c)))
                 .unwrap_or_default(),
-            &snapshot.file.path,
+            snapshot.working.as_ref().map_or_else(
+                || language(&snapshot.file.path),
+                |content| content_language(&snapshot.file.path, Some(content)),
+            ),
             !can_edit,
             window,
             cx,
@@ -477,10 +479,13 @@ impl Pokarak {
             return;
         };
         draft.source_stage = stage;
-        let text = describe_content(draft.side_content(stage));
-        draft
-            .source
-            .update(cx, |editor, cx| editor.set_value(text, window, cx));
+        let content = draft.side_content(stage);
+        let text = describe_content(content);
+        let lang = content_language(&draft.snapshot.file.path, content);
+        draft.source.update(cx, |editor, cx| {
+            editor.set_highlighter(lang, cx);
+            editor.set_value(text, window, cx);
+        });
         cx.notify();
     }
     fn workflow_choose_side(&mut self, side: u8, window: &mut Window, cx: &mut Context<Self>) {
@@ -488,9 +493,12 @@ impl Pokarak {
             return;
         };
         draft.side = Some(side);
-        let text = describe_content(draft.side_content(side));
+        let content = draft.side_content(side);
+        let text = describe_content(content);
+        let lang = content_language(&draft.snapshot.file.path, content);
         let readonly = draft.result_readonly();
         draft.result.update(cx, |editor, cx| {
+            editor.set_highlighter(lang, cx);
             editor.set_value(text, window, cx);
             editor.set_readonly(readonly, cx);
         });
@@ -509,6 +517,7 @@ impl Pokarak {
         draft.side = None;
         draft.result.update(cx, |editor, cx| {
             if deleted {
+                editor.set_highlighter(language(&draft.snapshot.file.path), cx);
                 editor.set_value("", window, cx);
             }
             editor.set_readonly(false, cx);
@@ -579,16 +588,22 @@ fn describe_content(content: Option<&ConflictContent>) -> String {
         }
     }
 }
+fn content_language(path: &Path, content: Option<&ConflictContent>) -> &'static str {
+    match content {
+        Some(ConflictContent::Text(_)) => language(path),
+        _ => "text",
+    }
+}
 fn workflow_editor(
     text: String,
-    path: &Path,
+    lang: &'static str,
     readonly: bool,
     window: &mut Window,
     cx: &mut Context<Pokarak>,
 ) -> Entity<EditorState> {
     let editor = cx.new(|cx| {
         EditorState::new(window, cx)
-            .language(language(path))
+            .language(lang)
             .line_number(true)
             .soft_wrap(false)
             .default_value(text)

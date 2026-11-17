@@ -24,6 +24,20 @@ pub(super) struct CodeSyntax {
     tokens: Arc<[Token]>,
 }
 
+/// Return the embedded grammar's exact token for names outside the editor's
+/// explicit aliases. This is a metadata lookup and never reads the source file.
+pub(super) fn embedded_language(path: &Path) -> Option<&'static str> {
+    let name = path.file_name()?.to_str()?;
+    GRAMMARS
+        .find_syntax_by_extension(name)
+        .or_else(|| {
+            path.extension()
+                .and_then(|extension| GRAMMARS.find_syntax_by_extension(extension.to_str()?))
+        })
+        .filter(|grammar| grammar.name != "Plain Text")
+        .map(|grammar| grammar.name.as_str())
+}
+
 fn grammar(path: &Path) -> Option<&'static SyntaxReference> {
     let label = language(path);
     if matches!(label, "text" | "plaintext") {

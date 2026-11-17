@@ -19,7 +19,10 @@ pub(super) struct Target {
 enum Page {
     Loading,
     History(FileHistory),
-    Blame(Vec<BlameLine>),
+    Blame {
+        lines: Vec<BlameLine>,
+        syntax: syntax::CodeSyntax,
+    },
     Patch(Entity<EditorState>, String),
     Error(String),
 }
@@ -97,7 +100,15 @@ impl Inspector {
                 }
                 Mode::Blame => {
                     file_history::file_blame(&root, &target.path, target.blame_revision.as_deref())
-                        .map(Page::Blame)
+                        .map(|lines| {
+                            let mut source = String::new();
+                            for line in &lines {
+                                source.push_str(&line.text);
+                                source.push('\n');
+                            }
+                            let syntax = syntax::CodeSyntax::new(&target.path, &source);
+                            Page::Blame { lines, syntax }
+                        })
                 }
             }
         });
@@ -218,18 +229,18 @@ impl Render for Inspector {
                 }
                 list.into_any_element()
             }
-            Page::Blame(lines) if lines.is_empty() => div()
+            Page::Blame { lines, .. } if lines.is_empty() => div()
                 .p_3()
                 .child("표시할 줄이 없습니다.")
                 .into_any_element(),
-            Page::Blame(lines) => {
+            Page::Blame { lines, .. } => {
                 let font_size = cx.theme().mono_font_size;
                 let scale = f32::from(font_size) / 13.;
                 let this = cx.entity().downgrade();
                 uniform_list("file-blame-rows", lines.len(), move |range, _, cx| {
                     let mut rows = vec![];
                     if let Some(reader) = this.upgrade()
-                        && let Page::Blame(lines) = &reader.read(cx).page
+                        && let Page::Blame { lines, syntax } = &reader.read(cx).page
                     {
                         for i in range {
                             let line = &lines[i];
@@ -276,7 +287,11 @@ impl Render for Inspector {
                                             .text_right()
                                             .child(line.line.to_string()),
                                     )
-                                    .child(div().whitespace_nowrap().child(line.text.clone())),
+                                    .child(
+                                        div()
+                                            .whitespace_nowrap()
+                                            .child(syntax.styled_line(i, &line.text, true, cx)),
+                                    ),
                             );
                         }
                     }

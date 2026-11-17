@@ -35,6 +35,21 @@ fn main() {
             thread::sleep(Duration::from_secs(60));
         }
     }
+    if mode.starts_with("formatter") {
+        if mode == "formatter-hang" {
+            loop {
+                thread::sleep(Duration::from_secs(60));
+            }
+        }
+        if mode == "formatter-error" {
+            eprintln!("deliberate formatter failure");
+            std::process::exit(42);
+        }
+        let mut source = String::new();
+        std::io::stdin().read_to_string(&mut source).unwrap();
+        print!("{}", source.replace("dirty", "formatted"));
+        return;
+    }
     fs::write("mock.pid", std::process::id().to_string()).unwrap();
     eprintln!("mock stderr: 한😀");
     if mode == "stderr-flood" {
@@ -117,7 +132,14 @@ fn main() {
                         "positionEncoding": if mode == "utf8" {"utf-8"} else {"utf-16"},
                         "textDocumentSync": {"openClose": true, "change": if mode == "full" {1} else {2}},
                         "definitionProvider": true, "referencesProvider": true,
-                        "implementationProvider": mode != "unsupported"
+                        "implementationProvider": mode != "unsupported",
+                        "executeCommandProvider": {"commands":if mode.starts_with("ts-diagnostics") {json!(["typescript.tsserverRequest","DANGEROUS"])} else {json!([])}},
+                        "completionProvider": if mode == "unsupported-editor" {Value::Bool(false)} else {json!({"resolveProvider":true})},
+                        "hoverProvider":mode != "unsupported-editor",
+                        "signatureHelpProvider":if mode == "unsupported-editor" {Value::Bool(false)} else {json!({"triggerCharacters":["(",","]})},
+                        "diagnosticProvider": if mode.starts_with("push") || mode.starts_with("ts-diagnostics") {Value::Null} else {json!({"interFileDependencies":false,"workspaceDiagnostics":false})},
+                        "documentFormattingProvider": mode != "unsupported-editor",
+                        "documentSymbolProvider": mode != "unsupported-editor"
                     }}),
                 );
                 if mode == "no-read-after-init" {
@@ -175,13 +197,16 @@ fn main() {
                     params["textDocument"]["uri"].as_str().unwrap().into(),
                     params["textDocument"].clone(),
                 );
+                if mode.starts_with("push") {
+                    publish(params["textDocument"].clone(), mode);
+                }
             }
             "textDocument/didChange" => {
                 let uri = params["textDocument"]["uri"].as_str().unwrap();
                 let doc = docs.get_mut(uri).unwrap();
-                assert_eq!(
-                    params["textDocument"]["version"].as_i64().unwrap(),
-                    doc["version"].as_i64().unwrap() + 1
+                assert!(
+                    params["textDocument"]["version"].as_i64().unwrap()
+                        > doc["version"].as_i64().unwrap()
                 );
                 if mode != "full" {
                     let previous = doc["text"].as_str().unwrap();
@@ -202,9 +227,145 @@ fn main() {
                 }
                 doc["text"] = params["contentChanges"][0]["text"].clone();
                 doc["version"] = params["textDocument"]["version"].clone();
+                if mode.starts_with("push") {
+                    publish(doc.clone(), mode);
+                }
             }
             "textDocument/didClose" => {
                 docs.remove(params["textDocument"]["uri"].as_str().unwrap());
+            }
+            "textDocument/hover" | "textDocument/signatureHelp" | "completionItem/resolve" => {
+                if mode == "editor-null" {
+                    response(id, Value::Null);
+                    continue;
+                }
+                if mode == "buffer-hang" {
+                    fs::write("request.started", method).unwrap();
+                    continue;
+                }
+                if mode == "editor-error" {
+                    send(
+                        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32603,"message":"deliberate editor failure"}}),
+                    );
+                    continue;
+                }
+                if method == "completionItem/resolve" {
+                    assert_eq!(params["data"]["opaque"], "preserve me");
+                    let mut item = params.clone();
+                    item["documentation"] =
+                        json!({"kind":"markdown","value":"**dirty** documentation"});
+                    item["detail"] = json!("const dirty: number");
+                    response(id, item);
+                } else {
+                    assert!(docs.contains_key(params["textDocument"]["uri"].as_str().unwrap()));
+                    if method == "textDocument/hover" {
+                        response(
+                            id,
+                            json!({"contents":[{"language":"typescript","value":"const dirty: number"},"**dirty** documentation"],"range":{"start":{"line":0,"character":3},"end":{"line":0,"character":5}}}),
+                        );
+                    } else {
+                        response(
+                            id,
+                            json!({"activeSignature":0,"activeParameter":0,"signatures":[{"label":if mode=="invalid-signature" {"😀(value)"} else {"dirty(value: number): number"},"documentation":{"kind":"markdown","value":"Adds one"},"parameters":[{"label":if mode=="invalid-signature" {json!([1,2])} else {json!([6,19])},"documentation":"input value"}],"activeParameter":0}]}),
+                        );
+                    }
+                }
+            }
+            "workspace/executeCommand" => {
+                assert_eq!(params["command"], "typescript.tsserverRequest");
+                let command = params["arguments"][0].as_str().unwrap();
+                assert!(matches!(
+                    command,
+                    "syntacticDiagnosticsSync" | "semanticDiagnosticsSync"
+                ));
+                assert_eq!(
+                    params["arguments"][2],
+                    json!({"executionTarget":0,"expectsResult":true,"isAsync":false})
+                );
+                let uri = params["arguments"][1]["file"].as_str().unwrap();
+                let doc = &docs[uri];
+                if mode == "ts-diagnostics-hang" {
+                    fs::write("request.started", "ready").unwrap();
+                    continue;
+                }
+                if mode == "ts-diagnostics-error" {
+                    send(
+                        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32603,"message":"deliberate TS diagnostics failure"}}),
+                    );
+                    continue;
+                }
+                let items = if doc["text"].as_str().unwrap().contains("dirty2") {
+                    json!([])
+                } else if command == "syntacticDiagnosticsSync" {
+                    json!([{"start":{"line":1,"offset":4},"end":{"line":1,"offset":6},"text":"syntax diagnostic 😀","category":"warning","code":1005}])
+                } else {
+                    json!([{"start":0,"length":2,"startLocation":{"line":1,"offset":4},"endLocation":{"line":1,"offset":6},"message":"semantic diagnostic 😀","category":"error","code":2322}])
+                };
+                response(id, json!({"success":true,"body":items}));
+            }
+            "textDocument/completion"
+            | "textDocument/diagnostic"
+            | "textDocument/formatting"
+            | "textDocument/documentSymbol" => {
+                let uri = params["textDocument"]["uri"].as_str().unwrap();
+                let doc = &docs[uri];
+                assert!(doc["text"].as_str().unwrap().contains("dirty"));
+                if mode == "buffer-hang" {
+                    fs::write("request.started", method).unwrap();
+                    continue;
+                }
+                if mode == "buffer-delayed" {
+                    fs::write("request.started", method).unwrap();
+                    while !std::path::Path::new("respond.now").exists() {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
+                if mode == "editor-error" {
+                    send(
+                        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32603,"message":"deliberate editor failure"}}),
+                    );
+                    continue;
+                }
+                let range =
+                    json!({"start":{"line":0,"character":3},"end":{"line":0,"character":5}});
+                let edit = json!({"range":range,"newText":"🦀"});
+                match method {
+                    "textDocument/completion" => {
+                        assert_eq!(params["position"], json!({"line":0,"character":5}));
+                        response(
+                            id,
+                            json!({"isIncomplete":true,"items":[{"label":"dirty","kind":6,"detail":"from unsaved buffer","documentation":"candidate summary","data":{"opaque":"preserve me"},"textEdit":edit,"additionalTextEdits":[]},{"label":"snippet","insertText":"${1:dirty}","insertTextFormat":2}]}),
+                        );
+                    }
+                    "textDocument/diagnostic" => response(
+                        id,
+                        json!({"kind":"full","items":[{"range":range,"severity":2,"code":"dirty-code","source":"mock","message":doc["text"]}]}),
+                    ),
+                    "textDocument/formatting" => {
+                        assert!(params["options"]["tabSize"].as_u64().unwrap() > 0);
+                        response(
+                            id,
+                            if mode == "overlap-edits" {
+                                json!([edit.clone(), edit])
+                            } else {
+                                json!([edit])
+                            },
+                        );
+                    }
+                    _ => {
+                        if mode == "flat-symbol" {
+                            response(
+                                id,
+                                json!([{"name":"dirty","kind":13,"location":{"uri":uri,"range":{"start":{"line":1,"character":6},"end":{"line":1,"character":11}}}}]),
+                            );
+                        } else {
+                            response(
+                                id,
+                                json!([{"name":"module","kind":2,"range":{"start":{"line":0,"character":0},"end":{"line":3,"character":0}},"selectionRange":range,"children":[{"name":"dirty","kind":13,"range":{"start":{"line":1,"character":0},"end":{"line":1,"character":16}},"selectionRange":{"start":{"line":1,"character":6},"end":{"line":1,"character":11}}}]}]),
+                            );
+                        }
+                    }
+                }
             }
             "textDocument/definition"
             | "textDocument/references"
@@ -242,7 +403,9 @@ fn main() {
                 }
                 // Unrelated responses must not satisfy the pending request.
                 response(&json!(987654), json!({"unrelated": true}));
-                let target = if mode == "dependency" {
+                let target = if mode == "buffer" {
+                    uri.to_owned()
+                } else if mode == "dependency" {
                     fs::read_to_string("dependency-uri").unwrap()
                 } else {
                     args.get(2)
@@ -276,4 +439,17 @@ fn main() {
             _ => {}
         }
     }
+}
+
+fn publish(doc: Value, mode: &str) {
+    let range = json!({"start":{"line":0,"character":3},"end":{"line":0,"character":5}});
+    // Deliberately send another document/version first. Neither may satisfy this request.
+    send(
+        json!({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":doc["uri"],"version":doc["version"].as_i64().unwrap()-1,"diagnostics":[{"range":range,"message":"STALE"}]}}),
+    );
+    let mut params = json!({"uri":doc["uri"],"version":doc["version"],"diagnostics":[{"range":range,"severity":1,"message":doc["text"]}]});
+    if mode == "push-unversioned" {
+        params.as_object_mut().unwrap().remove("version");
+    }
+    send(json!({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":params}));
 }

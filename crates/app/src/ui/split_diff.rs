@@ -26,6 +26,18 @@ impl Deref for ReviewDiff {
 
 impl ReviewDiff {
     pub(super) fn split(&self, cx: &mut Context<Pokarak>) -> AnyElement {
+        if self.document.lines.is_empty() {
+            let text = if self.document.patch.is_empty() {
+                "텍스트 변경이 없습니다.".into()
+            } else {
+                self.document.patch.clone()
+            };
+            return div()
+                .p_3()
+                .text_size(px(12.))
+                .child(text)
+                .into_any_element();
+        }
         self.split
             .get_or_init(|| cx.new(|_| SplitDiff::new(self.document.clone())))
             .clone()
@@ -77,6 +89,7 @@ fn align(lines: &[DiffLine]) -> Vec<Row> {
 struct SplitDiff {
     doc: Arc<DiffDocument>,
     rows: Arc<[Row]>,
+    scroll: UniformListScrollHandle,
     horizontal: f32,
     max_columns: usize,
 }
@@ -87,6 +100,7 @@ impl SplitDiff {
         let max_columns = doc
             .lines
             .iter()
+            .filter(|l| l.kind != DiffKind::Header)
             .map(|l| {
                 l.text
                     .chars()
@@ -106,6 +120,7 @@ impl SplitDiff {
         Self {
             doc,
             rows,
+            scroll: UniformListScrollHandle::new(),
             horizontal: 0.,
             max_columns,
         }
@@ -183,8 +198,9 @@ impl Render for SplitDiff {
                     delta.x
                 };
                 if dx != px(0.) {
-                    this.horizontal =
-                        (this.horizontal - f32::from(dx)).clamp(0., this.max_columns as f32 * 8.);
+                    let width = f32::from(this.scroll.0.borrow().base_handle.bounds().size.width);
+                    let max = (this.max_columns as f32 * 7.3 - (width / 2. - 42.)).max(0.);
+                    this.horizontal = (this.horizontal - f32::from(dx)).clamp(0., max);
                     cx.notify();
                 }
             }))
@@ -214,6 +230,7 @@ impl Render for SplitDiff {
                         })
                         .collect::<Vec<_>>()
                 })
+                .track_scroll(&self.scroll)
                 .flex_1()
                 .min_h_0()
                 .w_full(),

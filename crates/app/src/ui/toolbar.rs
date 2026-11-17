@@ -46,14 +46,15 @@ impl Pokarak {
                 )
             })
             .when(self.current.is_some(), |bar| {
-                bar.child(self.workspace_modes(compact, cx))
-                    .when(!self.git_history.active, |bar| {
-                        bar.child(self.reading_navigation(cx))
-                    })
+                bar.child(self.git_toolbar(cx))
             })
             .child(div().flex_1())
             .when(self.current.is_some(), |bar| {
-                let bar = bar.child(self.git_toolbar(cx));
+                let bar = bar
+                    .when(!self.git_history.active, |bar| {
+                        bar.child(self.reading_navigation(cx))
+                    })
+                    .child(self.workspace_modes(compact, cx));
                 #[cfg(target_os = "macos")]
                 let bar = bar.child(
                     toolbar_icon(

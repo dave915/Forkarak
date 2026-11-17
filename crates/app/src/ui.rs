@@ -7,6 +7,7 @@ mod code_workspace;
 mod diff_tools;
 mod draft_reconciliation;
 mod editor_tools;
+mod execution;
 mod file_icons;
 mod file_inspector;
 mod file_tree;
@@ -125,6 +126,7 @@ actions!(
 
 pub fn bind_keys(cx: &mut App) {
     diff_tools::bind_keys(cx);
+    execution::bind_keys(cx);
     #[cfg(target_os = "macos")]
     crate::terminal::bind_keys(cx);
     #[cfg(target_os = "macos")]
@@ -175,6 +177,9 @@ pub fn bind_keys(cx: &mut App) {
         ]),
         Menu::new("탐색").items([
             MenuItem::action("워크트리 선택…", ChooseWorktree),
+            MenuItem::action("작업·로그…", execution::ManageTasks),
+            MenuItem::action("확장 관리…", execution::ManageExtensions),
+            MenuItem::separator(),
             MenuItem::action("파일 찾기", FindFile),
             MenuItem::action("본문 검색", FindText),
             MenuItem::separator(),
@@ -308,6 +313,7 @@ pub struct Pokarak {
     file_request: u64,
     navigation_request: u64,
     git_ui: git_actions::GitUi,
+    execution: execution::ExecutionUi,
     commit_ui: git_commit::CommitUi,
     updates: updates::Updates,
     error: Option<String>,
@@ -508,6 +514,7 @@ impl Pokarak {
         for root in project.worktrees {
             #[cfg(target_os = "macos")]
             self.close_worktree_terminals(&root, cx);
+            self.execution.shutdown_root(&root);
             self.sessions.remove(&root);
         }
         if self.current_project.as_ref() == Some(&project_root) {
@@ -567,6 +574,7 @@ impl Pokarak {
         #[cfg(target_os = "macos")]
         self.shutdown_terminals(cx);
         self.sessions.clear();
+        self.execution.shutdown();
         self.persist(cx);
         self.focus.focus(window, cx);
         cx.notify();
@@ -651,6 +659,7 @@ impl Pokarak {
             file_request: 0,
             navigation_request: 0,
             git_ui: git_actions::GitUi::default(),
+            execution: execution::ExecutionUi::default(),
             commit_ui,
             update_view,
             updates: updates::Updates::new(cx),
@@ -691,6 +700,7 @@ impl Pokarak {
         this.install_cli_control(window, cx);
         cx.on_release(|this, cx| {
             this.cancel_git_job();
+            this.execution.shutdown();
             #[cfg(target_os = "macos")]
             this.shutdown_terminals(cx);
             this.persist(cx);
@@ -701,6 +711,7 @@ impl Pokarak {
         .detach();
         cx.on_app_quit(|this, cx| {
             this.cancel_git_job();
+            this.execution.shutdown();
             this.persist(cx);
             if let Some(cancel) = this.cancellation.take() {
                 let _ = cancel.cancel();
@@ -720,7 +731,10 @@ impl Pokarak {
             loop {
                 executor.timer(Duration::from_millis(200)).await;
                 if view
-                    .update_in(cx, |this, window, cx| this.auto_refresh_tick(window, cx))
+                    .update_in(cx, |this, window, cx| {
+                        this.auto_refresh_tick(window, cx);
+                        this.execution_tick(window, cx);
+                    })
                     .is_err()
                 {
                     break;
@@ -2336,6 +2350,7 @@ impl Render for Pokarak {
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
         #[cfg(target_os = "macos")]
         let body = self.with_terminal_dock(body, window);
+        let body = self.with_execution_manager(body, window, cx);
         let root = editor_tools::actions(self, div().id("pokarak"), cx);
         let root = language_tools::actions(self, root, cx);
         #[cfg(target_os = "macos")]
@@ -2363,6 +2378,8 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&OpenGitHistory,w,cx|this.open_git_history(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitWorkflow,w,cx|this.open_git_workflow(w,cx)))
             .on_action(cx.listener(|this,_:&OpenSettings,w,cx|this.open_settings(w,cx)))
+            .on_action(cx.listener(|this,_:&execution::ManageTasks,w,cx|this.open_tasks(w,cx)))
+            .on_action(cx.listener(|this,_:&execution::ManageExtensions,w,cx|this.open_extensions(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitActions,w,cx|this.open_git_actions(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitCommit,w,cx|this.open_git_commit(w,cx)))
             .on_action(cx.listener(|this,_:&OpenRepository,w,cx|this.choose_repository(w,cx)))

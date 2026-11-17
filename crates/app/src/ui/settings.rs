@@ -326,11 +326,11 @@ fn field_row(
                     .on_click(
                         move |_, _, cx| match schema::parse(field, &input.value(cx)) {
                             Ok(value) => {
-                                if field.key == "keyboard.bindings" {
-                                    if let Err(error) = validate_bindings(&value, cx) {
-                                        feedback(&state, &view, error, cx);
-                                        return;
-                                    }
+                                if field.key == "keyboard.bindings"
+                                    && let Err(error) = validate_bindings(&value, cx)
+                                {
+                                    feedback(&state, &view, error, cx);
+                                    return;
                                 }
                                 save_option(&view, &state, field, Some(value), cx);
                             }

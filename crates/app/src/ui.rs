@@ -38,7 +38,7 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::{
     Disableable, Icon, Selectable, Sizable, StyledExt, WindowExt,
     button::{Button, ButtonVariants},
-    input::{Editor, EditorState, Input, InputEvent, InputState, Position},
+    input::{Editor, EditorState, Input, InputEvent, InputState, Position, RopeExt},
     resizable::{h_resizable, resizable_panel},
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -1016,9 +1016,14 @@ impl Pokarak {
                     Ok(snapshot) => {
                         this.external_change = false;
                         this.install_snapshot(snapshot, window, cx);
-                        this.auto_refresh.installed(token);
+                        if !this.file_loading {
+                            this.auto_refresh.installed(token);
+                        }
                     }
                     Err(error) => {
+                        if this.auto_refresh.failed(token) {
+                            this.external_change = true;
+                        }
                         this.error = Some(format!("{error:#}"));
                         this.status = "변경사항을 읽을 수 없습니다".into();
                     }
@@ -1070,9 +1075,11 @@ impl Pokarak {
                         app.external_change = false;
                         app.status = "준비됨".into();
                         app.sync_git_history(window, cx);
-                        app.auto_refresh.installed(token);
                     }
                     Err(error) => {
+                        if app.auto_refresh.failed(token) {
+                            app.external_change = true;
+                        }
                         app.error = Some(format!("{error:#}"));
                         app.status = "워크트리를 갱신할 수 없습니다".into();
                     }
@@ -1230,6 +1237,15 @@ impl Pokarak {
             .documents
             .get(&path)
             .map(|doc| (doc.read(cx).cursor_position(), doc.read(cx).scroll_offset()));
+        let previous_selection = session.documents.get(&path).map(|doc| {
+            let editor = doc.read(cx);
+            let range = editor.selected_range();
+            (
+                editor.text().offset_to_position(range.start),
+                editor.text().offset_to_position(range.end),
+                editor.is_selection_reversed(),
+            )
+        });
         if let Some(point) = &history_restore {
             session.saved.code = point.code;
         }
@@ -1245,6 +1261,7 @@ impl Pokarak {
         self.capture_code_buffers(cx);
         let retained = self.code_edits.retained_text(&root, &path);
         let preserve_focus = self.auto_refresh.preserves_focus(self.request);
+        let load_request = self.request;
         let live = retained.is_some()
             || !matches!(file.as_ref().map(|f| &f.status), Some(FileStatus::Deleted));
         let task = cx.background_spawn(async move {
@@ -1355,7 +1372,25 @@ impl Pokarak {
                             if editor.value().as_ref() != text {
                                 editor.set_value(text, window, cx);
                             }
-                            if let Some(point) = &history_restore {
+                            if preserve_focus
+                                && history_restore.is_none()
+                                && position.is_none()
+                                && let Some((cursor, offset)) = previous_position
+                            {
+                                if let Some((start, end, reversed)) = previous_selection {
+                                    let start = editor.text().position_to_offset(&start);
+                                    let end = editor.text().position_to_offset(&end);
+                                    editor.set_selected_range_with_direction(
+                                        start..end,
+                                        reversed,
+                                        cx,
+                                    );
+                                } else {
+                                    let offset = editor.text().position_to_offset(&cursor);
+                                    editor.set_selected_range(offset..offset, cx);
+                                }
+                                editor.set_scroll_offset(offset, cx);
+                            } else if let Some(point) = &history_restore {
                                 editor.set_cursor_position(
                                     Position::new(point.line, point.column),
                                     window,
@@ -1417,12 +1452,16 @@ impl Pokarak {
                                             session.restoring = false;
                                         }
                                         this.persist(cx);
+                                        this.auto_refresh.installed(load_request);
                                     }
                                 });
                             });
                         });
                     }
                     Err(error) => {
+                        if this.auto_refresh.failed(load_request) {
+                            this.external_change = true;
+                        }
                         if let Some(s) = this.sessions.get_mut(&root) {
                             s.documents.remove(&path);
                             s.diffs.remove(&path);
@@ -2467,7 +2506,7 @@ impl Render for Pokarak {
             .children(self.update_banner(cx))
             .children(self.code_drafts_banner(cx))
             .children(self.reviewed_files_notice(cx))
-            .when(self.opening_path.is_none() && self.external_change,|d|d.child(div().h(ui_px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(ui_text(12.))
+            .when(self.opening_path.is_none() && self.auto_refresh.show_manual_notice(self.external_change),|d|d.child(div().h(ui_px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(ui_text(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")
                 .child(Button::new("apply-refresh").label("갱신").ghost().small().on_click(cx.listener(|this,_,w,cx|this.refresh(w,cx))))))
             .when(self.trust_prompt,|d|d.child(div().p_3().v_flex().gap_2().bg(palette.rgb(0x293848)).border_b_1().border_color(palette.rgb(LINE))

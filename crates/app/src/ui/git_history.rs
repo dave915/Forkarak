@@ -106,6 +106,40 @@ impl HistoryUi {
         !self.active && self.request == request && self.root.as_deref() == Some(root)
     }
 }
+
+fn extend_refresh_to_anchor(
+    root: &Path,
+    page: &mut HistoryPage,
+    wanted: usize,
+    anchor: Option<&str>,
+) -> anyhow::Result<()> {
+    let wanted = wanted.min(history::HISTORY_LIMIT);
+    while page.entries.len() < history::HISTORY_LIMIT
+        && (page.entries.len() < wanted
+            || anchor.is_some_and(|oid| !page.entries.iter().any(|row| row.commit.oid == oid)))
+    {
+        let Some(cursor) = page.next.as_ref() else {
+            break;
+        };
+        let count = if page.entries.len() < wanted {
+            (wanted - page.entries.len()).min(100)
+        } else {
+            100
+        };
+        let next = history::next_page(root, cursor, count)?;
+        let added = next.entries.len();
+        page.entries.extend(next.entries);
+        page.next = next.next;
+        page.loaded = next.loaded;
+        page.limit_reached = next.limit_reached;
+        page.shallow = next.shallow;
+        if added == 0 {
+            break;
+        }
+    }
+    Ok(())
+}
+
 impl Pokarak {
     /// Reload refs/rows in place. Immutable selected commit readers, split diff
     /// entities and both file/editor scroll handles remain untouched.
@@ -126,6 +160,7 @@ impl Pokarak {
             .get(top)
             .map(|entry| entry.commit.oid.clone());
         let remainder = (-y).max(0.) % row_height;
+        let refresh_anchor = anchor.clone();
         self.history_read(
             move |root| {
                 let scoped = branch
@@ -140,18 +175,7 @@ impl Pokarak {
                         (page, catalog, branch)
                     }
                 };
-                while page.entries.len() < wanted {
-                    let Some(cursor) = page.next.as_ref() else {
-                        break;
-                    };
-                    let next =
-                        history::next_page(root, cursor, (wanted - page.entries.len()).min(100))?;
-                    page.entries.extend(next.entries);
-                    page.next = next.next;
-                    page.loaded = next.loaded;
-                    page.limit_reached = next.limit_reached;
-                    page.shallow = next.shallow;
-                }
+                extend_refresh_to_anchor(root, &mut page, wanted, refresh_anchor.as_deref())?;
                 Ok((page, catalog, missing))
             },
             move |app, (page, catalog, missing), window, cx| {
@@ -224,8 +248,18 @@ impl Pokarak {
                     return;
                 }
                 match result {
-                    Ok(data) => ready(app, data, window, cx),
-                    Err(error) => app.git_history.error = Some(format!("{error:#}")),
+                    Ok(data) => {
+                        ready(app, data, window, cx);
+                        if !app.git_history.read_pending() {
+                            app.auto_refresh.installed(navigation_generation);
+                        }
+                    }
+                    Err(error) => {
+                        if app.auto_refresh.failed(navigation_generation) {
+                            app.external_change = true;
+                        }
+                        app.git_history.error = Some(format!("{error:#}"));
+                    }
                 }
                 cx.notify();
             });
@@ -571,8 +605,112 @@ fn visible(text: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use super::HistoryUi;
-    use std::path::PathBuf;
+    use super::{HistoryUi, extend_refresh_to_anchor};
+    use pokarak_core::history;
+    use std::{
+        path::{Path, PathBuf},
+        process::Command,
+    };
+
+    fn fixture_git(root: &Path, args: &[&str]) -> String {
+        let mut command = Command::new("git");
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("GIT_") {
+                command.env_remove(key);
+            }
+        }
+        let output = command
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args([
+                "--literal-pathspecs",
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+                "-C",
+            ])
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim_end_matches('\n')
+            .to_owned()
+    }
+
+    #[test]
+    fn refresh_pages_past_the_old_count_to_find_a_shifted_visible_anchor() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fixture_git(root, &["init", "-b", "main"]);
+        std::fs::write(root.join("source.rs"), "authored fixture\n").unwrap();
+        fixture_git(root, &["add", "--", "source.rs"]);
+        let tree = fixture_git(root, &["write-tree"]);
+        let mut head = fixture_git(root, &["commit-tree", &tree, "-m", "seed"]);
+        for number in 1..150 {
+            head = fixture_git(
+                root,
+                &[
+                    "commit-tree",
+                    &tree,
+                    "-p",
+                    &head,
+                    "-m",
+                    &format!("old {number}"),
+                ],
+            );
+        }
+        fixture_git(root, &["update-ref", "refs/heads/main", &head]);
+        let (old, _) = history::navigation::open_branch(root, "refs/heads/main", 100)
+            .unwrap()
+            .unwrap();
+        let anchor = old.entries[40].commit.oid.clone();
+        let excluded = fixture_git(
+            root,
+            &["commit-tree", &tree, "-p", &head, "-m", "unrelated branch"],
+        );
+        fixture_git(root, &["update-ref", "refs/heads/unrelated", &excluded]);
+        for number in 0..120 {
+            head = fixture_git(
+                root,
+                &[
+                    "commit-tree",
+                    &tree,
+                    "-p",
+                    &head,
+                    "-m",
+                    &format!("incoming {number}"),
+                ],
+            );
+        }
+        fixture_git(root, &["update-ref", "refs/heads/main", &head]);
+        let (mut page, _) = history::navigation::open_branch(root, "refs/heads/main", 100)
+            .unwrap()
+            .unwrap();
+        assert!(!page.entries.iter().any(|row| row.commit.oid == anchor));
+        extend_refresh_to_anchor(root, &mut page, old.entries.len(), Some(&anchor)).unwrap();
+        assert_eq!(
+            page.entries.iter().position(|row| row.commit.oid == anchor),
+            Some(160)
+        );
+        assert_eq!(page.entries.len(), 200);
+        assert!(!page.entries.iter().any(|row| row.commit.oid == excluded));
+        // A removed or branch-excluded anchor stops at exhausted scoped history.
+        extend_refresh_to_anchor(root, &mut page, old.entries.len(), Some(&excluded)).unwrap();
+        assert_eq!(page.entries.len(), 270);
+        assert!(page.next.is_none());
+    }
 
     #[test]
     fn reopening_a_worktree_does_not_accept_its_previous_read() {

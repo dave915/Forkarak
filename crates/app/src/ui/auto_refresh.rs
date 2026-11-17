@@ -42,7 +42,16 @@ impl AutoRefresh {
     }
 
     pub(super) fn pending(&self) -> bool {
-        self.first_event.is_some() || self.ready || self.checking.is_some()
+        self.first_event.is_some()
+            || self.ready
+            || self.checking.is_some()
+            || self.automatic_request.is_some()
+    }
+
+    pub(super) fn show_manual_notice(&self, external_change: bool) -> bool {
+        // A transient 32px notice would resize the focused reader and trigger
+        // caret-follow before the automatic refresh captures its old viewport.
+        external_change && !self.pending()
     }
 
     fn settled(&self, now: Instant) -> bool {
@@ -54,7 +63,11 @@ impl AutoRefresh {
     }
 
     fn start(&mut self, now: Instant, blocked: bool) -> Option<Ticket> {
-        if blocked || self.checking.is_some() || !self.settled(now) {
+        if blocked
+            || self.checking.is_some()
+            || self.automatic_request.is_some()
+            || !self.settled(now)
+        {
             return None;
         }
         self.serial = self.serial.wrapping_add(1);
@@ -94,6 +107,18 @@ impl AutoRefresh {
         {
             self.completed = self.completed.wrapping_add(1);
         }
+    }
+
+    pub(super) fn failed(&mut self, request: u64) -> bool {
+        if self.automatic_request != Some(request) {
+            return false;
+        }
+        self.automatic_request = None;
+        self.fingerprint = None;
+        self.ready = false;
+        // Do not queue a timer retry. A new event (possibly queued during the
+        // failed read) or an explicit refresh must trigger the next attempt.
+        true
     }
 }
 
@@ -197,6 +222,13 @@ impl Pokarak {
         if self.changed.swap(false, Ordering::Relaxed) {
             self.reviewed_files.invalidate_working(&root);
             self.auto_refresh.queue(now);
+        }
+        if let Some(request) = self.auto_refresh.automatic_request {
+            if request == self.request {
+                return; // Keep events queued until file/graph layout completes.
+            }
+            // Explicit navigation/refresh superseded this automatic install.
+            self.auto_refresh.failed(request);
         }
         let blocked = self.auto_refresh_blocked(window, cx);
         if !blocked && self.auto_refresh.ready && self.auto_refresh.checking.is_none() {
@@ -333,6 +365,50 @@ mod tests {
         state.finish(Path::new("/fixture/main"), failed, None);
         assert!(!state.pending());
         assert!(state.start(now + Duration::from_secs(8), false).is_none());
+    }
+
+    #[test]
+    fn failed_install_retries_the_same_fingerprint_only_after_another_event() {
+        let now = Instant::now();
+        let mut state = state(now);
+        let check = state.start(now + QUIET, false).unwrap();
+        state.finish(Path::new("/fixture/main"), check, Some("changed".into()));
+        state.ready = false;
+        state.automatic_request = Some(9);
+        assert!(state.pending());
+        assert!(state.failed(9));
+        assert!(!state.pending());
+        assert!(state.start(now + Duration::from_secs(30), false).is_none());
+        state.queue(now + Duration::from_secs(31));
+        let retry = state.start(now + Duration::from_secs(32), false).unwrap();
+        state.finish(Path::new("/fixture/main"), retry, Some("changed".into()));
+        assert!(state.ready);
+        state.ready = false;
+        state.automatic_request = Some(10);
+        assert!(!state.failed(9)); // An old completion cannot cancel this read.
+        assert!(state.preserves_focus(10));
+        state.queue(now + Duration::from_secs(33));
+        assert!(state.start(now + Duration::from_secs(34), false).is_none());
+        state.installed(10);
+        assert_eq!(state.completed, 1);
+        assert!(state.start(now + Duration::from_secs(34), false).is_some());
+    }
+
+    #[test]
+    fn pending_refresh_never_inserts_the_manual_notice_into_the_reader() {
+        let now = Instant::now();
+        let mut state = state(now);
+        assert!(!state.show_manual_notice(true)); // Debounce.
+        let check = state.start(now + QUIET, false).unwrap();
+        assert!(!state.show_manual_notice(true)); // Summary in flight.
+        state.finish(Path::new("/fixture/main"), check, Some("one".into()));
+        assert!(!state.show_manual_notice(true)); // Ready for installation.
+        state.ready = false;
+        state.automatic_request = Some(2);
+        assert!(!state.show_manual_notice(true)); // Snapshot/file/layout in flight.
+        state.failed(2);
+        assert!(state.show_manual_notice(true)); // Manual recovery remains visible.
+        assert!(!state.show_manual_notice(false));
     }
 
     #[test]

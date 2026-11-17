@@ -354,3 +354,237 @@ fn real_managed_jvm_dirty_features() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires installed managed Rust/Go/Groovy; actual cross-call semantics under short PATH"]
+fn real_managed_compiled_language_semantics() -> Result<()> {
+    for package in ["rust", "go", "groovy"] {
+        let p = Project::new();
+        let (path, text, needle, definition) = match package {
+            "rust" => {
+                p.write(
+                    "Cargo.toml",
+                    "[package]\nname=\"fixture\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+                );
+                (
+                    "src/main.rs",
+                    "fn greeting(value: i32) -> i32 { value + 1 }\nfn main() { let result = greeting(1); }\n",
+                    "greeting(1)",
+                    0,
+                )
+            }
+            "go" => {
+                p.write("go.mod", "module fixture\n\ngo 1.27\n");
+                (
+                    "main.go",
+                    "package fixture\nfunc Greeting(name string) string { return name }\nfunc Use() string { return Greeting(\"world\") }\n",
+                    "Greeting(\"world",
+                    1,
+                )
+            }
+            _ => (
+                "Main.groovy",
+                "class Main {\n String greeting(String name) { return name }\n String call() { return greeting(\"world\") }\n}\n",
+                "greeting(\"world",
+                1,
+            ),
+        };
+        p.write(path, text);
+        let mut nav = p.nav(package)?;
+        let snapshot = p.snapshot(path, text, 3);
+        let (line, column) = offset(text, needle);
+        let column = column + 2;
+        let mut hits = vec![];
+        for _ in 0..40 {
+            hits = nav
+                .navigate_buffer(&snapshot, line, column, NavigationKind::Definition)?
+                .value
+                .locations;
+            if !hits.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(
+            hits.iter()
+                .any(|hit| hit.path == snapshot.path() && hit.line == definition),
+            "{package}: {hits:?}\n{}\n{}",
+            nav.server_messages(),
+            nav.stderr()
+        );
+        let hover = nav
+            .hover_buffer(&snapshot, line, column)?
+            .value
+            .context(format!("{package} returned no hover"))?;
+        assert!(
+            hover
+                .contents
+                .iter()
+                .any(|v| v.value.to_lowercase().contains("greeting")),
+            "{package}: {:?}",
+            hover.contents
+        );
+        let refs = nav
+            .navigate_buffer(
+                &snapshot,
+                definition,
+                if package == "rust" {
+                    4
+                } else if package == "go" {
+                    5
+                } else {
+                    9
+                },
+                NavigationKind::References,
+            )?
+            .value;
+        assert!(
+            refs.locations
+                .iter()
+                .any(|h| h.path == snapshot.path() && h.line == line),
+            "{package}: {:?}",
+            refs.locations
+        );
+        if package != "groovy" {
+            let edits = nav
+                .format_buffer(&snapshot, &FormattingOptions::default())?
+                .value;
+            let _ = pokarak_navigation::TextEdit::apply_all(snapshot.text(), &edits)?;
+        }
+        snapshot.invalidate();
+        assert!(nav.hover_buffer(&snapshot, line, column).is_err());
+        nav.shutdown();
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires managed Pyright and VS Code JSON server; real dirty-buffer diagnostics"]
+fn real_managed_versioned_diagnostics() -> Result<()> {
+    for (package, path, text) in [
+        ("python", "test.py", "value: int = \"wrong\"\n"),
+        ("web", "test.json", "{\"name\": }\n"),
+    ] {
+        let p = Project::new();
+        p.write(path, "// disk differs\n");
+        let mut nav = p.nav(package)?;
+        let snapshot = p.snapshot(path, text, 23);
+        let diagnostics = nav.diagnostics(&snapshot)?.value;
+        eprintln!(
+            "DIAGNOSTICS {package}: {:?}",
+            diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+        );
+        assert!(!diagnostics.is_empty(), "{package}");
+        assert!(
+            diagnostics.iter().any(|d| d.severity == Some(1)),
+            "{package}"
+        );
+        snapshot.invalidate();
+        assert!(nav.diagnostics(&snapshot).is_err());
+        nav.shutdown();
+    }
+    Ok(())
+}
+
+#[test]
+fn expanded_import_gates_and_stale_capabilities_precede_startup() {
+    for (language, path, text) in [
+        ("rust", "main.rs", "fn main() {}"),
+        ("go", "main.go", "package main"),
+        ("groovy", "build.gradle", "plugins {}"),
+        ("svelte", "App.svelte", "<p>hello</p>"),
+        ("sql", "test.sql", "SELECT 1"),
+        ("kotlin", "Main.kt", "fun main() {}"),
+    ] {
+        let p = Project::new();
+        p.write(path, text);
+        let mut nav = Navigator::with_options(
+            p.root.clone(),
+            vec![pokarak_navigation::ServerConfig {
+                language: language.into(),
+                program: "/definitely/not/installed".into(),
+                args: vec![],
+            }],
+            NavigatorOptions {
+                config_file: None,
+                ..Default::default()
+            },
+        );
+        let snapshot = p.snapshot(path, text, 1);
+        let error = nav.capabilities_buffer(&snapshot).unwrap_err().to_string();
+        assert!(error.contains("allowProjectImports"), "{language}: {error}");
+        snapshot.invalidate();
+        assert!(
+            nav.capabilities_buffer(&snapshot)
+                .unwrap_err()
+                .to_string()
+                .contains("Stale")
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires packaging worker Resources; actual bundled JDT navigation with managed data path"]
+fn real_bundled_java_resource_manifest() -> Result<()> {
+    let resources = PathBuf::from(
+        std::env::var_os("FORKARAK_BUNDLED_RESOURCES").context("set FORKARAK_BUNDLED_RESOURCES")?,
+    )
+    .canonicalize()?;
+    let p = Project::new();
+    let state = p.root.parent().unwrap().join("managed-state");
+    let tools = ManagedTools::new(state.clone(), Some(resources.clone()))?;
+    let status = tools.status("java")?;
+    assert!(status.problem.is_none(), "{:?}", status.problem);
+    let java = status.installed.context("Packaged Java missing")?;
+    assert_eq!(
+        java.distribution,
+        pokarak_navigation::ToolDistribution::Bundled
+    );
+    assert!(!state.exists());
+    p.write(".project",r#"<projectDescription><name>bundled-java</name><projects/><buildSpec><buildCommand><name>org.eclipse.jdt.core.javabuilder</name><arguments/></buildCommand></buildSpec><natures><nature>org.eclipse.jdt.core.javanature</nature></natures></projectDescription>"#);
+    p.write(".classpath",r#"<classpath><classpathentry kind="src" path="src"/><classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/><classpathentry kind="output" path="bin"/></classpath>"#);
+    p.write("src/Bundled.java", "class Bundled {}\n");
+    let text = "class Bundled {\n String greeting(String name) { return name; }\n String call() { return greeting(\"world\"); }\n}\n";
+    let mut nav = Navigator::with_options(
+        p.root.clone(),
+        java.servers,
+        NavigatorOptions {
+            config_file: None,
+            initialize_timeout: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
+    );
+    let snapshot = p.snapshot("src/Bundled.java", text, 9);
+    let (line, col) = offset(text, "greeting(\"world");
+    let definitions = nav
+        .navigate_buffer(&snapshot, line, col + 2, NavigationKind::Definition)?
+        .value;
+    assert!(
+        definitions.semantic
+            && definitions
+                .locations
+                .iter()
+                .any(|h| h.path == snapshot.path() && h.line == 1)
+    );
+    let hover = nav
+        .hover_buffer(&snapshot, line, col + 2)?
+        .value
+        .context("Packaged JDT hover missing")?;
+    assert!(hover.contents.iter().any(|v| v.value.contains("greeting")));
+    let signature = nav
+        .signature_help_buffer(&snapshot, line, col + 10)?
+        .value
+        .context("Packaged JDT signature missing")?;
+    assert!(!signature.signatures.is_empty());
+    let completions = nav.complete_buffer(&snapshot, line, col + 5)?.value.items;
+    assert!(completions.iter().any(|i| i.label.contains("greeting")));
+    nav.shutdown();
+    assert_eq!(
+        fs::read_to_string(p.root.join("src/Bundled.java"))?,
+        "class Bundled {}\n"
+    );
+    assert!(!state.exists());
+    assert!(resources.join("language-tools/manifest.json").is_file());
+    Ok(())
+}

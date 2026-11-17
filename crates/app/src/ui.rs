@@ -2833,7 +2833,7 @@ impl Pokarak {
                     .into_any_element()
             }
         } else if let Some(diff) = diff.filter(|_| self.prefs.split_diff) {
-            diff.split(cx)
+            diff.split(self, cx)
         } else if let Some(diff) = diff {
             let widest = diff
                 .lines

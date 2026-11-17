@@ -359,7 +359,7 @@ impl Pokarak {
             .as_ref()
             .filter(|doc| !ui.code && self.prefs.split_diff && !doc.binary)
         {
-            doc.split(cx)
+            doc.split(self, cx)
         } else if let Some(editor) = &ui.editor {
             Editor::new(editor)
                 .readonly(true)

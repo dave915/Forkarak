@@ -54,6 +54,7 @@ pub struct SavedView {
     pub collapsed_graph_sections: HashSet<String>,
     pub graph_height: Option<f32>,
     pub graph_files_width: Option<f32>,
+    pub diff_split_ratio: Option<f32>,
     pub filter: String,
     pub text_search: bool,
     pub comparison: CompareMode,

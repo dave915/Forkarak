@@ -14,6 +14,7 @@ pub mod files;
 pub mod history_actions;
 pub mod integration;
 pub mod preview;
+pub mod recovery;
 pub mod sync;
 pub mod workflow;
 pub mod worktrees;
@@ -1032,6 +1033,10 @@ mod tests {
     mod preview_actions {
         use super::*;
         include!("operations/preview_tests.rs");
+    }
+    mod recovery_actions {
+        use super::*;
+        include!("operations/recovery_tests.rs");
     }
 
 

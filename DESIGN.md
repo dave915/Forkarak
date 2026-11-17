@@ -6,11 +6,11 @@ Mode: operate/read. A compact developer review surface, with a steel spork mark 
 - Ground #20252c, sidebar #1b2026, raised surface #282f38, separator #343e49.
 - Main ink #e5eaf0, secondary #a4b0be, accent #7fb8e2. Additions #83c4a1 on #24382f; deletions #e5a0a5 on #3c2a30.
 - UI type: IBM Plex Sans; code: JetBrains Mono. Korean falls back to the OS Korean sans. Body 13px, code 13px, panel title 12px, product 17px.
-- Spacing 4/8/12/16/24; compact rows 28px, toolbar 44px, controls 28px. Controls radius 5px; main panes are flat and separated by a rule.
+- Spacing 4/8/12/16/24; compact rows 28px, toolbar 36px, controls 28px. Controls radius 5px; main panes are flat and separated by a rule.
 - Native keyboard conventions, visible focus, tooltips, drag-resizable panes. No dashboard cards or decorative metrics.
 
 ## First viewport
-A 48px native titlebar combines macOS window controls, the spork mark, project tabs and open-project action, Graph/Code selection, Stage / Commit, Git actions, refresh and settings. Smaller windows preserve the action labels and collapse secondary icons. Code View adds back and forward navigation.
+A 36px native titlebar combines macOS window controls, the spork mark, project tabs and open-project action, Graph/Code selection, Stage / Commit, Git actions, refresh and settings. Smaller windows preserve the action labels and collapse secondary icons. Code View adds back and forward navigation.
 Repositories open in Git Graph mode. Left 210px: worktrees/branches. The remaining area has a vertically resizable commit graph above the selected commit detail. Graph rows show branch labels, message, author, date and hash; a working-changes row opens the current files. The lower detail has a resizable changed-file list and read-only historical diff/code, with explicit merge-parent selection and guarded cherry-pick/revert actions. The file toolbar offers unified and synchronized side-by-side diff, History, and Blame.
 
 Code View retains the existing changed files/all files, search and current-file reader, including per-worktree reading positions and language navigation. File/text search switches to Code View. Historical editors never invoke current-source language navigation. Project/worktree opens return to the graph and reject old asynchronous history results. Footer: worktree path and loading/analysis status. The worktree sidebar has no explanatory footer caption.

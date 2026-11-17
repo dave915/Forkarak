@@ -10,16 +10,17 @@ impl Pokarak {
         let compact = window.viewport_size().width < px(1100.);
         let has_projects = !self.projects.is_empty();
         let content = div()
-            .size_full()
+            .absolute()
+            .inset_0()
             .min_w_0()
             .px_2()
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(px(4.))
             .child(
                 Icon::new(IconName::Utensils)
                     .data(include_bytes!("../../../../assets/icons/spork.svg").as_slice())
-                    .size(px(22.))
+                    .size(px(18.))
                     .text_color(palette.rgb(BLUE)),
             )
             .when(!has_projects, |bar| {
@@ -32,21 +33,17 @@ impl Pokarak {
                 .child(div().flex_1())
             })
             .when(has_projects, |bar| {
-                bar.child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(self.project_tabs(window, cx)),
-                )
-                .child(
-                    Button::new("add-project")
-                        .icon(IconName::Plus)
-                        .ghost()
-                        .small()
-                        .accessibility_label("프로젝트 열기")
-                        .tooltip_with_action("프로젝트 열기", &OpenRepository, None)
-                        .on_click(cx.listener(|app, _, w, cx| app.choose_repository(w, cx))),
-                )
+                bar.child(self.project_tabs(window, cx))
+                    .child(
+                        Button::new("add-project")
+                            .icon(IconName::Plus)
+                            .ghost()
+                            .small()
+                            .accessibility_label("프로젝트 열기")
+                            .tooltip_with_action("프로젝트 열기", &OpenRepository, None)
+                            .on_click(cx.listener(|app, _, w, cx| app.choose_repository(w, cx))),
+                    )
+                    .child(div().flex_1())
             })
             .when(self.current.is_some(), |bar| {
                 bar.child(self.workspace_modes(compact, cx))
@@ -103,7 +100,7 @@ impl Pokarak {
             );
 
         TitleBar::new()
-            .h(px(48.))
+            .h(px(36.))
             .pl(if window.is_fullscreen() {
                 px(0.)
             } else {
@@ -111,7 +108,7 @@ impl Pokarak {
             })
             .bg(palette.rgb(SIDE))
             .border_b_0()
-            .child(content)
+            .child(div().relative().size_full().child(content))
             .into_any_element()
     }
 
@@ -137,7 +134,7 @@ impl Pokarak {
             .bg(palette.rgb(SIDE))
             .small()
             .min_w_0()
-            .w_full()
+            .flex_initial()
             .menu(self.projects.len() > 1)
             .max_width(px(200.))
             .track_scroll(&scroll)
@@ -154,7 +151,6 @@ impl Pokarak {
                 // Tab::icon renders an icon-only tab. The prefix lets the label
                 // determine the width while keeping both actions visible.
                 Tab::new()
-                    .min_w(px(112.))
                     .prefix(
                         Icon::new(IconName::FolderGit2).size(px(14.)).text_color(
                             palette.rgb(if active == Some(index) { BLUE } else { MUTED }),
@@ -199,8 +195,8 @@ impl Pokarak {
             .items_center()
             .gap(px(2.))
             .p(px(2.))
-            .rounded(px(6.))
-            .bg(palette.rgb(PANEL))
+            .rounded(px(5.))
+            .bg(palette.rgb(BG))
             .child(
                 Button::new("view-graph")
                     .label("Git 그래프")

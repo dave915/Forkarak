@@ -108,6 +108,14 @@ impl Pokarak {
         self.navigation_request += 1;
         self.navigating = false;
         let weak = cx.weak_entity();
+        let sample = [
+            ("− ", patch::DELETE_BG, RED, "val count = 1"),
+            ("+ ", patch::ADD_BG, GREEN, "val count = 2"),
+        ]
+        .map(|(sign, background, color, text)| {
+            let syntax = syntax::CodeSyntax::new(Path::new("Preview.kt"), text);
+            (sign, background, color, text, syntax)
+        });
         window.open_dialog(cx, move |dialog, window, cx| {
             let (choice, display) = weak
                 .read_with(cx, |app, _| (app.prefs.theme, app.prefs.display))
@@ -135,6 +143,20 @@ impl Pokarak {
             let palette = Palette::new(cx);
             let restore = weak.clone();
             let font = ui_px(display.code_font_size);
+            let preview = sample.iter().map(|(sign, background, color, text, syntax)| {
+                let gutter = div()
+                    .flex_none()
+                    .whitespace_nowrap()
+                    .text_color(palette.rgb(*color))
+                    .child(*sign);
+                div()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .bg(palette.rgb(*background))
+                    .child(gutter)
+                    .child(syntax.styled_line(0, text, false, cx))
+            });
             dialog
                 .title("설정")
                 .width(ui_px(445.).min(window.viewport_size().width - ui_px(24.)))
@@ -170,20 +192,7 @@ impl Pokarak {
                                 .font_family("JetBrains Mono")
                                 .text_size(font)
                                 .line_height(theme::code_row_height(font))
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .bg(palette.rgb(patch::DELETE_BG))
-                                        .text_color(palette.rgb(RED))
-                                        .child("− val count = 1"),
-                                )
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .bg(palette.rgb(patch::ADD_BG))
-                                        .text_color(palette.rgb(GREEN))
-                                        .child("+ val count = 2"),
-                                ),
+                                .children(preview),
                         )
                         .child(
                             div()

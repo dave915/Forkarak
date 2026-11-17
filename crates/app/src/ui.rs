@@ -56,6 +56,22 @@ const GREEN: u32 = 0x83c4a1;
 const RED: u32 = 0xe5a0a5;
 type FileRevision = (u64, SystemTime);
 
+struct ResultExcerpt {
+    location: SourceLocation,
+    // Search providers return a bounded preview. Each visible fragment has its
+    // own parse context; unrelated hits and files must not share parser state.
+    syntax: std::sync::OnceLock<syntax::CodeSyntax>,
+}
+
+impl ResultExcerpt {
+    fn styled(&self, cx: &App) -> StyledText {
+        let hit = &self.location;
+        self.syntax
+            .get_or_init(|| syntax::CodeSyntax::new(&hit.path, &hit.preview))
+            .styled_line(0, &hit.preview, true, cx)
+    }
+}
+
 fn file_revision(path: &Path) -> Option<FileRevision> {
     let metadata = std::fs::metadata(path).ok()?;
     Some((metadata.len(), metadata.modified().ok()?))
@@ -249,7 +265,7 @@ pub struct Pokarak {
     error: Option<String>,
     analysis_feedback: AnalysisFeedback,
     status: String,
-    results: Vec<SourceLocation>,
+    results: Arc<[ResultExcerpt]>,
     result_revisions: HashMap<PathBuf, FileRevision>,
     pending_location_revision: Option<FileRevision>,
     result_title: String,
@@ -368,8 +384,8 @@ impl Pokarak {
                 }
                 "up" => self.result_cursor = self.result_cursor.saturating_sub(1),
                 "enter" => {
-                    if let Some(hit) = self.results.get(self.result_cursor).cloned() {
-                        self.open_location(hit, window, cx);
+                    if let Some(hit) = self.results.get(self.result_cursor) {
+                        self.open_location(hit.location.clone(), window, cx);
                     }
                 }
                 "escape" => {
@@ -473,7 +489,7 @@ impl Pokarak {
         self.loading = false;
         self.file_loading = false;
         self.results_open = false;
-        self.results.clear();
+        self.results = Arc::default();
         self.error = None;
         self.status = "프로젝트를 열어 시작하세요".into();
         self.filter.clear();
@@ -572,7 +588,7 @@ impl Pokarak {
             error: None,
             analysis_feedback: AnalysisFeedback::default(),
             status: "저장소를 열어 시작하세요".into(),
-            results: vec![],
+            results: Arc::default(),
             result_revisions: HashMap::new(),
             pending_location_revision: None,
             result_title: String::new(),
@@ -1694,7 +1710,14 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.results = result.locations;
+        self.results = result
+            .locations
+            .into_iter()
+            .map(|location| ResultExcerpt {
+                location,
+                syntax: Default::default(),
+            })
+            .collect();
         self.result_semantic = result.semantic;
         self.result_title = title;
         self.results_open = true;
@@ -2877,7 +2900,7 @@ impl Pokarak {
 
     fn render_results(&self, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::new(cx);
-        let results = Arc::new(self.results.clone());
+        let results = self.results.clone();
         let weak = cx.entity().downgrade();
         let root = self.current.clone().unwrap_or_default();
         let cursor = self.result_cursor;
@@ -2932,10 +2955,11 @@ impl Pokarak {
                     .child("검색 결과가 없습니다.")
                     .into_any_element()
             } else {
-                uniform_list("results", results.len(), move |range, _, _| {
+                uniform_list("results", results.len(), move |range, _, cx| {
                     range
                         .map(|ix| {
-                            let hit = results[ix].clone();
+                            let preview = &results[ix];
+                            let hit = preview.location.clone();
                             let target = weak.clone();
                             let accessible_target = weak.clone();
                             let accessible_hit = hit.clone();
@@ -2975,7 +2999,7 @@ impl Pokarak {
                                         .text_size(ui_text(11.))
                                         .text_color(palette.rgb(MUTED))
                                         .text_ellipsis()
-                                        .child(hit.preview.clone()),
+                                        .child(preview.styled(cx)),
                                 )
                                 .on_click(move |_, w, cx| {
                                     let _ = target.update(cx, |this, cx| {
@@ -3245,28 +3269,56 @@ fn project_index_for_path(projects: &[SavedProject], path: &Path) -> Option<usiz
 }
 
 fn language(path: &Path) -> &'static str {
-    match path.extension().and_then(|x| x.to_str()).unwrap_or("") {
-        "rs" => "rust",
-        "java" => "java",
-        "kt" | "kts" => "kotlin",
-        "js" | "mjs" | "cjs" => "javascript",
-        "jsx" => "jsx",
-        "ts" => "typescript",
-        "tsx" => "tsx",
-        "html" | "htm" => "html",
-        "vue" => "vue",
-        "svelte" => "svelte",
-        "css" => "css",
-        "scss" => "scss",
-        "json" => "json",
-        "yml" | "yaml" => "yaml",
-        "toml" => "toml",
-        "md" => "markdown",
-        "sh" => "bash",
-        "xml" => "xml",
-        "sql" => "sql",
-        "py" => "python",
-        _ => "text",
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return "text";
+    };
+    let name = name.to_ascii_lowercase();
+    if name == "dockerfile"
+        || name.starts_with("dockerfile.")
+        || name == "containerfile"
+        || name.starts_with("containerfile.")
+    {
+        return "dockerfile";
+    }
+    if name == ".env" || name.starts_with(".env.") {
+        return "dotenv";
+    }
+    match name.as_str() {
+        "gradlew" | "mvnw" | ".bashrc" | ".bash_profile" | ".zshrc" | ".zprofile" => return "bash",
+        "makefile" | "gnumakefile" => return "make",
+        "cargo.lock" => return "toml",
+        "gemfile" | "rakefile" => return "ruby",
+        ".editorconfig" => return "ini",
+        ".gitignore" | ".ignore" => return "gitignore",
+        _ => {}
+    }
+    match name.rsplit_once('.').map(|(_, ext)| ext) {
+        Some("rs") => "rust",
+        Some("java") => "java",
+        Some("kt" | "kts" | "ktm") => "kotlin",
+        Some("gradle" | "groovy") => "groovy",
+        Some("properties") => "properties",
+        Some("js" | "mjs" | "cjs") => "javascript",
+        // The bundled Syntect set provides JSX markup via TypeScriptReact.
+        Some("jsx" | "tsx") => "tsx",
+        Some("ts" | "mts" | "cts") => "typescript",
+        Some("html" | "htm") => "html",
+        Some("vue") => "vue",
+        Some("svelte") => "svelte",
+        Some("css") => "css",
+        Some("scss") => "scss",
+        Some("json" | "jsonc") => "json",
+        Some("yml" | "yaml") => "yaml",
+        Some("toml") => "toml",
+        Some("md" | "mdx") => "markdown",
+        Some("sh" | "bash" | "zsh") => "bash",
+        Some("bat" | "cmd") => "bat",
+        Some("xml" | "xhtml" | "svg") => "xml",
+        Some("sql") => "sql",
+        Some("py" | "pyi") => "python",
+        Some("h") => "c",
+        Some("txt" | "log") => "text",
+        _ => syntax::embedded_language(path).unwrap_or("text"),
     }
 }
 fn file_status(status: &FileStatus) -> (&'static str, u32) {
@@ -3314,5 +3366,37 @@ mod project_selection_tests {
             project_index_for_path(&projects, Path::new("/outside")),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::language;
+    use std::path::Path;
+
+    #[test]
+    fn code_views_share_file_names_aliases_and_embedded_grammar_fallback() {
+        for (path, expected) in [
+            ("src/한글/Main.KT", "kotlin"),
+            ("settings.gradle.kts", "kotlin"),
+            ("app/build.gradle", "groovy"),
+            ("gradlew", "bash"),
+            ("gradle/wrapper/gradle-wrapper.properties", "properties"),
+            ("mvnw", "bash"),
+            ("pom.xml", "xml"),
+            ("src/Widget.jsx", "tsx"),
+            ("src/example.d.mts", "typescript"),
+            ("src/main.rs", "rust"),
+            ("Cargo.lock", "toml"),
+            ("Containerfile.dev", "dockerfile"),
+            (".env.local", "dotenv"),
+            ("main.go", "Go"),
+            ("README.txt", "text"),
+            ("events.log", "text"),
+            ("artifact.unknown-pokarak", "text"),
+            ("", "text"),
+        ] {
+            assert_eq!(language(Path::new(path)), expected, "{path}");
+        }
     }
 }

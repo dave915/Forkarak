@@ -174,3 +174,12 @@ The `feat/graph-home` change makes the commit graph the main repository view. Th
 - The fixture HEAD remained `b1bb0eb`; its pre-existing working edit remained the only change. No cherry-pick, revert or other Git mutation was executed during UI verification. Existing backend write-operation behavior was not retested by this UI change.
 
 Local, ephemeral visual receipts: `/tmp/pokarak-graph-qa-initial.png` (unborn repository), `/tmp/pokarak-graph-qa-review.png` (1440×900 graph and merge detail), `/tmp/pokarak-graph-qa-historical-code.png`, `/tmp/pokarak-graph-qa-working-text.png`, `/tmp/pokarak-graph-qa-linked.png`, `/tmp/pokarak-graph-qa-parent2.png` and `/tmp/pokarak-graph-qa-small-final.png` (940×580). The QA bundle used a separate bundle identifier and session directories; normal preferences were not used for these checks.
+
+## Git client workflows and titlebar — 2026-11-17
+
+Validated the Apple Silicon debug bundle built from `9233125`. The packaged executable and Cargo output had matching Mach-O UUIDs and the bundle passed strict code signature verification.
+
+- Workspace Clippy with all targets and the mock LSP feature passed. The workspace suite ran 137 passing tests, with seven opt-in external-language-server tests skipped.
+- The native 940×580 window showed the active project name, close button, Graph/Code selector, Stage and Git actions on one line. At 1440×900 the packaged app opened the project in the graph. A compact-window check caught an icon-only project tab and prompted a fix before final packaging.
+- Native fixture checks opened split diff, file history and line blame. Clicking one added line in Stage placed only that line in the Git index while preserving the working file. Native Merge produced the two confirmed parents. Native Rebase replayed the current branch onto the chosen target and left a clean worktree with both sets of edits.
+- A GPUI test window also exercised line and hunk staging/unstaging, index and working-file split views, historical diff selection, and creating/removing a linked worktree while retaining its branch. Git write checks used temporary local fixture repositories.

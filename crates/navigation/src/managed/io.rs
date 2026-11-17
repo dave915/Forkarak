@@ -251,7 +251,7 @@ pub(super) fn json(
     Ok(serde_json::from_str(&text(url, scratch, control)?)?)
 }
 pub(super) fn verify(path: &Path, digest: &str, control: &InstallControl) -> Result<()> {
-    control.phase(InstallPhase::Verifying, "Verifying published checksum");
+    control.phase(InstallPhase::Verifying, "Verifying pinned checksum");
     let (algorithm, wanted) = digest
         .split_once(':')
         .context("Checksum must name algorithm")?;
@@ -282,7 +282,7 @@ pub(super) fn verify(path: &Path, digest: &str, control: &InstallControl) -> Res
         format!("{:x}", sha512.finalize())
     };
     if !actual.eq_ignore_ascii_case(wanted) {
-        bail!("Published checksum mismatch; previous working version retained");
+        bail!("Pinned checksum mismatch; previous working version retained");
     }
     Ok(())
 }
@@ -397,6 +397,57 @@ mod tests {
             second.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
+    }
+    #[test]
+    fn cancellation_terminates_an_actual_curl_download() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let t = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            let mut request = [0; 4096];
+            let _ = socket.read(&mut request);
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: 10485760\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            for _ in 0..200 {
+                if socket.write_all(&[1; 65536]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(15));
+            }
+        });
+        let c = InstallControl::new("test");
+        let worker_control = c.clone();
+        let scratch = t.path().to_path_buf();
+        let worker = thread::spawn(move || {
+            download_curl(
+                &format!("http://127.0.0.1:{port}/slow"),
+                &scratch.join("download"),
+                &scratch,
+                &worker_control,
+                "=http",
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while c.snapshot().downloaded_bytes == 0 {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(c.snapshot().total_bytes, Some(10485760));
+        c.cancel().unwrap();
+        assert!(worker.join().unwrap().is_err());
+        server.join().unwrap();
+        assert!(!t.path().join("download").exists());
     }
     #[test]
     fn corruption_is_refused() {

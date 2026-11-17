@@ -353,26 +353,28 @@ impl Pokarak {
         let changed_files = detail.files.clone();
         let selected = ui.selected.clone();
         let target = weak.clone();
-        let files = uniform_list("history-files", changed_files.len(), move |range, _, _| {
+        let files = uniform_list("history-files", changed_files.len(), move |range, _, cx| {
             range
                 .map(|index| {
                     let file = &changed_files[index];
                     let path = file.path.clone();
                     let (status, _) = file_status(&file.status);
                     let label = format!("{status}  {}", visible(&path.to_string_lossy()));
-                    history_button(
-                        &target,
-                        ("history-file", index),
-                        label.clone(),
-                        busy,
-                        move |app, window, cx| app.load_history_file(path.clone(), window, cx),
-                    )
-                    .ghost()
-                    .h(px(29.))
-                    .w_full()
-                    .justify_start()
-                    .tooltip(label)
-                    .selected(selected.as_ref() == Some(&file.path))
+                    let target = target.clone();
+                    file_icons::file_button(("history-file", index), &path, label.clone(), cx)
+                        .small()
+                        .disabled(busy)
+                        .on_click(move |_, window, cx| {
+                            let _ = target.update(cx, |app, cx| {
+                                app.load_history_file(path.clone(), window, cx)
+                            });
+                        })
+                        .ghost()
+                        .h(px(29.))
+                        .w_full()
+                        .justify_start()
+                        .tooltip(label)
+                        .selected(selected.as_ref() == Some(&file.path))
                 })
                 .collect::<Vec<_>>()
         })

@@ -1,3 +1,4 @@
+mod assets;
 mod cli;
 mod prefs;
 mod theme;
@@ -21,7 +22,7 @@ fn main() {
     }
     let initial = options.projects;
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::AllAssets)
+        .with_assets(assets::AppAssets)
         .run(move |cx| {
             let _ = cx.text_system().add_fonts(vec![
                 Cow::Borrowed(include_bytes!(

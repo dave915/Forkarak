@@ -4728,6 +4728,7 @@ dependencies = [
  "notify",
  "pokarak-core",
  "pokarak-navigation",
+ "rust-embed",
  "serde",
  "serde_json",
  "smol",

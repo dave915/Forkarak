@@ -60,7 +60,9 @@ impl Pokarak {
             let refresh_view = view.clone();
             let settings_view = view.clone();
             let close_view = view.clone();
+            let dismiss_view = view.clone();
             dialog.title("언어 지원 관리").width(ui_px(800.).min(window.viewport_size().width - ui_px(24.)))
+                .on_close(move |_, _, cx| { let _ = dismiss_view.update(cx, |app, _| app.cancel_managed_language_request()); })
                 .child(body)
                 .footer(div().flex().items_center().gap_2()
                     .child(Button::new("language-manager-refresh").small().ghost().label("상태 다시 확인")

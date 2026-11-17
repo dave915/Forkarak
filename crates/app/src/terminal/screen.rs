@@ -64,10 +64,8 @@ impl Metrics {
     }
     pub fn size(self) -> WindowSize {
         WindowSize {
-            num_cols: (f32::from(self.bounds.size.width / self.cell.width).floor() as u16)
-                .clamp(2, 1000),
-            num_lines: (f32::from(self.bounds.size.height / self.cell.height).floor() as u16)
-                .clamp(1, 500),
+            num_cols: ((self.bounds.size.width / self.cell.width).floor() as u16).clamp(2, 1000),
+            num_lines: ((self.bounds.size.height / self.cell.height).floor() as u16).clamp(1, 500),
             cell_width: f32::from(self.cell.width).round() as u16,
             cell_height: f32::from(self.cell.height).round() as u16,
         }

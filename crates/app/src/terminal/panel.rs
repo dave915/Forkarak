@@ -211,7 +211,7 @@ impl TerminalDock {
             return;
         };
         self.wheel_remainder += match e.delta {
-            ScrollDelta::Pixels(p) => f32::from(p.y / self.metrics.cell.height.max(px(1.))),
+            ScrollDelta::Pixels(p) => p.y / self.metrics.cell.height.max(px(1.)),
             ScrollDelta::Lines(p) => p.y,
         };
         let steps = self.wheel_remainder.trunc() as i32;

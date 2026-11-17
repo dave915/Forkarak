@@ -13,6 +13,7 @@ mod git;
 pub mod history;
 pub mod index;
 pub mod operations;
+mod search_exclusions;
 mod text;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -165,7 +166,29 @@ pub fn read_file(root: &Path, path: &Path) -> Result<String> {
 /// files. Skips binary files, symlinks, and files above `MAX_TEXT_BYTES`.
 /// At most 10,000 matches are returned; empty or multiline queries return none.
 pub fn search(root: &Path, query: &str, limit: usize) -> Result<Vec<SourceLocation>> {
-    backend::search(root, query, limit)
+    search_with_exclusions(root, query, limit, &[])
+}
+
+/// Literal text search with ordered, case-sensitive gitignore-style exclusions.
+/// Rules match normalized worktree-relative paths before files are opened or
+/// hits count toward the limit. Basenames match at any depth; a slash anchors a
+/// path at the worktree root, `**` spans directories, and a trailing `/` matches
+/// directories and their descendants. The last matching rule wins; `!` can
+/// reinclude a file even beneath an excluded directory. This does not reinclude
+/// files omitted by Git's existing ignored-untracked-file discovery.
+///
+/// Blank rules and `#` comments are ignored; backslash escapes literal glob
+/// characters and leading `!`/`#`. Invalid patterns (including unclosed classes,
+/// NUL and embedded line breaks) return an error identifying the rule before
+/// any repository inspection, even with an empty query or zero limit.
+/// Otherwise, ordering, safety checks and limits are the same as [`search`].
+pub fn search_with_exclusions(
+    root: &Path,
+    query: &str,
+    limit: usize,
+    exclude_patterns: &[String],
+) -> Result<Vec<SourceLocation>> {
+    backend::search_with_exclusions(root, query, limit, exclude_patterns)
 }
 
 /// Maximum bytes retained from either side of a diff or a whole-file read.

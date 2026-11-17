@@ -126,7 +126,6 @@ impl Pokarak {
                         .when_some(badge, |cell, reference| {
                             let target = weak.clone();
                             let tip = oid.clone();
-                            let titles = all_refs.clone();
                             cell.child(
                                 div()
                                     .id(("graph-ref", index))
@@ -138,10 +137,6 @@ impl Pokarak {
                                     .text_size(px(11.))
                                     .text_ellipsis()
                                     .child(visible(reference_name(reference)))
-                                    .tooltip(move |window, cx| {
-                                        gpui_kit::component::tooltip::Tooltip::new(titles.clone())
-                                            .build(window, cx)
-                                    })
                                     .on_hover(move |hovered, _, cx| {
                                         let _ = target.update(cx, |app, cx| {
                                             app.hover_graph_branch(&tip, *hovered, cx)

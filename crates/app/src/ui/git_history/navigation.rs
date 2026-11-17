@@ -275,7 +275,7 @@ impl Pokarak {
                         let select_scope = scope.clone();
                         let jump = oid.clone();
                         let selected = selected.as_ref() == Some(&oid);
-                        let mut button = Button::new(("graph-reference", index))
+                        let button = Button::new(("graph-reference", index))
                             .ghost()
                             .small()
                             .w_full()
@@ -305,17 +305,22 @@ impl Pokarak {
                                     }
                                 });
                             });
+                        let mut row = div()
+                            .id(("graph-nav-item", index))
+                            .h(px(30.))
+                            .w_full()
+                            .px_1()
+                            .child(button);
                         if reference
                             .is_some_and(|r| matches!(r.group, RefGroup::Local | RefGroup::Remote))
                         {
                             let target = weak.clone();
-                            button = button.on_hover(move |hovered, _, cx| {
+                            row = row.on_hover(move |hovered, _, cx| {
                                 let _ = target.update(cx, |app, cx| {
                                     app.hover_graph_branch(&oid, *hovered, cx)
                                 });
                             });
                         }
-                        let row = div().h(px(30.)).w_full().px_1().child(button);
                         if let Some(r) = reference
                             .filter(|r| matches!(r.group, RefGroup::Local | RefGroup::Remote))
                         {

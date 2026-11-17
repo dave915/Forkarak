@@ -113,7 +113,8 @@ mod tests {
                 entry("merge", &["a", "b"]),
                 entry("a", &[]),
                 entry("b", &[]),
-            ],
+            ]
+            .into(),
             ..Default::default()
         };
         assert_eq!(ui.action_commit(root, "b").unwrap().oid, "b");

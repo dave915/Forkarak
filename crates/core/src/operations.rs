@@ -10,6 +10,7 @@ mod progress;
 pub use progress::{OperationEvent, OperationProgress, OutputStream};
 pub mod commit_actions;
 mod file_save;
+pub mod files;
 pub mod history_actions;
 pub mod integration;
 pub mod sync;
@@ -999,6 +1000,11 @@ mod tests {
                 .unwrap();
             remote
         }
+    }
+
+    mod file_actions {
+        use super::*;
+        include!("operations/files_tests.rs");
     }
 
     mod progress_tests {

@@ -148,7 +148,8 @@ fn glob(pattern: &str, target: &str) -> bool {
         let options = &pattern[start + 1..end];
         if let Some((lo, hi)) = options.split_once("..") {
             if let (Ok(lo), Ok(hi)) = (lo.parse::<i64>(), hi.parse::<i64>())
-                && hi >= lo && hi.saturating_sub(lo) < 1024
+                && hi >= lo
+                && hi.saturating_sub(lo) < 1024
             {
                 return (lo..=hi).any(|n| {
                     glob(

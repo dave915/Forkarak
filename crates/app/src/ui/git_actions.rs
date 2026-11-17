@@ -1,6 +1,7 @@
 //! Explicit Git actions; sidebar selection navigates without mutating Git.
 mod contextual;
 mod history;
+mod network;
 mod worktree_manager;
 use super::*;
 pub(in crate::ui) use contextual::branch_context_menu;
@@ -27,6 +28,8 @@ pub(super) struct GitUi {
     history: HashMap<PathBuf, VecDeque<history::GitRecord>>,
     job_id: u64,
     started: Option<std::time::Instant>,
+    sync: HashMap<PathBuf, network::SyncRead>,
+    sync_request: u64,
 }
 
 #[derive(Clone)]
@@ -160,6 +163,8 @@ impl Pokarak {
             .session()
             .map(|s| s.saved.comparison.clone())
             .unwrap_or_default();
+        self.git_ui.sync_request += 1;
+        self.git_ui.sync.remove(&root);
         self.git_ui.completions.remove(&root);
         self.git_ui.job_id += 1;
         let job_id = self.git_ui.job_id;
@@ -258,6 +263,9 @@ impl Pokarak {
                     && let Ok(snapshot) = snapshot
                 {
                     session.snapshot = Some(snapshot);
+                }
+                if this.current.as_ref() == Some(&root) {
+                    this.refresh_branch_sync(window, cx);
                 }
                 this.finish_resolution_save(succeeded);
                 this.commit_job_finished(&root, succeeded, window, cx);
@@ -507,79 +515,6 @@ impl Pokarak {
                 let _ = target.update(cx, |app, cx| app.confirm_git_operation(GitConfirmation { root: state_for_action.root.clone(), label: title.into(), detail, operation, destructive: delete }, window, cx));
             }));
             dialog.title(title).width(ui_px(640.)).child(body.child(buttons))
-        });
-    }
-
-    fn show_network_form(
-        &mut self,
-        state: Arc<RepositoryState>,
-        page: Page,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let fetch = matches!(page, Page::Fetch);
-        let push = matches!(page, Page::Push);
-        let title = if fetch {
-            "Fetch"
-        } else if push {
-            "Push"
-        } else {
-            "Pull (ff-only)"
-        };
-        let remote = choice(
-            state.remotes.iter().map(|r| r.name.clone()).collect(),
-            None,
-            window,
-            cx,
-        );
-        let branch = choice(
-            state.local_branches.clone(),
-            state.current_branch.as_deref(),
-            window,
-            cx,
-        );
-        let remote_branch = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(state.current_branch.clone().unwrap_or_default())
-                .placeholder("원격 브랜치 이름")
-        });
-        let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let mut body = div().v_flex().gap_4().child(scope(&state.root, state.current_branch.as_deref())).child(select_field("원격 저장소", &remote));
-            if push { body = body.child(select_field("보낼 로컬 브랜치", &branch)).child(note("선택한 로컬 브랜치만 같은 이름의 원격 브랜치로 보냅니다. 강제 푸시와 태그 전송은 하지 않습니다.")); }
-            else if !fetch { body = body.child(field("가져올 원격 브랜치", &remote_branch)).child(note("위의 현재 브랜치에 fast-forward만 적용합니다. 작업 파일이 변경되었거나 이력이 갈라졌으면 중단합니다. 자동 stash와 rebase는 하지 않습니다.")); }
-            else { body = body.child(note("원격 브랜치 정보를 가져옵니다. 작업 파일과 현재 브랜치는 변경하지 않습니다. 기본 Fetch는 사라진 원격 추적 브랜치를 정리하지 않습니다.")); }
-            if state.remotes.is_empty() { body = body.child(note("등록된 원격 저장소가 없습니다. Git 작업의 ‘원격 저장소 관리’에서 추가하세요.")); }
-            if !fetch && !push && state.current_branch.is_none() { body = body.child(note("Detached HEAD에서는 Pull할 수 없습니다. 먼저 로컬 브랜치를 체크아웃하세요.")); }
-            let mut buttons = div().flex().justify_end().gap_2().child(close_button());
-            for prune in if fetch { vec![true, false] } else { vec![false] } {
-                let target = weak.clone();
-                let state = state.clone();
-                let remote = remote.clone();
-                let branch = branch.clone();
-                let remote_branch = remote_branch.clone();
-                buttons = buttons.child(theme::action_button(if prune { "git-fetch-prune" } else { "git-network-next" }, state.remotes.is_empty() || (!fetch && !push && state.current_branch.is_none()) || (push && state.local_branches.is_empty()))
-                    .label(if prune { "Fetch + 원격 추적 정리…" } else { title })
-                    .on_click(move |_, window, cx| {
-                        let Some(remote_name) = remote.read(cx).selected_value().cloned() else { return; };
-                        let Some(config) = state.remotes.iter().find(|r| r.name == remote_name) else { return; };
-                        let urls = if push { &config.push_urls } else { &config.fetch_urls };
-                        let destination = urls.join("\n");
-                        let (operation, label, detail) = if fetch {
-                            (Operation::Fetch { remote: remote_name.clone(), prune }, if prune { "Fetch 및 원격 추적 정리" } else { "Fetch" }.to_owned(), format!("원격: {remote_name}\nURL: {destination}\n{}", if prune { "원격에서 사라진 브랜치의 로컬 추적 참조도 삭제합니다 (--prune)." } else { "원격 추적 참조만 갱신합니다. Prune은 실행하지 않습니다." }))
-                        } else if push {
-                            let Some(branch) = branch.read(cx).selected_value().cloned() else { return; };
-                            (Operation::Push { remote: remote_name.clone(), branch: branch.clone() }, "Push".into(), format!("원격: {remote_name}\nPush URL: {destination}\n로컬 {branch} → 원격 {branch}\n이 브랜치 하나만 보냅니다. 강제 푸시는 하지 않습니다."))
-                        } else {
-                            let Some(local) = state.current_branch.clone() else { return; };
-                            let branch = remote_branch.read(cx).value().trim().to_owned();
-                            if branch.is_empty() { return; }
-                            (Operation::Pull { remote: remote_name.clone(), remote_branch: branch.clone(), local_branch: local.clone() }, "Pull (ff-only)".into(), format!("원격: {remote_name}\nFetch URL: {destination}\n원격 {branch} → 현재 로컬 {local}\nFast-forward만 적용합니다."))
-                        };
-                        let _ = target.update(cx, |app, cx| app.confirm_git_operation(GitConfirmation { root: state.root.clone(), label, detail, operation, destructive: prune }, window, cx));
-                    }));
-            }
-            dialog.title(title).width(ui_px(620.)).child(body.child(buttons))
         });
     }
 

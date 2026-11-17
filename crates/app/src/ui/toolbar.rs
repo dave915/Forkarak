@@ -173,6 +173,12 @@ impl Pokarak {
                     .disabled(busy)
                     .on_click(cx.listener(|app, _, w, cx| app.open_git_workflow(w, cx))),
             )
+            .child(
+                toolbar_icon("toolbar-stash-pop", IconName::ArchiveRestore, "Pop")
+                    .tooltip("Pop · 보관한 Stash 적용 후 제거…")
+                    .disabled(busy)
+                    .on_click(cx.listener(|app, _, w, cx| app.open_stash_pop(w, cx))),
+            )
             .children(
                 [
                     (

@@ -935,6 +935,7 @@ impl Pokarak {
                                 .filter(|(path, _)| *path == root)
                                 .map(|(_, view)| view);
                             this.open_restored_view(view, window, cx);
+                            this.refresh_branch_sync(window, cx);
                             this.restore_git_completion(cx);
                         }
                         this.prefs.last_root = Some(root);
@@ -1075,6 +1076,7 @@ impl Pokarak {
                         app.external_change = false;
                         app.status = "준비됨".into();
                         app.sync_git_history(window, cx);
+                        app.refresh_branch_sync(window, cx);
                     }
                     Err(error) => {
                         if app.auto_refresh.failed(token) {
@@ -1138,6 +1140,7 @@ impl Pokarak {
             self.open_file(path, false, None, window, cx);
         }
         self.sync_git_history(window, cx);
+        self.refresh_branch_sync(window, cx);
         self.restore_git_completion(cx);
         self.finish_code_save_commit(window, cx);
     }
@@ -2535,6 +2538,7 @@ impl Render for Pokarak {
             .when(self.results_open && !self.analysis_feedback.output_open,|d|d.child(self.render_results(cx)))
             .child(div().h(ui_px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(palette.rgb(LINE)).bg(palette.rgb(SIDE)).text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
                 .child(div().flex_1().min_w_0().text_ellipsis().child(context))
+                .when(self.current.is_some(), |row| row.child(self.git_sync_button(cx)))
                 .child(self.output_button("status-output", cx))
                 .child(div().max_w(ui_px(400.)).min_w_0().text_ellipsis().child(self.git_running_status().unwrap_or_else(|| self.status.clone())))
                 .child(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의  /  ⌥F7 사용처" }))

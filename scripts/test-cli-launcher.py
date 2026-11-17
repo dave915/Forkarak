@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Offline installed-wrapper checks; no GUI, builds, network, or Git operations."""
+import json
+import os
+from pathlib import Path
+import plistlib
+import shlex
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+class LauncherTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="pokarak-cli-launcher-")
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.cwd = self.base / "한글 caller ; [cwd]"
+        self.cwd.mkdir()
+        self.app = self.base / "apps ' 한글 $(touch unexpected)" / "Pokarak.app"
+        self.binary = self.app / "Contents/MacOS/pokarak"
+        self.binary.parent.mkdir(parents=True)
+        resources = self.app / "Contents/Resources"
+        resources.mkdir()
+        self.bindir = self.base / "commands ' with spaces"
+        self.bindir.mkdir()
+        self.cli = self.bindir / "pokarak"
+        self.log = self.base / "calls.jsonl"
+        self.env = {
+            **os.environ,
+            "POKARAK_FIXTURE_LOG": str(self.log),
+            "POKARAK_FIXTURE_EXIT": "0",
+            "POKARAK_FIXTURE_STDERR": "",
+        }
+        self.env.pop("POKARAK_FIXTURE_STDOUT", None)
+        recorder = '''import json,os,sys
+call = {"kind": KIND, "argv": sys.argv[1:], "cwd": os.getcwd(), "pid": os.getpid()}
+with open(os.environ["POKARAK_FIXTURE_LOG"], "a", encoding="utf-8") as log:
+    log.write(json.dumps(call, ensure_ascii=False) + "\\n")
+response = json.dumps({"ok": True, "result": call}, ensure_ascii=False) + "\\n"
+os.write(1, os.environ.get("POKARAK_FIXTURE_STDOUT", response).encode("utf-8"))
+os.write(2, os.environ["POKARAK_FIXTURE_STDERR"].encode("utf-8"))
+sys.exit(int(os.environ["POKARAK_FIXTURE_EXIT"]))
+'''
+        for path, kind in ((self.binary, "app"), (self.base / "open", "open")):
+            path.write_text(
+                "#!" + sys.executable + "\nKIND = " + repr(kind) + "\n" + recorder,
+                encoding="utf-8",
+            )
+            path.chmod(0o755)
+        # The updater is run by Bash, just as the real installed resource is.
+        (resources / "installer.py").write_text("KIND = 'installer'\n" + recorder, encoding="utf-8")
+        (resources / "install.sh").write_text(
+            "#!/bin/bash\nexec " + shlex.quote(sys.executable) + " "
+            + shlex.quote(str(resources / "installer.py")) + ' "$@"\n',
+            encoding="utf-8",
+        )
+        (self.app / "Contents/Info.plist").write_bytes(plistlib.dumps({
+            "CFBundleShortVersionString": "0.1.0",
+        }))
+        wrapper = (ROOT / "scripts/pokarak-cli.sh").read_text(encoding="utf-8")
+        # Production uses absolute LaunchServices paths. Redirect only those
+        # calls in this disposable copy so regressions cannot open a real GUI.
+        self.assertEqual(wrapper.count("/usr/bin/open"), 2)
+        wrapper = wrapper.replace("/usr/bin/open", shlex.quote(str(self.base / "open")))
+        # Match install.sh's managed launcher preamble; paths are shell-quoted.
+        self.cli.write_text(
+            "#!/bin/bash\n# Pokarak managed launcher\n"
+            + "POKARAK_APP_PATH=" + shlex.quote(str(self.app)) + "\n"
+            + "POKARAK_BIN_DIR=" + shlex.quote(str(self.bindir)) + "\n" + wrapper,
+            encoding="utf-8",
+        )
+        self.cli.chmod(0o755)
+
+    def invoke(self, *args):
+        process = subprocess.Popen(
+            [str(self.cli), *args], cwd=self.cwd, env=self.env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        stdout, stderr = process.communicate(timeout=5)
+        return process.pid, subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+
+    def calls(self):
+        if not self.log.exists():
+            return []
+        return [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
+
+    def test_ctl_exec_preserves_exact_argv_cwd_and_json(self):
+        args = [
+            "ctl", "search", "--repo", "../relative 한글 repo", "--query",
+            "공백 ' double\" ; $(touch unexpected) `touch unexpected` * ? [a] & | < > $HOME \\",
+            "", "line one\nline two", "--", "--help", "--version", "update", "ctl",
+        ]
+        pid, result = self.invoke(*args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, b"")
+        expected = {"kind": "app", "argv": args, "cwd": str(self.cwd), "pid": pid}
+        self.assertEqual(self.calls(), [expected])
+        self.assertEqual(json.loads(result.stdout), {"ok": True, "result": expected})
+        self.assertEqual(len(result.stdout.splitlines()), 1)
+        self.assertFalse((self.cwd / "unexpected").exists())
+
+    def test_ctl_stdout_stderr_and_nonzero_exit_pass_through(self):
+        for code in (1, 2, 37):
+            with self.subTest(code=code):
+                stdout = '{"ok":false,"error":{"code":"fixture","message":"한글 failure"}}\n'
+                stderr = "fixture stderr 한글\n"
+                self.env.update(POKARAK_FIXTURE_STDOUT=stdout, POKARAK_FIXTURE_STDERR=stderr,
+                                POKARAK_FIXTURE_EXIT=str(code))
+                _, result = self.invoke("ctl", "status", "--repo", ".")
+                self.assertEqual(result.returncode, code)
+                self.assertEqual(result.stdout, stdout.encode("utf-8"))
+                self.assertEqual(result.stderr, stderr.encode("utf-8"))
+        self.assertEqual([call["kind"] for call in self.calls()], ["app"] * 3)
+
+    def test_ctl_help_and_agent_guides_are_forwarded(self):
+        for args in (("ctl",), ("ctl", "--help"),
+                     ("ctl", "instructions", "--agent", "claude"),
+                     ("ctl", "instructions", "--agent", "codex")):
+            with self.subTest(args=args):
+                _, result = self.invoke(*args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["result"]["argv"], list(args))
+        self.assertTrue(all(call["kind"] == "app" for call in self.calls()))
+
+    def test_ctl_missing_or_unusable_executable_is_actionable(self):
+        self.binary.unlink()
+        for state in ("missing", "not executable", "directory"):
+            with self.subTest(state=state):
+                if state == "not executable":
+                    self.binary.write_text("fixture", encoding="utf-8")
+                    self.binary.chmod(0o644)
+                elif state == "directory":
+                    self.binary.unlink()
+                    self.binary.mkdir()
+                _, result = self.invoke("ctl", "status", "--repo", ".")
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, b"")
+                self.assertIn(str(self.binary).encode("utf-8"), result.stderr)
+                self.assertIn(b"run install.sh again", result.stderr)
+                self.assertEqual(self.calls(), [])
+
+    def test_project_launch_preserves_existing_open_arguments(self):
+        absolute = self.base / "absolute 한글 project"
+        for paths in ((), ("relative project", "한글 ; $(touch unexpected)", str(absolute)),
+                      ("--", "ctl", "update", "--version", "-literal")):
+            with self.subTest(paths=paths):
+                _, result = self.invoke(*paths)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                projects = [str(self.cwd / path) for path in paths if path != "--"]
+                expected = ["-n", str(self.app), "--args", "--", *projects] if projects else [str(self.app)]
+                self.assertEqual(json.loads(result.stdout)["result"]["kind"], "open")
+                self.assertEqual(self.calls()[-1]["argv"], expected)
+        self.assertFalse((self.cwd / "unexpected").exists())
+
+    def test_unknown_project_option_still_requires_separator(self):
+        _, result = self.invoke("--unknown")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(b"use -- before literal directory names", result.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_update_preserves_installed_directories_and_arguments(self):
+        for extra, code in (((), 0), (("--version", "v1.2.3"), 23), (("--help",), 0)):
+            with self.subTest(extra=extra):
+                self.env["POKARAK_FIXTURE_EXIT"] = str(code)
+                _, result = self.invoke("update", *extra)
+                self.assertEqual(result.returncode, code, result.stderr)
+                call = self.calls()[-1]
+                self.assertEqual(call["kind"], "installer")
+                self.assertEqual(call["argv"], ["--app-dir", str(self.app.parent),
+                                               "--bin-dir", str(self.bindir), *extra])
+                self.assertEqual(call["cwd"], str(self.cwd))
+
+    def test_version_uses_installed_plist_and_rejects_extra_arguments(self):
+        _, result = self.invoke("--version")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b"0.1.0\n")
+        _, result = self.invoke("--version", "extra")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(b"--version takes no arguments", result.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_help_explains_ctl_and_both_agent_guides(self):
+        for option in ("--help", "-h", "help"):
+            with self.subTest(option=option):
+                _, result = self.invoke(option)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                help_text = result.stdout.decode("utf-8")
+                for text in ("pokarak [PROJECT ...]", "pokarak -- PROJECT ...", "pokarak ctl --help",
+                             "pokarak ctl status --repo .", "instructions --agent claude",
+                             "instructions --agent codex", "JSON", "result.instructions",
+                             "pokarak update [--version vX.Y.Z]", "pokarak --version"):
+                    self.assertIn(text, help_text)
+        self.assertEqual(self.calls(), [])
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

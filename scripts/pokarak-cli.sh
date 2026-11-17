@@ -6,13 +6,27 @@ BIN_DIR="${POKARAK_BIN_DIR:-${HOME}/.local/bin}"
 fail() { echo "Error: $*" >&2; exit 1; }
 
 case "${1:-}" in
+    ctl)
+        EXECUTABLE="$APP_PATH/Contents/MacOS/pokarak"
+        [[ -f "$EXECUTABLE" && -x "$EXECUTABLE" ]] || fail "Pokarak executable is missing or not executable at $EXECUTABLE; run install.sh again"
+        # Headless commands own their arguments, cwd, streams and exit status.
+        exec "$EXECUTABLE" "$@" ;;
     -h|--help|help)
         cat <<'USAGE'
 Pokarak — native Git worktree review
 Usage: pokarak [PROJECT ...]
+       pokarak -- PROJECT ...
+       pokarak ctl COMMAND [OPTIONS ...]
        pokarak update [--version vX.Y.Z]
        pokarak --version
 
+ctl runs the installed AI CLI directly, without opening the GUI, and returns JSON.
+  pokarak ctl --help
+  pokarak ctl status --repo .
+  pokarak ctl instructions --agent claude
+  pokarak ctl instructions --agent codex
+Agent guide commands return Markdown in result.instructions inside the JSON response.
+Use -- before literal project names such as ctl, update, or names starting with -.
 Quit Pokarak before updating. Project paths may contain spaces or Korean text.
 USAGE
         exit 0 ;;

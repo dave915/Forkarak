@@ -201,6 +201,7 @@ impl Pokarak {
                 history::finish(&mut this.git_ui.history, &root, job_id, &result);
                 this.git_ui.cancellation = None;
                 let succeeded = result.is_ok();
+                let sync_needs_refresh = snapshot.is_err() || this.request != token;
                 let mut completion = match result {
                     Ok(output) => GitCompletion {
                         status: format!(
@@ -264,7 +265,7 @@ impl Pokarak {
                 {
                     session.snapshot = Some(snapshot);
                 }
-                if this.current.as_ref() == Some(&root) {
+                if sync_needs_refresh && this.current.as_ref() == Some(&root) {
                     this.refresh_branch_sync(window, cx);
                 }
                 this.finish_resolution_save(succeeded);

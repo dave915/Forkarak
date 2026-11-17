@@ -4,6 +4,7 @@ mod branch_review;
 mod cli_control;
 mod code_edit;
 mod code_workspace;
+mod draft_reconciliation;
 mod file_icons;
 mod file_inspector;
 mod file_tree;

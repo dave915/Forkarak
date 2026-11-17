@@ -1,5 +1,6 @@
 //! Small, explicitly enabled working-file editor. Drafts outlive reader entities
 //! and project sessions; the core operation owns the actual filesystem write.
+use super::draft_reconciliation::DraftComparison;
 use super::*;
 use serde::{Deserialize, Serialize};
 use std::{io, path::Component};
@@ -13,6 +14,7 @@ pub(super) struct FileKey {
 #[cfg(test)]
 mod tests {
     use super::{CodeEdits, FileKey};
+    use crate::ui::draft_reconciliation::DraftComparison;
     use std::{fs, path::Path, process::Command};
 
     fn state() -> (tempfile::TempDir, CodeEdits) {
@@ -28,6 +30,167 @@ mod tests {
             .unwrap();
         buffer.editing = true;
         buffer.draft.text = text.into();
+    }
+
+    fn comparison_fixture() -> (tempfile::TempDir, CodeEdits, std::path::PathBuf) {
+        let (temp, mut state) = state();
+        let root = temp.path().join("authored comparison 한글");
+        fs::create_dir(&root).unwrap();
+        git(&root, &["init", "-b", "main"]);
+        let root = root.canonicalize().unwrap();
+        fs::write(root.join("main.rs"), "original 😀\r\n").unwrap();
+        state.loaded(
+            &root,
+            Path::new("main.rs"),
+            "original 😀\r\n".into(),
+            true,
+            true,
+        );
+        edit(&mut state, &root, Path::new("main.rs"), "my draft 😀\r\n");
+        (temp, state, root)
+    }
+
+    #[test]
+    fn draft_reconciliation_rebases_expected_bytes_without_saving_disk() {
+        let (_temp, mut state, root) = comparison_fixture();
+        let path = Path::new("main.rs");
+        fs::write(root.join(path), "external 😀\r\n").unwrap();
+        state.loaded(&root, path, "external 😀\r\n".into(), true, true);
+        let comparison = DraftComparison::read(
+            root.clone(),
+            path.into(),
+            "original 😀\r\n".into(),
+            "my draft 😀\r\n".into(),
+        );
+        let fresh = pokarak_core::read_file(&root, path).unwrap();
+        let merged = "external + my draft 😀\r\n";
+        state.reconcile(&comparison, merged.into(), &fresh).unwrap();
+        let buffer = state.buffer(&root, path).unwrap();
+        assert_eq!(buffer.draft.expected, fresh);
+        assert_eq!(buffer.draft.text, merged);
+        assert!(buffer.dirty() && buffer.editing && !buffer.stale);
+        assert_eq!(fs::read(root.join(path)).unwrap(), fresh.as_bytes());
+        assert!(git(&root, &["ls-files", "--stage", "--", "main.rs"]).is_empty());
+        let restored = CodeEdits::load_from(state.storage.path.clone());
+        let restored = restored.buffer(&root, path).unwrap();
+        assert_eq!(restored.draft.expected, fresh);
+        assert_eq!(restored.draft.text, merged);
+        // Only the later explicit Save may change the working file.
+        pokarak_core::operations::save_file(&root, path, &fresh, merged).unwrap();
+        assert_eq!(fs::read(root.join(path)).unwrap(), merged.as_bytes());
+    }
+
+    #[test]
+    fn draft_reconciliation_rejects_second_disk_change_and_keeps_original_draft() {
+        let (_temp, mut state, root) = comparison_fixture();
+        let path = Path::new("main.rs");
+        fs::write(root.join(path), "external first\r\n").unwrap();
+        let comparison = DraftComparison::read(
+            root.clone(),
+            path.into(),
+            "original 😀\r\n".into(),
+            "my draft 😀\r\n".into(),
+        );
+        fs::write(root.join(path), "external second\r\n").unwrap();
+        let fresh = pokarak_core::read_file(&root, path).unwrap();
+        let error = state
+            .reconcile(&comparison, "retained result\r\n".into(), &fresh)
+            .unwrap_err();
+        assert!(error.contains("다시 변경"));
+        let buffer = state.buffer(&root, path).unwrap();
+        assert_eq!(buffer.draft.expected, "original 😀\r\n");
+        assert_eq!(buffer.draft.text, "my draft 😀\r\n");
+        assert_eq!(fs::read(root.join(path)).unwrap(), fresh.as_bytes());
+        // An explicit reread may adopt the new disk version after review.
+        let reloaded = DraftComparison::read(
+            root.clone(),
+            path.into(),
+            comparison.original,
+            comparison.draft,
+        );
+        state
+            .reconcile(&reloaded, "retained result\r\n".into(), &fresh)
+            .unwrap();
+        assert_eq!(
+            state.buffer(&root, path).unwrap().draft.text,
+            "retained result\r\n"
+        );
+    }
+
+    #[test]
+    fn draft_reconciliation_rejects_newer_input_and_isolates_other_worktree() {
+        let (temp, mut state, root) = comparison_fixture();
+        let path = Path::new("main.rs");
+        let other = temp.path().join("another worktree");
+        fs::create_dir(&other).unwrap();
+        git(&other, &["init", "-b", "main"]);
+        let other = other.canonicalize().unwrap();
+        fs::write(other.join(path), "other original\r\n").unwrap();
+        state.loaded(&other, path, "other original\r\n".into(), true, true);
+        edit(&mut state, &other, path, "other draft\r\n");
+        let comparison = DraftComparison::read(
+            root.clone(),
+            path.into(),
+            "original 😀\r\n".into(),
+            "my draft 😀\r\n".into(),
+        );
+        edit(&mut state, &root, path, "newer queued input\r\n");
+        assert!(
+            state
+                .reconcile(&comparison, "obsolete result\r\n".into(), "original 😀\r\n")
+                .is_err()
+        );
+        assert_eq!(
+            state.buffer(&root, path).unwrap().draft.text,
+            "newer queued input\r\n"
+        );
+        assert_eq!(
+            state.buffer(&other, path).unwrap().draft.text,
+            "other draft\r\n"
+        );
+        assert_eq!(
+            state.buffer(&other, path).unwrap().draft.expected,
+            "other original\r\n"
+        );
+    }
+
+    #[test]
+    fn draft_reconciliation_storage_or_missing_disk_failure_keeps_baseline() {
+        let (_temp, mut state, root) = comparison_fixture();
+        let path = Path::new("main.rs");
+        fs::write(root.join(path), "external\r\n").unwrap();
+        let comparison = DraftComparison::read(
+            root.clone(),
+            path.into(),
+            "original 😀\r\n".into(),
+            "my draft 😀\r\n".into(),
+        );
+        fs::create_dir_all(&state.storage.path).unwrap(); // Block atomic checkpoint.
+        assert!(
+            state
+                .reconcile(&comparison, "merged\r\n".into(), "external\r\n")
+                .is_err()
+        );
+        assert_eq!(
+            state.buffer(&root, path).unwrap().draft.expected,
+            "original 😀\r\n"
+        );
+        assert_eq!(
+            state.buffer(&root, path).unwrap().draft.text,
+            "my draft 😀\r\n"
+        );
+        fs::remove_file(root.join(path)).unwrap();
+        let missing = DraftComparison::read(
+            root.clone(),
+            path.into(),
+            comparison.original,
+            comparison.draft,
+        );
+        assert!(state.reconcile(&missing, "merged\r\n".into(), "").is_err());
+        assert_eq!(
+            state.buffer(&root, path).unwrap().draft.text,
+            "my draft 😀\r\n"
+        );
     }
 
     #[test]
@@ -364,6 +527,7 @@ struct Draft {
     text: String,
 }
 
+#[derive(Clone)]
 struct Buffer {
     draft: Draft,
     editing: bool,
@@ -448,6 +612,7 @@ pub(super) struct CodeEdits {
     storage_error: Option<String>,
     unreadable_storage: bool,
     commit_after_refresh: Option<(PathBuf, u64)>,
+    comparison_request: u64,
 }
 
 impl CodeEdits {
@@ -467,6 +632,7 @@ impl CodeEdits {
             storage_error: None,
             unreadable_storage: false,
             commit_after_refresh: None,
+            comparison_request: 0,
         };
         let result = std::fs::read(&state.storage.path).and_then(|bytes| {
             serde_json::from_slice::<Vec<Draft>>(&bytes).map_err(io::Error::other)
@@ -570,6 +736,43 @@ impl CodeEdits {
         self.buffer(root, path)
             .is_some_and(|b| b.editing && !b.saving)
     }
+
+    fn reconcile(
+        &mut self,
+        comparison: &DraftComparison,
+        result: String,
+        fresh_disk: &str,
+    ) -> Result<(), String> {
+        comparison.validate_disk(fresh_disk)?;
+        if result.len() > pokarak_core::MAX_TEXT_BYTES || result.as_bytes().contains(&0) {
+            return Err("조정 결과는 NUL이 없는 2 MiB 이하의 텍스트여야 합니다.".into());
+        }
+        let key = FileKey::new(&comparison.root, &comparison.path)
+            .ok_or("워크트리 안의 파일을 선택하세요.")?;
+        let buffer = self
+            .buffers
+            .get_mut(&key)
+            .ok_or("편집 초안이 닫혔습니다.")?;
+        if buffer.saving
+            || buffer.draft.expected != comparison.original
+            || buffer.draft.text != comparison.draft
+        {
+            return Err("비교 중 초안이 변경되었습니다. 최신 초안으로 다시 비교하세요.".into());
+        }
+        let previous = buffer.clone();
+        buffer.draft.expected = fresh_disk.to_owned();
+        buffer.draft.text = result;
+        buffer.editing = true;
+        buffer.stale = false;
+        buffer.error = None;
+        if let Err(error) = self.persist() {
+            self.buffers.insert(key, previous);
+            return Err(format!(
+                "조정한 초안을 보관하지 못했습니다. 결과를 복사해 두세요: {error}"
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Pokarak {
@@ -578,6 +781,11 @@ impl Pokarak {
         for (root, session) in &self.sessions {
             for (path, editor) in &session.documents {
                 if let Some(key) = FileKey::new(root, path)
+                    && self
+                        .code_edits
+                        .bindings
+                        .get(&key)
+                        .is_some_and(|(id, _)| *id == editor.entity_id())
                     && let Some(buffer) = self.code_edits.buffers.get_mut(&key)
                     && buffer.editing
                 {
@@ -715,6 +923,16 @@ impl Pokarak {
         let changed_key = key.clone();
         let subscription = cx.subscribe(editor, move |app, editor, event: &InputEvent, cx| {
             if !matches!(event, InputEvent::Change) {
+                return;
+            }
+            // A replaced editor can still have a queued Change event. It must
+            // never write its old text over a reconciled replacement buffer.
+            if !app
+                .code_edits
+                .bindings
+                .get(&changed_key)
+                .is_some_and(|(id, _)| *id == editor.entity_id())
+            {
                 return;
             }
             let Some(buffer) = app.code_edits.buffers.get_mut(&changed_key) else {
@@ -858,6 +1076,121 @@ impl Pokarak {
         }
     }
 
+    fn compare_code_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.file_loading || self.loading || self.git_is_busy() || window.has_active_dialog(cx) {
+            return;
+        }
+        self.capture_code_buffers(cx);
+        let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
+            return;
+        };
+        let Some(key) = FileKey::new(&root, &path) else {
+            return;
+        };
+        let Some(buffer) = self.code_edits.buffers.get(&key).filter(|b| !b.saving) else {
+            return;
+        };
+        let original = buffer.draft.expected.clone();
+        let draft = buffer.draft.text.clone();
+        self.code_edits.comparison_request += 1;
+        let request = self.code_edits.comparison_request;
+        let task =
+            cx.background_spawn(
+                async move { DraftComparison::read(root, key.path, original, draft) },
+            );
+        cx.spawn_in(window, async move |view, cx| {
+            let comparison = task.await;
+            let _ = view.update_in(cx, |app, window, cx| {
+                if app.code_edits.comparison_request != request || window.has_active_dialog(cx) {
+                    return;
+                }
+                app.capture_code_buffers(cx);
+                if !app.matches_draft_comparison(&comparison) {
+                    return;
+                }
+                draft_reconciliation::open(cx.entity().downgrade(), comparison, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn matches_draft_comparison(&self, comparison: &DraftComparison) -> bool {
+        if self.current.as_ref() != Some(&comparison.root) || self.opening_path.is_some() {
+            return false;
+        }
+        let Some(key) = self
+            .selected()
+            .as_deref()
+            .and_then(|path| FileKey::new(&comparison.root, path))
+        else {
+            return false;
+        };
+        key.path == comparison.path
+            && self.code_edits.buffers.get(&key).is_some_and(|buffer| {
+                !buffer.saving
+                    && buffer.draft.expected == comparison.original
+                    && buffer.draft.text == comparison.draft
+            })
+    }
+
+    pub(super) fn apply_draft_comparison(
+        &mut self,
+        comparison: &DraftComparison,
+        result: String,
+        fresh_disk: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        self.capture_code_buffers(cx);
+        if self.git_is_busy()
+            || self.loading
+            || self.file_loading
+            || !self.matches_draft_comparison(comparison)
+        {
+            return Err("작업 위치나 초안이 변경되었습니다. 최신 초안으로 다시 비교하세요.".into());
+        }
+        let selected = self.selected().ok_or("선택한 파일이 없습니다.")?;
+        let position = self
+            .session()
+            .and_then(|session| session.documents.get(&selected))
+            .map(|editor| {
+                (
+                    editor.read(cx).cursor_position(),
+                    editor.read(cx).scroll_offset(),
+                )
+            });
+        self.code_edits
+            .reconcile(comparison, result.clone(), fresh_disk)?;
+        // Replace and rebind instead of changing the old editor underneath a
+        // queued input callback. The binding identity check above rejects it.
+        let key = FileKey::new(&comparison.root, &comparison.path).unwrap();
+        self.code_edits.bindings.remove(&key);
+        let editor = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language(language(&comparison.path))
+                .line_number(true)
+                .soft_wrap(false)
+                .default_value(result)
+        });
+        editor.update(cx, |editor, cx| {
+            editor.set_readonly(false, cx);
+            if let Some((cursor, scroll)) = position {
+                editor.set_cursor_position(cursor, window, cx);
+                editor.set_scroll_offset(scroll, cx);
+            }
+        });
+        let session = self
+            .sessions
+            .get_mut(&comparison.root)
+            .ok_or("워크트리가 닫혔습니다.")?;
+        session.documents.insert(selected.clone(), editor.clone());
+        self.bind_code_editor(&comparison.root, &selected, &editor, cx);
+        self.file_request += 1;
+        self.status = "조정 결과를 초안에 반영했습니다. ⌘S로 파일을 저장하세요.".into();
+        cx.notify();
+        Ok(())
+    }
+
     fn discard_code_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
             return;
@@ -948,6 +1281,16 @@ impl Pokarak {
                     .disabled(busy || !buffer.dirty())
                     .on_click(cx.listener(|app, _, w, cx| app.save_code_file(true, w, cx))),
             )
+            .when(buffer.dirty() || buffer.stale, |bar| {
+                bar.child(
+                    Button::new("compare-code-draft")
+                        .label("디스크와 비교…")
+                        .small()
+                        .ghost()
+                        .disabled(busy)
+                        .on_click(cx.listener(|app, _, w, cx| app.compare_code_draft(w, cx))),
+                )
+            })
             .when(buffer.dirty(), |bar| {
                 bar.child(
                     Button::new("discard-code-draft")
@@ -969,7 +1312,7 @@ impl Pokarak {
         let notice = if let Some(error) = &buffer.error {
             error.clone()
         } else if buffer.stale {
-            "디스크 내용이 변경되었거나 파일이 없습니다. 초안을 유지했습니다. 새로고침해도 초안은 덮어쓰지 않습니다. 디스크와 조정하거나 초안을 버린 후 다시 편집하세요.".into()
+            "디스크 내용이 변경되었거나 파일이 없습니다. 초안을 유지했습니다. ‘디스크와 비교…’에서 원본·초안·디스크를 확인하고 조정하세요.".into()
         } else if buffer.dirty() {
             "● 저장하지 않은 초안 — 탭·프로젝트를 닫거나 앱을 종료해도 보관됩니다. Git에는 아직 반영되지 않습니다.".into()
         } else {

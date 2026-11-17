@@ -107,12 +107,36 @@ impl LanguageManager {
 
 fn managed_directory() -> Result<PathBuf, String> {
     if let Some(session) = crate::prefs::explicit_session_dir() {
-        return absolute_directory(session.join("language-tools"));
+        return Ok(canonical_data_parent(session)?.join("language-tools"));
     }
     let home = std::env::var_os("HOME").ok_or("앱 데이터 폴더를 찾을 수 없습니다.")?;
     absolute_directory(
         PathBuf::from(home).join("Library/Application Support/Forkarak/language-tools"),
     )
+}
+// Resolve only the explicitly selected data parent (e.g. macOS /tmp),
+// before appending our private tools directory. Never canonicalize a tools
+// symlink into another directory; the backend must keep rejecting that.
+fn canonical_data_parent(path: &Path) -> Result<PathBuf, String> {
+    absolute_directory(path.to_path_buf())?;
+    let mut existing = path;
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        let name = existing
+            .file_name()
+            .ok_or("앱 데이터 폴더를 확인할 수 없습니다.")?;
+        missing.push(name.to_os_string());
+        existing = existing
+            .parent()
+            .ok_or("앱 데이터 폴더를 확인할 수 없습니다.")?;
+    }
+    let mut resolved = existing
+        .canonicalize()
+        .map_err(|e| format!("앱 데이터 폴더: {e}"))?;
+    for component in missing.into_iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
 }
 fn absolute_directory(path: PathBuf) -> Result<PathBuf, String> {
     if path.is_absolute() {

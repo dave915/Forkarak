@@ -1,5 +1,5 @@
 use super::policy::{bytes_label, custom_override, enabled, legacy_override_at};
-use super::{LanguageManager, PreparedRequest, absolute_directory};
+use super::{LanguageManager, PreparedRequest, absolute_directory, canonical_data_parent};
 use crate::ui::{code_edit, language_tools};
 use gpui_kit::EntityId;
 use pokarak_navigation::{
@@ -299,4 +299,34 @@ fn bundled_java_and_first_use_kotlin_status_remain_distinct_and_invalid_manifest
         "cached bundle status must not enable continuation after a read failure"
     );
     assert!(!f.root.join("started").exists());
+}
+
+#[test]
+fn session_parent_alias_resolves_without_creating_or_following_tools_symlink() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().canonicalize().unwrap();
+    let alias = parent.join("session-alias");
+    std::os::unix::fs::symlink(&parent, &alias).unwrap();
+    let selected = alias.join("new-session");
+    let resolved = canonical_data_parent(&selected).unwrap();
+    assert_eq!(resolved, parent.join("new-session"));
+    assert!(
+        !resolved.exists(),
+        "discovery must not create the data directory"
+    );
+    let tools = ManagedTools::new(resolved.join("language-tools"), None).unwrap();
+    assert!(tools.server_configs().unwrap().is_empty());
+    assert!(!resolved.exists());
+    fs::create_dir(&resolved).unwrap();
+    std::os::unix::fs::symlink(&parent, resolved.join("language-tools")).unwrap();
+    assert!(
+        ManagedTools::new(
+            canonical_data_parent(&selected)
+                .unwrap()
+                .join("language-tools"),
+            None
+        )
+        .is_err(),
+        "backend still rejects a private tools symlink"
+    );
 }

@@ -446,7 +446,7 @@ impl Pokarak {
             for category in Category::ALL {
                 let (state,view)=(state.clone(),weak.clone());
                 let selected=category==state.borrow().category;
-                categories=categories.child(Button::new(category.id()).small().ghost().label(category.label()).selected(selected).on_click(move |_,_,cx|{ state.borrow_mut().category=category; notify(&view,cx); }));
+                categories=categories.child(Button::new(category.id()).small().ghost().accessibility_label(category.label()).child(div().w_full().text_left().child(category.label())).selected(selected).on_click(move |_,_,cx|{ state.borrow_mut().category=category; notify(&view,cx); }));
             }
             let mut scope=div().flex().items_center().gap_2();
             for (is_project,label) in [(false,"앱 전체"),(true,"이 프로젝트")] {

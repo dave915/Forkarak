@@ -80,6 +80,9 @@ impl Pokarak {
     }
 
     fn block_git_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.block_code_close(cx) {
+            return true;
+        }
         if self.updates.restarting() {
             return true;
         }

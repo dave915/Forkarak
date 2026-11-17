@@ -1,0 +1,1035 @@
+//! Small, explicitly enabled working-file editor. Drafts outlive reader entities
+//! and project sessions; the core operation owns the actual filesystem write.
+use super::*;
+use serde::{Deserialize, Serialize};
+use std::{io, path::Component};
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(super) struct FileKey {
+    root: PathBuf,
+    path: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CodeEdits, FileKey};
+    use std::{fs, path::Path, process::Command};
+
+    fn state() -> (tempfile::TempDir, CodeEdits) {
+        let temp = tempfile::tempdir().unwrap();
+        let state = CodeEdits::load_from(temp.path().join("session/code-drafts.json"));
+        (temp, state)
+    }
+
+    fn edit(state: &mut CodeEdits, root: &Path, path: &Path, text: &str) {
+        let buffer = state
+            .buffers
+            .get_mut(&FileKey::new(root, path).unwrap())
+            .unwrap();
+        buffer.editing = true;
+        buffer.draft.text = text.into();
+    }
+
+    #[test]
+    fn drafts_are_isolated_by_worktree_and_path() {
+        let (_temp, mut state) = state();
+        let first = Path::new("/fixture/worktree-one");
+        let second = Path::new("/fixture/worktree-two");
+        let path = Path::new("src/Main.kt");
+        state.loaded(first, path, "one".into(), true, true);
+        state.loaded(second, path, "two".into(), true, true);
+        state.loaded(first, Path::new("other.kt"), "other".into(), true, true);
+        edit(&mut state, first, path, "draft");
+        assert!(state.dirty(first, path));
+        assert!(!state.dirty(second, path));
+        assert!(!state.dirty(first, Path::new("other.kt")));
+        assert_eq!(state.loaded(first, path, "one".into(), true, true), "draft");
+        assert_eq!(state.loaded(second, path, "two".into(), true, true), "two");
+    }
+
+    #[test]
+    fn refresh_that_started_before_typing_does_not_replace_dirty_buffer() {
+        let (_temp, mut state) = state();
+        let root = Path::new("/fixture/worktree");
+        let path = Path::new("main.rs");
+        state.loaded(root, path, "disk before refresh".into(), true, true);
+        assert!(!state.editing(root, path));
+        // Keystroke arrives while the load is in flight.
+        edit(&mut state, root, path, "unsaved 😀\r\n");
+        assert_eq!(
+            state.loaded(root, path, "external edit".into(), true, true),
+            "unsaved 😀\r\n"
+        );
+        let buffer = state.buffer(root, path).unwrap();
+        assert_eq!(buffer.draft.expected, "disk before refresh");
+        assert!(buffer.stale && buffer.editing && buffer.dirty());
+        // Repeated refreshes must not reset the expected version to new disk.
+        assert_eq!(
+            state.loaded(root, path, "another external edit".into(), true, true),
+            "unsaved 😀\r\n"
+        );
+        assert_eq!(
+            state.buffer(root, path).unwrap().draft.expected,
+            "disk before refresh"
+        );
+    }
+
+    #[test]
+    fn editing_clean_buffer_keeps_its_save_baseline_on_external_change() {
+        let (_temp, mut state) = state();
+        let root = Path::new("/fixture/worktree");
+        let path = Path::new("main.rs");
+        state.loaded(root, path, "original".into(), true, true);
+        edit(&mut state, root, path, "original");
+        assert_eq!(
+            state.loaded(root, path, "external".into(), true, true),
+            "original"
+        );
+        assert!(state.buffer(root, path).unwrap().stale);
+    }
+
+    #[test]
+    fn externally_deleted_or_unreadable_file_keeps_its_draft() {
+        let (_temp, mut state) = state();
+        let root = Path::new("/fixture/worktree");
+        let path = Path::new("main.rs");
+        state.loaded(root, path, "original".into(), true, true);
+        edit(&mut state, root, path, "unsaved");
+        let fallback = state.retained_text(root, path).unwrap();
+        assert_eq!(state.loaded(root, path, fallback, false, true), "unsaved");
+        assert!(state.buffer(root, path).unwrap().stale);
+        assert!(state.dirty(root, path));
+    }
+
+    #[test]
+    fn historical_deleted_binary_and_external_previews_do_not_enable_editing() {
+        let (_temp, mut state) = state();
+        let root = Path::new("/fixture/worktree");
+        let path = Path::new("main.rs");
+        assert_eq!(
+            state.loaded(root, path, "old commit".into(), true, false),
+            "old commit"
+        );
+        assert!(state.buffer(root, path).is_none());
+        state.loaded(root, path, "working file".into(), true, true);
+        edit(&mut state, root, path, "working file");
+        // Previously live, now a historical deletion preview.
+        state.loaded(root, path, "old commit".into(), false, false);
+        assert!(!state.editing(root, path));
+        assert!(state.buffer(root, path).is_none());
+        state.loaded(
+            root,
+            Path::new("/outside/dependency.rs"),
+            "dependency".into(),
+            true,
+            true,
+        );
+        assert!(
+            state
+                .buffer(root, Path::new("/outside/dependency.rs"))
+                .is_none()
+        );
+        assert!(FileKey::new(root, Path::new("../escape")).is_none());
+    }
+
+    #[test]
+    fn closing_projects_and_restarting_restores_drafts_read_only_with_exact_bytes() {
+        let (_temp, mut state) = state();
+        let root = Path::new("/fixture/worktree");
+        let path = Path::new("src/한글.kt");
+        state.loaded(root, path, "class A {}\r\n".into(), true, true);
+        state.loaded(root, Path::new("clean.rs"), "clean".into(), true, true);
+        edit(&mut state, root, path, "class 한글 { val x = \"😀\" }\r\n");
+        state.persist().unwrap();
+        let storage = state.storage.path.clone();
+        drop(state); // Reader entities and all project sessions can be gone.
+        let mut restored = CodeEdits::load_from(storage);
+        assert_eq!(restored.buffers.len(), 1);
+        assert!(!restored.editing(root, path)); // Explicit Edit is required again.
+        assert_eq!(
+            restored.loaded(root, path, "class A {}\r\n".into(), true, true),
+            "class 한글 { val x = \"😀\" }\r\n"
+        );
+        assert_eq!(
+            restored.buffer(root, path).unwrap().draft.expected,
+            "class A {}\r\n"
+        );
+        // A restored readonly draft must also survive an external refresh.
+        assert_eq!(
+            restored.loaded(root, path, "external".into(), true, true),
+            "class 한글 { val x = \"😀\" }\r\n"
+        );
+        assert!(restored.buffer(root, path).unwrap().stale);
+    }
+
+    #[test]
+    fn successful_save_keeps_any_newer_input_dirty() {
+        let (_temp, mut state) = state();
+        let root = Path::new("/fixture/worktree");
+        let path = Path::new("main.rs");
+        state.loaded(root, path, "original".into(), true, true);
+        edit(&mut state, root, path, "submitted");
+        state
+            .buffers
+            .get_mut(&FileKey::new(root, path).unwrap())
+            .unwrap()
+            .saving = true;
+        edit(&mut state, root, path, "newer queued input");
+        let buffer = state
+            .buffers
+            .get_mut(&FileKey::new(root, path).unwrap())
+            .unwrap();
+        buffer.saved("submitted");
+        assert_eq!(buffer.draft.text, "newer queued input");
+        assert_eq!(buffer.draft.expected, "submitted");
+        assert!(buffer.dirty());
+        buffer.saved("newer queued input");
+        state.persist().unwrap();
+        assert!(
+            CodeEdits::load_from(state.storage.path.clone())
+                .buffers
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn old_background_checkpoint_cannot_overwrite_close_flush() {
+        let (_temp, mut state) = state();
+        let root = Path::new("/fixture/worktree");
+        let path = Path::new("main.rs");
+        state.loaded(root, path, "original".into(), true, true);
+        edit(&mut state, root, path, "older draft");
+        let older = state.drafts();
+        state.generation = 1; // Background checkpoint was scheduled.
+        edit(&mut state, root, path, "latest before close");
+        state.persist().unwrap(); // Generation 2, synchronous close flush.
+        state.storage.write(1, &older).unwrap(); // Older task starts late.
+        let restored = CodeEdits::load_from(state.storage.path.clone());
+        assert_eq!(
+            restored.buffer(root, path).unwrap().draft.text,
+            "latest before close"
+        );
+    }
+
+    #[test]
+    fn checkpoint_failure_keeps_memory_draft_and_can_be_retried() {
+        let (temp, mut state) = state();
+        let root = Path::new("/fixture/worktree");
+        let path = Path::new("main.rs");
+        fs::write(temp.path().join("session"), "blocking regular file").unwrap();
+        state.loaded(root, path, "original".into(), true, true);
+        edit(&mut state, root, path, "unsaved");
+        assert!(state.persist().is_err());
+        assert!(state.storage_error.is_some());
+        assert_eq!(state.buffer(root, path).unwrap().draft.text, "unsaved");
+        fs::remove_file(temp.path().join("session")).unwrap();
+        state.persist().unwrap();
+        assert!(state.storage_error.is_none());
+        assert_eq!(
+            CodeEdits::load_from(state.storage.path.clone())
+                .buffer(root, path)
+                .unwrap()
+                .draft
+                .text,
+            "unsaved"
+        );
+    }
+
+    #[test]
+    fn malformed_draft_storage_is_reported_and_never_overwritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = temp.path().join("code-drafts.json");
+        fs::write(&storage, b"unreadable previous draft").unwrap();
+        let mut state = CodeEdits::load_from(storage.clone());
+        assert!(state.unreadable_storage && state.storage_error.is_some());
+        assert!(state.persist().is_err());
+        assert_eq!(fs::read(&storage).unwrap(), b"unreadable previous draft");
+    }
+
+    // Authored temporary repository only; no user/global configuration, hooks,
+    // remotes, staging or commits are involved in either save path.
+    fn git(root: &Path, args: &[&str]) -> Vec<u8> {
+        let mut command = Command::new("git");
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("GIT_") {
+                command.env_remove(name);
+            }
+        }
+        let output = command
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args([
+                "--literal-pathspecs",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-C",
+            ])
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    }
+
+    #[test]
+    fn real_save_changes_only_working_file_and_external_conflict_retains_draft() {
+        let (temp, mut state) = state();
+        let root = temp.path().join("authored repository");
+        fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let path = Path::new("hello.rs");
+        git(&root, &["init", "-b", "main"]);
+        fs::write(root.join(path), "before\r\n").unwrap();
+        // A separate session directory is outside the inspected repository.
+        assert!(!state.storage.path.starts_with(&root));
+        state.loaded(&root, path, "before\r\n".into(), true, true);
+        edit(&mut state, &root, path, "after 😀\r\n");
+        let draft = state.buffer(&root, path).unwrap().draft.clone();
+        let index_before = git(&root, &["ls-files", "--stage", "--", "hello.rs"]);
+        pokarak_core::operations::save_file(&root, path, &draft.expected, &draft.text).unwrap();
+        state
+            .buffers
+            .get_mut(&draft.key)
+            .unwrap()
+            .saved(&draft.text);
+        assert_eq!(fs::read_to_string(root.join(path)).unwrap(), "after 😀\r\n");
+        assert_eq!(
+            git(&root, &["ls-files", "--stage", "--", "hello.rs"]),
+            index_before
+        );
+        assert!(!state.dirty(&root, path));
+        edit(&mut state, &root, path, "unsaved next edit");
+        fs::write(root.join(path), "external writer").unwrap();
+        let draft = state.buffer(&root, path).unwrap().draft.clone();
+        assert!(
+            pokarak_core::operations::save_file(&root, path, &draft.expected, &draft.text).is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(root.join(path)).unwrap(),
+            "external writer"
+        );
+        assert!(state.dirty(&root, path));
+        assert_eq!(
+            state.loaded(&root, path, "external writer".into(), true, true),
+            "unsaved next edit"
+        );
+        fs::remove_file(root.join(path)).unwrap();
+        assert!(
+            pokarak_core::operations::save_file(&root, path, &draft.expected, &draft.text).is_err()
+        );
+        state.persist().unwrap();
+        assert_eq!(
+            CodeEdits::load_from(state.storage.path.clone())
+                .buffer(&root, path)
+                .unwrap()
+                .draft
+                .text,
+            "unsaved next edit"
+        );
+        assert!(git(&root, &["ls-files", "--stage", "--", "hello.rs"]).is_empty());
+        assert!(!root.join(".git/refs/heads/main").exists());
+    }
+}
+
+impl FileKey {
+    fn new(root: &Path, path: &Path) -> Option<Self> {
+        let path = if path.is_absolute() {
+            path.strip_prefix(root).ok()?
+        } else {
+            path
+        };
+        if path.as_os_str().is_empty()
+            || path
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            return None;
+        }
+        Some(Self {
+            root: root.to_owned(),
+            path: path.to_owned(),
+        })
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Draft {
+    key: FileKey,
+    expected: String,
+    text: String,
+}
+
+struct Buffer {
+    draft: Draft,
+    editing: bool,
+    stale: bool,
+    saving: bool,
+    error: Option<String>,
+}
+
+struct DraftStorage {
+    path: PathBuf,
+    // Serialize background checkpoints with close/quit flushes. An older task
+    // can never overwrite a newer checkpoint, even if it starts out of order.
+    latest: Mutex<u64>,
+}
+
+impl DraftStorage {
+    fn write(&self, generation: u64, drafts: &[Draft]) -> io::Result<()> {
+        let mut latest = self
+            .latest
+            .lock()
+            .map_err(|_| io::Error::other("초안 저장 잠금 오류"))?;
+        if generation < *latest {
+            return Ok(());
+        }
+        *latest = generation;
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| io::Error::other("초안 저장 경로 없음"))?;
+        std::fs::create_dir_all(parent)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        serde_json::to_writer(temporary.as_file_mut(), drafts)?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(&self.path)?;
+        Ok(())
+    }
+}
+
+impl Buffer {
+    fn new(draft: Draft) -> Self {
+        Self {
+            draft,
+            editing: false,
+            stale: false,
+            saving: false,
+            error: None,
+        }
+    }
+
+    fn dirty(&self) -> bool {
+        self.draft.expected != self.draft.text
+    }
+
+    fn loaded(&mut self, disk: &str, available: bool) {
+        // Even a queued refresh that began before the first keystroke must use
+        // the buffer's state NOW, never its state at request time.
+        if self.dirty() || self.editing || self.saving {
+            self.stale = !available || self.draft.expected != disk;
+        } else {
+            self.draft.expected = disk.to_owned();
+            self.draft.text = disk.to_owned();
+            self.stale = !available;
+            self.error = None;
+        }
+    }
+
+    fn saved(&mut self, submitted: &str) {
+        // Keep any edits newer than the submitted snapshot. Normally the native
+        // editor is read-only during a save, but queued input can still arrive.
+        self.draft.expected = submitted.to_owned();
+        self.saving = false;
+        self.stale = false;
+        self.error = None;
+    }
+}
+
+pub(super) struct CodeEdits {
+    buffers: HashMap<FileKey, Buffer>,
+    bindings: HashMap<FileKey, (EntityId, Subscription)>,
+    storage: Arc<DraftStorage>,
+    generation: u64,
+    storage_error: Option<String>,
+    unreadable_storage: bool,
+    commit_after_refresh: Option<(PathBuf, u64)>,
+}
+
+impl CodeEdits {
+    pub(super) fn load() -> Self {
+        Self::load_from(crate::prefs::config_path().with_file_name("code-drafts.json"))
+    }
+
+    fn load_from(storage: PathBuf) -> Self {
+        let mut state = Self {
+            buffers: HashMap::new(),
+            bindings: HashMap::new(),
+            storage: Arc::new(DraftStorage {
+                path: storage,
+                latest: Mutex::new(0),
+            }),
+            generation: 0,
+            storage_error: None,
+            unreadable_storage: false,
+            commit_after_refresh: None,
+        };
+        let result = std::fs::read(&state.storage.path).and_then(|bytes| {
+            serde_json::from_slice::<Vec<Draft>>(&bytes).map_err(io::Error::other)
+        });
+        match result {
+            Ok(drafts) => {
+                for draft in drafts {
+                    if FileKey::new(&draft.key.root, &draft.key.path).as_ref() != Some(&draft.key) {
+                        state.storage_error =
+                            Some("잘못된 경로가 있는 편집 초안 파일입니다.".into());
+                        state.unreadable_storage = true;
+                        break;
+                    }
+                    state.buffers.insert(draft.key.clone(), Buffer::new(draft));
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                state.storage_error = Some(format!("편집 초안을 복원하지 못했습니다: {error}"));
+                state.unreadable_storage = true;
+            }
+        }
+        state
+    }
+
+    fn persist(&mut self) -> io::Result<()> {
+        if self.unreadable_storage {
+            return Err(io::Error::other(
+                self.storage_error.clone().unwrap_or_default(),
+            ));
+        }
+        self.generation += 1;
+        let result = self.storage.write(self.generation, &self.drafts());
+        self.storage_error = result
+            .as_ref()
+            .err()
+            .map(|e| format!("편집 초안을 보관할 수 없습니다: {e}"));
+        result
+    }
+
+    fn drafts(&self) -> Vec<Draft> {
+        self.buffers
+            .values()
+            .filter(|b| b.dirty())
+            .map(|b| b.draft.clone())
+            .collect()
+    }
+
+    fn loaded(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        disk: String,
+        available: bool,
+        live: bool,
+    ) -> String {
+        if !live && let Some(key) = FileKey::new(root, path) {
+            // Historical previews never inherit a live reader's Edit state.
+            if self
+                .buffers
+                .get(&key)
+                .is_some_and(|b| !b.dirty() && !b.saving)
+            {
+                self.buffers.remove(&key);
+                self.bindings.remove(&key);
+            }
+        }
+        let Some(key) = FileKey::new(root, path).filter(|_| live) else {
+            return disk;
+        };
+        let buffer = self.buffers.entry(key.clone()).or_insert_with(|| {
+            Buffer::new(Draft {
+                key,
+                expected: disk.clone(),
+                text: disk.clone(),
+            })
+        });
+        buffer.loaded(&disk, available);
+        buffer.draft.text.clone()
+    }
+
+    pub(super) fn dirty(&self, root: &Path, path: &Path) -> bool {
+        self.buffer(root, path).is_some_and(Buffer::dirty)
+    }
+
+    fn buffer(&self, root: &Path, path: &Path) -> Option<&Buffer> {
+        self.buffers.get(&FileKey::new(root, path)?)
+    }
+
+    pub(super) fn retained_text(&self, root: &Path, path: &Path) -> Option<String> {
+        self.buffer(root, path)
+            .filter(|b| b.dirty())
+            .map(|b| b.draft.expected.clone())
+    }
+
+    pub(super) fn editing(&self, root: &Path, path: &Path) -> bool {
+        self.buffer(root, path)
+            .is_some_and(|b| b.editing && !b.saving)
+    }
+}
+
+impl Pokarak {
+    pub(super) fn capture_code_buffers(&mut self, cx: &App) {
+        // Capture synchronously too: close/quit can precede a queued Change event.
+        for (root, session) in &self.sessions {
+            for (path, editor) in &session.documents {
+                if let Some(key) = FileKey::new(root, path)
+                    && let Some(buffer) = self.code_edits.buffers.get_mut(&key)
+                    && buffer.editing
+                {
+                    buffer.draft.text = editor.read(cx).value().to_string();
+                }
+            }
+        }
+    }
+
+    pub(super) fn retain_code_drafts(&mut self, cx: &App) -> bool {
+        self.capture_code_buffers(cx);
+        self.code_edits.persist().is_ok()
+    }
+
+    fn checkpoint_code_drafts(&mut self, cx: &mut Context<Self>) {
+        if self.code_edits.unreadable_storage {
+            return;
+        }
+        self.code_edits.generation += 1;
+        let generation = self.code_edits.generation;
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |view, cx| {
+            executor.timer(Duration::from_millis(350)).await;
+            let _ = view.update(cx, |app, cx| {
+                if app.code_edits.generation != generation {
+                    return;
+                }
+                let storage = app.code_edits.storage.clone();
+                let drafts = app.code_edits.drafts();
+                let task = cx.background_spawn(async move { storage.write(generation, &drafts) });
+                cx.spawn(async move |view, cx| {
+                    let result = task.await;
+                    let _ = view.update(cx, |app, cx| {
+                        if app.code_edits.generation != generation {
+                            return;
+                        }
+                        app.code_edits.storage_error = result
+                            .err()
+                            .map(|e| format!("편집 초안을 보관할 수 없습니다: {e}"));
+                        cx.notify();
+                    });
+                })
+                .detach();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn check_code_disk_changes(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.current.clone() else {
+            return;
+        };
+        let files: Vec<_> = self
+            .code_edits
+            .buffers
+            .values()
+            .filter(|b| b.draft.key.root == root && (b.editing || b.dirty()) && !b.saving)
+            .map(|b| (b.draft.key.clone(), b.draft.expected.clone()))
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        let task = cx.background_spawn(async move {
+            files
+                .into_iter()
+                .map(|(key, expected)| {
+                    let stale = pokarak_core::read_file(&key.root, &key.path)
+                        .ok()
+                        .as_deref()
+                        != Some(&expected);
+                    (key, expected, stale)
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |view, cx| {
+            let states = task.await;
+            let _ = view.update(cx, |app, cx| {
+                if app.current.as_ref() != Some(&root) {
+                    return;
+                }
+                for (key, expected, stale) in states {
+                    if let Some(buffer) = app.code_edits.buffers.get_mut(&key)
+                        && buffer.draft.expected == expected
+                        && !buffer.saving
+                    {
+                        buffer.stale = stale;
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn block_code_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.retain_code_drafts(cx) {
+            return false;
+        }
+        self.status =
+            "초안 보관 실패 — 파일을 저장하거나 초안 저장 경로를 복구한 후 닫으세요.".into();
+        cx.notify();
+        true
+    }
+
+    pub(super) fn prepare_code_buffer(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        disk: String,
+        available: bool,
+        live: bool,
+    ) -> String {
+        self.code_edits.loaded(root, path, disk, available, live)
+    }
+
+    pub(super) fn bind_code_editor(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        editor: &Entity<EditorState>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = FileKey::new(root, path) else {
+            return;
+        };
+        if !self.code_edits.buffers.contains_key(&key)
+            || self
+                .code_edits
+                .bindings
+                .get(&key)
+                .is_some_and(|(id, _)| *id == editor.entity_id())
+        {
+            return;
+        }
+        let changed_key = key.clone();
+        let subscription = cx.subscribe(editor, move |app, editor, event: &InputEvent, cx| {
+            if !matches!(event, InputEvent::Change) {
+                return;
+            }
+            let Some(buffer) = app.code_edits.buffers.get_mut(&changed_key) else {
+                return;
+            };
+            if !buffer.editing {
+                return;
+            }
+            buffer.draft.text = editor.read(cx).value().to_string();
+            buffer.error = None;
+            app.checkpoint_code_drafts(cx);
+            cx.notify();
+        });
+        self.code_edits
+            .bindings
+            .insert(key, (editor.entity_id(), subscription));
+    }
+
+    fn start_code_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.code_edits.unreadable_storage
+            || self.file_loading
+            || self.git_is_busy()
+            || self.loading
+            || window.has_active_dialog(cx)
+        {
+            return;
+        }
+        let (Some(root), Some(path), Some(editor)) =
+            (self.current.clone(), self.selected(), self.active_editor())
+        else {
+            return;
+        };
+        let Some(key) = FileKey::new(&root, &path) else {
+            return;
+        };
+        let Some(buffer) = self.code_edits.buffers.get_mut(&key) else {
+            return;
+        };
+        if buffer.saving {
+            return;
+        }
+        buffer.editing = true;
+        editor.update(cx, |state, cx| state.set_readonly(false, cx));
+        editor.read(cx).focus_handle(cx).focus(window, cx);
+        self.status = "편집 중 — ⌘S 저장 · 초안은 파일 저장 전까지 별도로 보관됩니다.".into();
+        cx.notify();
+    }
+
+    pub(super) fn save_code_file(
+        &mut self,
+        commit: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.git_history.active
+            || self.file_loading
+            || self.loading
+            || self.git_is_busy()
+            || self.opening_path.is_some()
+            || window.has_active_dialog(cx)
+            || !self.session().is_some_and(|s| s.saved.code)
+        {
+            return;
+        }
+        let (Some(root), Some(path), Some(editor)) =
+            (self.current.clone(), self.selected(), self.active_editor())
+        else {
+            return;
+        };
+        let Some(key) = FileKey::new(&root, &path) else {
+            return;
+        };
+        self.retain_code_drafts(cx);
+        let Some(buffer) = self.code_edits.buffers.get_mut(&key) else {
+            return;
+        };
+        if !buffer.dirty() || buffer.saving {
+            return;
+        }
+        // The operation always checks expected bytes, including when the watcher
+        // has not delivered an external-write event yet. There is no force save.
+        let expected = buffer.draft.expected.clone();
+        let replacement = buffer.draft.text.clone();
+        buffer.saving = true;
+        buffer.error = None;
+        editor.update(cx, |editor, cx| editor.set_readonly(true, cx));
+        let target = key.clone();
+        let submitted = replacement.clone();
+        let task = cx.background_spawn(async move {
+            pokarak_core::operations::save_file(&target.root, &target.path, &expected, &replacement)
+        });
+        cx.spawn_in(window, async move |view, cx| {
+            let result = task.await;
+            let _ = view.update_in(cx, |app, window, cx| {
+                let Some(buffer) = app.code_edits.buffers.get_mut(&key) else {
+                    return;
+                };
+                let success = match result {
+                    Ok(()) => {
+                        buffer.saved(&submitted);
+                        true
+                    }
+                    Err(error) => {
+                        buffer.saving = false;
+                        buffer.error = Some(format!("저장하지 못했습니다: {error:#}"));
+                        false
+                    }
+                };
+                let editing = buffer.editing;
+                editor.update(cx, |editor, cx| editor.set_readonly(!editing, cx));
+                let _ = app.code_edits.persist();
+                if app.current.as_ref() == Some(&root) && app.opening_path.is_none() {
+                    if success {
+                        app.status = format!("{} 저장됨", path.display());
+                        let open_commit = commit
+                            && !app.git_history.active
+                            && app.selected().as_ref() == Some(&path);
+                        app.refresh(window, cx);
+                        if open_commit {
+                            app.code_edits.commit_after_refresh = Some((root, app.request));
+                        }
+                    } else {
+                        app.status =
+                            "파일 저장 실패 — 초안을 유지했습니다. 디스크 내용을 확인하세요."
+                                .into();
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(super) fn finish_code_save_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((root, request)) = self.code_edits.commit_after_refresh.take()
+            && self.current.as_ref() == Some(&root)
+            && self.request == request
+        {
+            self.open_git_commit(window, cx);
+        }
+    }
+
+    fn discard_code_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
+            return;
+        };
+        let Some(key) = FileKey::new(&root, &path) else {
+            return;
+        };
+        if self.code_edits.buffers.get(&key).is_none_or(|b| b.saving) {
+            return;
+        }
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let weak = weak.clone();
+            let key = key.clone();
+            dialog.title("파일의 편집 초안을 버릴까요?")
+                .child("디스크 파일은 변경하지 않습니다. 보관된 초안을 삭제하고 디스크에서 다시 읽습니다.")
+                .keyboard(false)
+                .footer(div().flex().justify_end().gap_2()
+                    .child(Button::new("cancel-discard-draft").label("취소").ghost().on_click(|_, w, cx| w.close_dialog(cx)))
+                    .child(Button::new("confirm-discard-draft").label("초안 버리기").danger().on_click(move |_, window, cx| {
+                    let _ = weak.update(cx, |app, cx| {
+                        let selected = app.selected();
+                        if app.current.as_ref() != Some(&key.root)
+                            || selected.as_ref().and_then(|p| FileKey::new(&key.root, p)).as_ref() != Some(&key) { return; }
+                        app.code_edits.buffers.remove(&key);
+                        app.code_edits.bindings.remove(&key);
+                        let _ = app.code_edits.persist();
+                        if let Some(session) = app.sessions.get_mut(&key.root) && let Some(selected) = selected { session.documents.remove(&selected); }
+                        window.close_dialog(cx);
+                        app.open_file(key.path.clone(), false, None, window, cx);
+                    });
+                })))
+        });
+    }
+
+    pub(super) fn code_edit_controls(&self, path: &Path, cx: &mut Context<Self>) -> AnyElement {
+        let buffer = self
+            .current
+            .as_ref()
+            .and_then(|root| self.code_edits.buffer(root, path));
+        let Some(buffer) = buffer else {
+            return div().into_any_element();
+        };
+        let busy = buffer.saving || self.file_loading || self.loading || self.git_is_busy();
+        div()
+            .id("code-edit-controls")
+            .flex()
+            .flex_wrap()
+            .flex_none()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(Palette::new(cx).rgb(LINE))
+            .items_center()
+            .gap_2()
+            .child(
+                Button::new("edit-file")
+                    .label(if buffer.editing {
+                        "편집 중"
+                    } else {
+                        "편집"
+                    })
+                    .ghost()
+                    .small()
+                    .selected(buffer.editing)
+                    .disabled(busy || buffer.editing || self.code_edits.unreadable_storage)
+                    .on_click(cx.listener(|app, _, w, cx| app.start_code_edit(w, cx))),
+            )
+            .child(
+                Button::new("save-code")
+                    .label(if buffer.saving {
+                        "저장 중…"
+                    } else {
+                        "저장"
+                    })
+                    .small()
+                    .ghost()
+                    .tooltip("파일 저장  ⌘S")
+                    .disabled(busy || !buffer.dirty())
+                    .on_click(cx.listener(|app, _, w, cx| app.save_code_file(false, w, cx))),
+            )
+            .child(
+                Button::new("save-code-commit")
+                    .label("저장 + 커밋…")
+                    .small()
+                    .ghost()
+                    .tooltip("파일 저장 후 Stage / 커밋 열기. 스테이징과 커밋은 직접 실행합니다.")
+                    .disabled(busy || !buffer.dirty())
+                    .on_click(cx.listener(|app, _, w, cx| app.save_code_file(true, w, cx))),
+            )
+            .when(buffer.dirty(), |bar| {
+                bar.child(
+                    Button::new("discard-code-draft")
+                        .label("초안 버리기…")
+                        .small()
+                        .ghost()
+                        .disabled(busy)
+                        .on_click(cx.listener(|app, _, w, cx| app.discard_code_draft(w, cx))),
+                )
+            })
+            .into_any_element()
+    }
+
+    pub(super) fn code_draft_notice(&self, path: &Path, cx: &App) -> Option<AnyElement> {
+        let buffer = self
+            .current
+            .as_ref()
+            .and_then(|root| self.code_edits.buffer(root, path))?;
+        let notice = if let Some(error) = &buffer.error {
+            error.clone()
+        } else if buffer.stale {
+            "디스크 내용이 변경되었거나 파일이 없습니다. 초안을 유지했습니다. 새로고침해도 초안은 덮어쓰지 않습니다. 디스크와 조정하거나 초안을 버린 후 다시 편집하세요.".into()
+        } else if buffer.dirty() {
+            "● 저장하지 않은 초안 — 탭·프로젝트를 닫거나 앱을 종료해도 보관됩니다. Git에는 아직 반영되지 않습니다.".into()
+        } else {
+            return None;
+        };
+        Some(
+            div()
+                .px_3()
+                .py_1()
+                .text_size(ui_text(11.))
+                .text_color(Palette::new(cx).rgb(BLUE))
+                .child(notice)
+                .into_any_element(),
+        )
+    }
+
+    pub(super) fn code_drafts_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dirty = self
+            .code_edits
+            .buffers
+            .values()
+            .filter(|b| b.dirty())
+            .count();
+        let error = self.code_edits.storage_error.as_deref();
+        if dirty == 0 && error.is_none() {
+            return None;
+        }
+        let root = self.current.as_ref();
+        let mut drafts: Vec<_> = self
+            .code_edits
+            .buffers
+            .values()
+            .filter(|b| b.dirty() && Some(&b.draft.key.root) == root)
+            .map(|b| b.draft.key.path.clone())
+            .collect();
+        drafts.sort();
+        Some(
+            div()
+                .id("code-drafts-banner")
+                .px_3()
+                .py_1()
+                .flex()
+                .flex_wrap()
+                .flex_none()
+                .items_center()
+                .gap_2()
+                .text_size(ui_text(11.))
+                .text_color(Palette::new(cx).rgb(if error.is_some() { RED } else { BLUE }))
+                .child(error.map(str::to_owned).unwrap_or_else(|| {
+                    format!("● 미저장 편집 초안 {dirty}개 보관 중 — 파일을 다시 열면 복원됩니다.")
+                }))
+                .children(drafts.into_iter().take(3).enumerate().map(|(i, path)| {
+                    Button::new(("reopen-code-draft", i))
+                        .label(path.display().to_string())
+                        .small()
+                        .ghost()
+                        .max_w(ui_px(190.))
+                        .overflow_hidden()
+                        .on_click(cx.listener(move |app, _, w, cx| {
+                            app.open_file(path.clone(), true, None, w, cx);
+                            app.toggle_code(true, cx);
+                        }))
+                }))
+                .into_any_element(),
+        )
+    }
+}

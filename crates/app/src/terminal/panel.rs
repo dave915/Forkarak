@@ -41,6 +41,7 @@ pub struct TerminalDock {
     pub(super) marked: String,
     pub(super) ime_selection: Range<usize>,
     wheel_remainder: f32,
+    embedded: bool,
 }
 impl Focusable for TerminalDock {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -51,6 +52,36 @@ impl EventEmitter<DockAction> for TerminalDock {}
 impl TerminalDock {
     pub(crate) fn has_running_shell(&self) -> bool {
         self.shell.as_ref().is_some_and(|shell| !shell.exited())
+    }
+
+    pub(crate) fn session_status(&self) -> String {
+        if self.error.is_some() {
+            "시작 실패".into()
+        } else if let Some(shell) = &self.shell {
+            if let Some(status) = shell.exit_status() {
+                match status.code() {
+                    Some(code) => format!("종료 {code}"),
+                    None => format!("{status}"),
+                }
+            } else if shell.exited() {
+                "종료".into()
+            } else {
+                "zsh".into()
+            }
+        } else {
+            "종료".into()
+        }
+    }
+
+    pub(crate) fn shutdown(&mut self) {
+        self.wake = None;
+        self.shell = None;
+    }
+
+    pub(crate) fn embedded(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut dock = Self::new(root, window, cx);
+        dock.embedded = true;
+        dock
     }
 
     pub fn new(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -65,6 +96,7 @@ impl TerminalDock {
             marked: String::new(),
             ime_selection: 0..0,
             wheel_remainder: 0.,
+            embedded: false,
         };
         cx.on_focus(&dock.focus, window, |dock, _, cx| {
             dock.report_focus(true);
@@ -285,59 +317,76 @@ impl Render for TerminalDock {
             .size_full()
             .min_h_0()
             .bg(rgb(BACKGROUND))
-            .child(
-                div()
-                    .flex_none()
-                    .h(ui_px(29.))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_t_1()
-                    .border_color(rgb(0x37404b))
-                    .bg(rgb(0x242a31))
-                    .text_color(rgb(FOREGROUND))
-                    .text_size(ui_text(12.))
-                    .child("터미널")
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .child(format!("zsh · {}", self.root.display())),
-                    )
-                    .when(exited, |bar| {
-                        bar.child(
-                            Button::new("terminal-restart")
+            .when(!self.embedded, |dock| {
+                dock.child(
+                    div()
+                        .flex_none()
+                        .h(ui_px(29.))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .border_t_1()
+                        .border_color(rgb(0x37404b))
+                        .bg(rgb(0x242a31))
+                        .text_color(rgb(FOREGROUND))
+                        .text_size(ui_text(12.))
+                        .child("터미널")
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .child(format!("zsh · {}", self.root.display())),
+                        )
+                        .when(exited, |bar| {
+                            bar.child(
+                                Button::new("terminal-restart")
+                                    .ghost()
+                                    .small()
+                                    .label("새 셸")
+                                    .on_click(cx.listener(|dock, _, w, cx| {
+                                        dock.start(cx);
+                                        dock.focus.focus(w, cx);
+                                        cx.notify();
+                                    })),
+                            )
+                        })
+                        .child(
+                            Button::new("terminal-hide")
                                 .ghost()
                                 .small()
-                                .label("새 셸")
-                                .on_click(cx.listener(|dock, _, w, cx| {
-                                    dock.start(cx);
-                                    dock.focus.focus(w, cx);
-                                    cx.notify();
-                                })),
+                                .icon(gpui_kit::assets::IconName::ChevronDown)
+                                .tooltip("터미널 숨기기")
+                                .accessibility_label("터미널 숨기기")
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(DockAction::Hide))),
                         )
-                    })
-                    .child(
-                        Button::new("terminal-hide")
-                            .ghost()
-                            .small()
-                            .icon(gpui_kit::assets::IconName::ChevronDown)
-                            .tooltip("터미널 숨기기")
-                            .accessibility_label("터미널 숨기기")
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(DockAction::Hide))),
-                    )
-                    .child(
-                        Button::new("terminal-close")
-                            .ghost()
-                            .small()
-                            .icon(gpui_kit::assets::IconName::X)
-                            .tooltip("터미널 세션 닫기")
-                            .accessibility_label("터미널 세션 닫기")
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(DockAction::Close))),
-                    ),
-            )
+                        .child(
+                            Button::new("terminal-close")
+                                .ghost()
+                                .small()
+                                .icon(gpui_kit::assets::IconName::X)
+                                .tooltip("터미널 세션 닫기")
+                                .accessibility_label("터미널 세션 닫기")
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(DockAction::Close))),
+                        ),
+                )
+            })
+            .when(exited && self.embedded, |dock| {
+                dock.child(
+                    Button::new("terminal-restart-tab")
+                        .ghost()
+                        .small()
+                        .label("셸 다시 시작")
+                        .tooltip("이 탭에서 새 zsh 셸 시작 · 이전 출력은 지워집니다")
+                        .accessibility_label("종료한 터미널 셸 다시 시작")
+                        .on_click(cx.listener(|dock, _, w, cx| {
+                            dock.start(cx);
+                            dock.focus.focus(w, cx);
+                            cx.notify();
+                        })),
+                )
+            })
             .when_some(self.error.clone(), |v, err| {
                 v.child(div().px_2().text_color(rgb(0xf4a5a5)).child(err))
             })
@@ -347,7 +396,7 @@ impl Render for TerminalDock {
                         .px_2()
                         .text_size(ui_text(12.))
                         .text_color(rgb(0xb3bec9))
-                        .child("셸이 종료되었습니다"),
+                        .child(format!("셸이 종료되었습니다 · {}", self.session_status())),
                 )
             })
             .child(

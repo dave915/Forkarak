@@ -15,6 +15,8 @@ mod split_diff;
 mod syntax;
 #[cfg(target_os = "macos")]
 mod terminal_dock;
+#[cfg(target_os = "macos")]
+mod terminal_sessions;
 mod toolbar;
 mod update_workspace;
 mod updates;
@@ -123,6 +125,8 @@ actions!(
 pub fn bind_keys(cx: &mut App) {
     #[cfg(target_os = "macos")]
     crate::terminal::bind_keys(cx);
+    #[cfg(target_os = "macos")]
+    terminal_sessions::bind_keys(cx);
     cx.on_action(git_actions::request_app_quit);
     cx.set_menus([
         Menu::new("Pokarak").items([
@@ -201,7 +205,7 @@ struct ReadingPoint {
 
 struct Session {
     #[cfg(target_os = "macos")]
-    terminal: Option<Entity<crate::terminal::TerminalDock>>,
+    terminal: Option<Entity<terminal_sessions::TerminalSessions>>,
     #[cfg(target_os = "macos")]
     terminal_visible: bool,
     snapshot: Option<Snapshot>,
@@ -453,6 +457,8 @@ impl Pokarak {
             self.opening_path = None;
         }
         for root in project.worktrees {
+            #[cfg(target_os = "macos")]
+            self.close_worktree_terminals(&root, cx);
             self.sessions.remove(&root);
         }
         if self.current_project.as_ref() == Some(&project_root) {
@@ -508,6 +514,8 @@ impl Pokarak {
         self.persist(cx);
         self.reset_active(cx);
         self.projects.clear();
+        #[cfg(target_os = "macos")]
+        self.shutdown_terminals(cx);
         self.sessions.clear();
         self.persist(cx);
         self.focus.focus(window, cx);
@@ -639,6 +647,8 @@ impl Pokarak {
         this.install_cli_control(window, cx);
         cx.on_release(|this, cx| {
             this.cancel_git_job();
+            #[cfg(target_os = "macos")]
+            this.shutdown_terminals(cx);
             this.persist(cx);
             if let Some(cancel) = this.cancellation.take() {
                 let _ = cancel.cancel();
@@ -651,7 +661,14 @@ impl Pokarak {
             if let Some(cancel) = this.cancellation.take() {
                 let _ = cancel.cancel();
             }
-            std::future::ready(())
+            #[cfg(target_os = "macos")]
+            let terminals = this.shutdown_terminals(cx);
+            async move {
+                #[cfg(target_os = "macos")]
+                for terminal in terminals {
+                    terminal.wait().await;
+                }
+            }
         })
         .detach();
         let executor = cx.background_executor().clone();

@@ -53,6 +53,7 @@ fn main() {
             ui::bind_keys(cx);
             gpui_kit::open_window(
                 WindowOptions {
+                    app_owns_titlebar_drag: true,
                     titlebar: Some(TitlebarOptions {
                         title: None,
                         appears_transparent: true,

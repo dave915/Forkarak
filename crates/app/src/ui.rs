@@ -7,6 +7,7 @@ mod git_history;
 mod git_workflow;
 mod reader_navigation;
 mod split_diff;
+mod toolbar;
 use split_diff::ReviewDiff;
 use analysis_feedback::AnalysisFeedback;
 
@@ -1772,184 +1773,6 @@ impl Pokarak {
         rows
     }
 
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = Palette::new(cx);
-        let repo_name = self
-            .current
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "저장소를 선택하세요".into());
-        let content = div()
-            .h(px(52.))
-            .w_full()
-            .flex_none()
-            .px_4()
-            .flex()
-            .items_center()
-            .gap_2()
-            .bg(palette.rgb(SIDE))
-            .child(
-                Icon::new(IconName::Utensils)
-                    .data(include_bytes!("../../../assets/icons/spork.svg").as_slice())
-                    .size(px(24.))
-                    .text_color(palette.rgb(BLUE)),
-            )
-            .child(
-                div()
-                    .text_size(px(17.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .mr_5()
-                    .child("포카락"),
-            )
-            .child(
-                Button::new("back")
-                    .icon(IconName::ArrowLeft)
-                    .ghost()
-                    .small()
-                    .tooltip("뒤로  ⌘[")
-                    .disabled(self.git_history.active || self.session().is_none_or(|s| s.history.is_empty()))
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.navigate_history(true, window, cx)),
-                    ),
-            )
-            .child(
-                Button::new("forward")
-                    .icon(IconName::ArrowRight)
-                    .ghost()
-                    .small()
-                    .tooltip("앞으로  ⌘]")
-                    .disabled(self.git_history.active || self.session().is_none_or(|s| s.forward.is_empty()))
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.navigate_history(false, window, cx)),
-                    ),
-            )
-            .child(
-                div()
-                    .ml_2()
-                    .text_color(palette.rgb(MUTED))
-                    .text_ellipsis()
-                    .child(repo_name),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("refresh")
-                    .icon(IconName::RefreshCw)
-                    .label(if self.loading {
-                        "읽는 중"
-                    } else {
-                        "새로고침"
-                    })
-                    .ghost()
-                    .small()
-                    .disabled(self.loading || self.current.is_none())
-                    .tooltip("새로고침  ⌘R")
-                    .on_click(cx.listener(|this, _, w, cx| this.refresh(w, cx))),
-            )
-            .child(
-                Button::new("open")
-                    .icon(IconName::FolderOpen)
-                    .label("프로젝트 열기")
-                    .small()
-                    .on_click(cx.listener(|this, _, w, cx| this.choose_repository(w, cx))),
-            )
-            .child(
-                Button::new("git-actions")
-                    .label(if self.git_is_busy() {
-                        "Git 작업 중…"
-                    } else {
-                        "Git 작업…"
-                    })
-                    .ghost()
-                    .small()
-                    .disabled(self.git_is_busy() || self.loading || self.current.is_none())
-                    .tooltip("브랜치 전환·원격 동기화·저장소 Git 설정")
-                    .on_click(cx.listener(|this, _, window, cx| this.open_git_actions(window, cx))),
-            )
-            .child(
-                Button::new("settings")
-                    .icon(IconName::Settings)
-                    .ghost()
-                    .small()
-                    .tooltip("설정  ⌘,")
-                    .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
-            );
-        gpui_kit::component::TitleBar::new()
-            .h(px(52.))
-            .pl(px(90.))
-            .bg(palette.rgb(SIDE))
-            .border_b_0()
-            .child(content)
-            .into_any_element()
-    }
-
-    fn render_projects(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = Palette::new(cx);
-        let mut tabs = div()
-            .id("project-tabs")
-            .h(px(38.))
-            .flex_none()
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_1()
-            .overflow_x_scroll()
-            .bg(palette.rgb(SIDE));
-        for (index, project) in self.projects.iter().enumerate() {
-            let target = project.last_worktree.clone();
-            let close = project.root.clone();
-            let active = self.current_project.as_ref() == Some(&project.root);
-            let label = project
-                .root
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            tabs = tabs.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .rounded(px(5.))
-                    .bg(if active {
-                        palette.rgb(PANEL)
-                    } else {
-                        palette.rgb(SIDE)
-                    })
-                    .child(
-                        Button::new(("project", index))
-                            .icon(IconName::FolderGit2)
-                            .label(label)
-                            .tooltip(project.root.to_string_lossy().to_string())
-                            .ghost()
-                            .small()
-                            .selected(active)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_repository(target.clone(), window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new(("close-project", index))
-                            .icon(IconName::X)
-                            .tooltip("프로젝트 닫기  ⌘⇧W")
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.close_project(close.clone(), window, cx)
-                            })),
-                    ),
-            );
-        }
-        tabs.child(
-            Button::new("add-project")
-                .icon(IconName::Plus)
-                .tooltip("다른 프로젝트 열기")
-                .ghost()
-                .small()
-                .on_click(cx.listener(|this, _, window, cx| this.choose_repository(window, cx))),
-        )
-        .into_any_element()
-    }
-
     fn render_sidebar_header(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .h(px(44.))
@@ -3122,9 +2945,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&FindReferences,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::References,None,w,cx)}}))
             .on_action(cx.listener(|this,_:&FindDefinition,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::Definition,None,w,cx)}}))
             .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}}))
-            .child(self.render_toolbar(cx))
-            .when(!self.projects.is_empty(),|d|d.child(self.render_projects(cx)))
-            .when(self.current.is_some(),|d|d.child(self.render_workspace_switcher(cx)))
+            .child(self.render_toolbar(window, cx))
             .when(self.current.is_some() && !self.git_history.active,|d|d.child(self.render_comparison(cx)))
             .when(self.external_change,|d|d.child(div().h(px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(px(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")

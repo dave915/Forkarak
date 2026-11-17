@@ -46,48 +46,6 @@ impl Pokarak {
         }
     }
 
-    pub(in crate::ui) fn render_workspace_switcher(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = Palette::new(cx);
-        div()
-            .h(px(38.))
-            .flex_none()
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(palette.rgb(LINE))
-            .bg(palette.rgb(SIDE))
-            .child(
-                Button::new("view-graph")
-                    .label("Git 그래프")
-                    .ghost()
-                    .small()
-                    .selected(self.git_history.active)
-                    .disabled(self.loading || self.git_is_busy())
-                    .tooltip("커밋 그래프  ⌘⌥H")
-                    .on_click(cx.listener(|app, _, window, cx| app.open_git_history(window, cx))),
-            )
-            .child(
-                Button::new("view-code")
-                    .label("코드 보기")
-                    .ghost()
-                    .small()
-                    .selected(!self.git_history.active)
-                    .disabled(self.loading)
-                    .on_click(cx.listener(|app, _, window, cx| app.show_code_view(window, cx))),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("graph-commit")
-                    .label("Stage / 커밋…")
-                    .small()
-                    .disabled(self.loading || self.git_is_busy())
-                    .on_click(cx.listener(|app, _, window, cx| app.open_git_commit(window, cx))),
-            )
-            .into_any_element()
-    }
-
     pub(in crate::ui) fn render_git_graph(&self, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::new(cx);
         let ui = &self.git_history;

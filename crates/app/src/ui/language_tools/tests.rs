@@ -1,4 +1,4 @@
-use super::model::{Identity, completion_edit, configs, parameter_text, snippet, symbol_rows};
+use super::model::{Identity, completion_edit, configs, parameter_text, symbol_rows};
 use super::{Reply, Tool, execute};
 use crate::ui::code_edit::FileKey;
 use gpui_kit::EntityId;
@@ -131,6 +131,10 @@ fn native_command_dispatch_uses_dirty_source_for_every_tool_and_never_saves() {
         "// 😀\n// import\nconst dirty = 1;\ndirtyMethod(count)"
     );
     assert_eq!(caret, replacement.len());
+    let mirror = &result.items[1];
+    let (plain, _) = completion_edit(&id, mirror).unwrap();
+    assert!(plain.ends_with("<one>inside</one>"));
+    assert!(completion_edit(&id, &result.items[2]).is_err());
     let Reply::Diagnostics(items) = execute(
         &mut nav,
         &f.snapshot,
@@ -310,12 +314,7 @@ fn symbol_tree_search_keeps_parents_and_collapsed_branches_only_hide_when_unfilt
     assert!(symbol_rows(&[parent], "no match", &collapsed).is_empty());
 }
 #[test]
-fn snippet_and_utf16_parameter_handling_never_insert_protocol_syntax() {
-    assert_eq!(snippet("call(${1:value}, $2)$0").unwrap(), "call(value, )");
-    assert_eq!(snippet(r"\$literal ${1:a\}b}").unwrap(), "$literal a}b");
-    for unsupported in ["${VAR}", "${1|a,b|}", "${1:call(${2:x})}", "${1/"] {
-        assert!(snippet(unsupported).is_err(), "{unsupported}");
-    }
+fn utf16_parameter_labels_preserve_astral_text_boundaries() {
     assert_eq!(
         parameter_text(
             "f(😀: str, count: num)",
@@ -346,4 +345,38 @@ fn custom_server_argv_is_preserved_and_configuration_errors_are_actionable() {
         .is_err()
     );
     assert!(configs(Some(&serde_json::json!({"rust":{"args":[]}}))).is_err());
+}
+
+#[test]
+fn custom_language_families_replace_lower_exact_defaults_but_keep_same_layer_exact_choices() {
+    let config = |language: &str, program: &str| pokarak_navigation::ServerConfig {
+        language: language.into(),
+        program: program.into(),
+        args: vec![],
+    };
+    let mut all = vec![
+        config("typescript", "managed-ts"),
+        config("javascriptreact", "managed-jsx"),
+        config("typescriptreact", "managed-tsx"),
+        config("java", "managed-java"),
+    ];
+    super::model::overlay_configs(
+        &mut all,
+        vec![config("ts", "custom-family"), config("tsx", "custom-exact")],
+    );
+    assert_eq!(all.len(), 3);
+    assert!(
+        all.iter()
+            .all(|c| !c.program.starts_with("managed-") || c.language == "java")
+    );
+    assert!(
+        all.iter()
+            .any(|c| c.language == "typescriptreact" && c.program == "custom-exact")
+    );
+    assert!(
+        all.iter()
+            .any(|c| c.language == "typescript" && c.program == "custom-family")
+    );
+    super::model::overlay_configs(&mut all, vec![config("kt", "kotlin-custom")]);
+    assert!(all.iter().any(|c| c.language == "kotlin"));
 }

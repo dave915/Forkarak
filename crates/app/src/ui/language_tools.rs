@@ -2,6 +2,8 @@
 //! Observing/viewing code never starts a process. All server calls run off-thread.
 mod model;
 #[cfg(test)]
+mod real;
+#[cfg(test)]
 mod tests;
 mod views;
 use super::*;
@@ -372,16 +374,20 @@ impl Pokarak {
                 .option(self.current_project.as_deref(), "language.servers"),
         )?;
         let mut all = pokarak_navigation::default_configs();
-        all.extend(self.effective_managed_server_configs()?);
+        overlay_configs(&mut all, self.effective_managed_server_configs()?);
         // Discovery is read-only. Only the explicitly requested Navigator starts
         // one enabled extension tool; ordinary file viewing does not start it.
-        for registration in self.registered_extension_language_servers() {
-            all.push(pokarak_navigation::ServerConfig {
-                language: registration.language,
-                program: registration.executable.to_string_lossy().into(),
-                args: registration.args,
-            });
-        }
+        overlay_configs(
+            &mut all,
+            self.registered_extension_language_servers()
+                .into_iter()
+                .map(|r| pokarak_navigation::ServerConfig {
+                    language: r.language,
+                    program: r.executable.to_string_lossy().into(),
+                    args: r.args,
+                })
+                .collect(),
+        );
         // Preserve the previous user configuration, then apply project/app UI
         // overrides last. Navigator receives None to avoid reapplying the file.
         if let Some(path) = pokarak_navigation::NavigatorOptions::default().config_file {
@@ -390,7 +396,8 @@ impl Pokarak {
                     let value: serde_json::Value = serde_json::from_str(&text)
                         .map_err(|e| format!("언어 서버 설정 {}: {e}", path.display()))?;
                     if let Some(servers) = value.get("servers") {
-                        all.extend(
+                        overlay_configs(
+                            &mut all,
                             serde_json::from_value::<Vec<pokarak_navigation::ServerConfig>>(
                                 servers.clone(),
                             )
@@ -402,14 +409,8 @@ impl Pokarak {
                 Err(error) => return Err(format!("언어 서버 설정 {}: {error}", path.display())),
             }
         }
-        all.extend(custom);
-        all.retain(|config| {
-            self.prefs
-                .option(self.current_project.as_deref(), "language.enabled")
-                .and_then(|v| v.get(&config.language))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true)
-        });
+        overlay_configs(&mut all, custom);
+        all.retain(|config| self.managed_language_enabled(&config.language));
         Ok(all)
     }
     pub(super) fn remember_language_configuration(&mut self, signature: serde_json::Value) {
@@ -418,29 +419,44 @@ impl Pokarak {
     pub(super) fn configure_language_formatters(
         &self,
     ) -> Result<Vec<pokarak_navigation::FormatterConfig>, String> {
-        let mut all = self.effective_managed_formatter_configs()?;
-        for registration in self.registered_extension_formatters() {
-            all.push(pokarak_navigation::FormatterConfig {
-                language: registration.language,
-                program: registration.executable.to_string_lossy().into(),
-                args: registration.args,
-            });
-        }
-        all.extend(
+        let mut all: Vec<_> = self
+            .effective_managed_formatter_configs()?
+            .into_iter()
+            .map(|c| pokarak_navigation::ServerConfig {
+                language: c.language,
+                program: c.program,
+                args: c.args,
+            })
+            .collect();
+        overlay_configs(
+            &mut all,
+            self.registered_extension_formatters()
+                .into_iter()
+                .map(|r| pokarak_navigation::ServerConfig {
+                    language: r.language,
+                    program: r.executable.to_string_lossy().into(),
+                    args: r.args,
+                })
+                .collect(),
+        );
+        overlay_configs(
+            &mut all,
             configs(
                 self.prefs
                     .option(self.current_project.as_deref(), "formatters.config"),
-            )?
+            )?,
+        );
+        all.retain(|c| self.managed_language_enabled(&c.language));
+        Ok(all
             .into_iter()
             .map(|c| pokarak_navigation::FormatterConfig {
                 language: c.language,
                 program: c.program,
                 args: c.args,
-            }),
-        );
-        all.retain(|c| self.managed_language_enabled(&c.language));
-        Ok(all)
+            })
+            .collect())
     }
+
     fn language_configuration_signature(&self) -> Result<serde_json::Value, String> {
         Ok(serde_json::json!([
             self.configure_language_servers()?,
@@ -979,11 +995,11 @@ impl Pokarak {
                 Position::new(position.line, position.character),
             );
             if let Some(point) = point {
-                if let Some(previous) = self.reading_point(cx) {
-                    if let Some(session) = self.sessions.get_mut(&identity.key.root) {
-                        session.history.push(previous);
-                        session.forward.clear();
-                    }
+                if let Some(previous) = self.reading_point(cx)
+                    && let Some(session) = self.sessions.get_mut(&identity.key.root)
+                {
+                    session.history.push(previous);
+                    session.forward.clear();
                 }
                 editor.update(cx, |e, cx| e.set_cursor_position(point, window, cx));
                 editor.read(cx).focus_handle(cx).focus(window, cx);

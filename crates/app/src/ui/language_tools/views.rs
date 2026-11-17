@@ -512,11 +512,9 @@ impl Pokarak {
                                                                 move |a, _, _, cx| {
                                                                     if let Some(p) =
                                                                         &mut a.language_tools.panel
+                                                                        && !p.collapsed.remove(&id)
                                                                     {
-                                                                        if !p.collapsed.remove(&id)
-                                                                        {
-                                                                            p.collapsed.insert(id);
-                                                                        }
+                                                                        p.collapsed.insert(id);
                                                                     }
                                                                     cx.notify();
                                                                 },

@@ -63,7 +63,7 @@ pub(in crate::ui) fn configs(
                     .collect::<Result<Vec<_>, _>>()?,
             };
             Ok(pokarak_navigation::ServerConfig {
-                language: language.clone(),
+                language: normalized_language(language).into(),
                 program: path.into(),
                 args,
             })
@@ -71,77 +71,16 @@ pub(in crate::ui) fn configs(
         .collect()
 }
 
-/// Expand the plain placeholder subset used by common completion servers. Unknown
-/// variables/choices/transforms are rejected, never inserted as literal snippet code.
-pub(super) fn snippet(text: &str) -> Result<String, String> {
-    let mut output = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => output.push(chars.next().ok_or("불완전한 snippet escape")?),
-            '$' => {
-                match chars.peek().copied() {
-                    Some('0'..='9') => {
-                        while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
-                            chars.next();
-                        }
-                    }
-                    Some('{') => {
-                        chars.next();
-                        let mut number = String::new();
-                        while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
-                            number.push(chars.next().unwrap());
-                        }
-                        if number.is_empty() {
-                            return Err("이 후보는 지원하지 않는 snippet 변수를 포함합니다.".into());
-                        }
-                        match chars.next() {
-                            Some('}') => {}
-                            Some(':') => {
-                                let mut closed = false;
-                                while let Some(c) = chars.next() {
-                                    match c {
-                                    '\\' => output.push(chars.next().ok_or("불완전한 snippet escape")?),
-                                    '}' => { closed = true; break; }
-                                    '$' | '{' => return Err("중첩 snippet은 지원하지 않습니다. 다른 후보를 선택하세요.".into()),
-                                    c => output.push(c),
-                                }
-                                }
-                                if !closed {
-                                    return Err("불완전한 snippet placeholder".into());
-                                }
-                            }
-                            _ => {
-                                return Err(
-                                    "이 후보의 snippet choice/transform은 지원하지 않습니다."
-                                        .into(),
-                                );
-                            }
-                        }
-                    }
-                    _ => return Err("이 후보는 지원하지 않는 snippet 변수를 포함합니다.".into()),
-                }
-            }
-            c => output.push(c),
-        }
-    }
-    Ok(output)
-}
-
 pub(super) fn completion_edit(
     identity: &Identity,
     item: &CompletionItem,
 ) -> Result<(String, usize), String> {
     let rope = gpui_kit::component::input::Rope::from(identity.snapshot.text());
-    let insertion = |s: &str| {
-        if item.insert_text_format == 2 {
-            snippet(s)
-        } else {
-            Ok(s.to_owned())
-        }
-    };
-    let mut primary = if let Some(edit) = &item.text_edit {
-        edit.clone()
+    let primary = if let Some(edit) = item
+        .plain_text_text_edit()
+        .map_err(|e| format!("완성 snippet: {e:#}"))?
+    {
+        edit
     } else {
         let span = if identity.selection.is_empty() {
             rope.word_range(identity.cursor)
@@ -155,10 +94,11 @@ pub(super) fn completion_edit(
                 start: utf16(&rope, span.start),
                 end: utf16(&rope, span.end),
             },
-            new_text: item.insert_text.clone(),
+            new_text: item
+                .plain_text_insertion()
+                .map_err(|e| format!("완성 snippet: {e:#}"))?,
         }
     };
-    primary.new_text = insertion(&primary.new_text)?;
     let mut edits = item.additional_text_edits.clone();
     edits.push(primary.clone());
     let replacement = TextEdit::apply_all(identity.snapshot.text(), &edits)
@@ -286,4 +226,42 @@ pub(super) fn parameter_text(
             Some(label.get(a..b)?.into())
         }
     }
+}
+
+/// Keep backend language-family routing without letting lower-priority exact
+/// defaults override a user's family-level configuration. Same-layer exact
+/// overrides remain available alongside a family entry.
+pub(in crate::ui) fn normalized_language(language: &str) -> &str {
+    match language {
+        "ts" | "js/ts" => "typescript",
+        "tsx" => "typescriptreact",
+        "js" => "javascript",
+        "jsx" => "javascriptreact",
+        "kt" | "kts" => "kotlin",
+        "rs" => "rust",
+        "py" => "python",
+        "sh" | "bash" | "shell" => "shellscript",
+        "yml" => "yaml",
+        "md" => "markdown",
+        "make" => "makefile",
+        "gradle" => "groovy",
+        other => other,
+    }
+}
+pub(super) fn overlay_configs(
+    all: &mut Vec<pokarak_navigation::ServerConfig>,
+    mut overrides: Vec<pokarak_navigation::ServerConfig>,
+) {
+    for config in &mut overrides {
+        config.language = normalized_language(&config.language).into();
+    }
+    all.retain(|old| {
+        let language = normalized_language(&old.language);
+        !overrides.iter().any(|new| {
+            new.language == language
+                || (new.language == pokarak_navigation::language_family(&new.language)
+                    && new.language == pokarak_navigation::language_family(language))
+        })
+    });
+    all.extend(overrides);
 }

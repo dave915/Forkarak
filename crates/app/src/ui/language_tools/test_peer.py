@@ -26,6 +26,10 @@ while True:
         result = [{'uri':uri, 'range':span(1,6,11)}]
     elif method == 'textDocument/completion':
         result = {'isIncomplete':False,'items':[{'label':'dirtyMethod','detail':'(count: number): string','insertTextFormat':2,'textEdit':{'range':span(2,0,5),'newText':'dirtyMethod(${1:count})$0'},'additionalTextEdits':[{'range':span(1,0,0),'newText':'// import\n'}], 'data':{'fixture':True}}]}
+        result['items'].extend([
+            {'label':'mirrored snippet','insertTextFormat':2,'textEdit':{'range':span(2,0,5),'newText':'<${1|one,two|}>${2:${3:inside}}</$1>'}},
+            {'label':'unsupported transform','insertTextFormat':2,'textEdit':{'range':span(2,0,5),'newText':'${1/foo/bar/}'}}
+        ])
     elif method == 'completionItem/resolve':
         result = dict(params); result['documentation'] = {'kind':'markdown','value':'Fixture **documentation**'}
     elif method == 'textDocument/diagnostic':

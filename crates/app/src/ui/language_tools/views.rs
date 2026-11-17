@@ -88,10 +88,19 @@ impl Pokarak {
             .language_tools
             .panel
             .as_ref()
-            .is_some_and(|p| matches!(p.value, Reply::Symbols(_)))
+            .is_some_and(|p| matches!(p.value, Reply::Symbols(_) | Reply::Complete(_)))
         {
             if let Some(input) = &self.language_tools.input {
                 input.read(cx).focus_handle(cx).focus(window, cx);
+            }
+        } else if self
+            .language_tools
+            .panel
+            .as_ref()
+            .is_some_and(|p| matches!(p.value, Reply::Signature(_) | Reply::Hover(_)))
+        {
+            if let Some(editor) = self.active_editor() {
+                editor.read(cx).focus_handle(cx).focus(window, cx);
             }
         } else if let Some(focus) = &self.language_tools.focus {
             focus.focus(window, cx);

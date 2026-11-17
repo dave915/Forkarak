@@ -58,12 +58,16 @@ pub(super) enum ReviewState {
     Reviewed,
 }
 
+struct CachedDocumentStamp {
+    document: std::sync::Weak<DiffDocument>,
+    stamp: Option<String>,
+}
+
 pub(super) struct ReviewedFiles {
     records: Vec<Record>,
     stored: HashMap<ReviewKey, String>,
     verified: HashMap<ReviewKey, String>,
-    document_stamps:
-        std::cell::RefCell<HashMap<usize, (std::sync::Weak<DiffDocument>, Option<String>)>>,
+    document_stamps: std::cell::RefCell<HashMap<usize, CachedDocumentStamp>>,
     path: PathBuf,
     error: Option<String>,
     unreadable: bool,
@@ -200,16 +204,23 @@ impl ReviewedFiles {
     fn cached_stamp(&self, document: &Arc<DiffDocument>) -> Option<String> {
         let address = Arc::as_ptr(document) as usize;
         let mut stamps = self.document_stamps.borrow_mut();
-        if let Some((weak, stamp)) = stamps.get(&address)
-            && weak
+        if let Some(cached) = stamps.get(&address)
+            && cached
+                .document
                 .upgrade()
                 .is_some_and(|cached| Arc::ptr_eq(&cached, document))
         {
-            return stamp.clone();
+            return cached.stamp.clone();
         }
-        stamps.retain(|_, (document, _)| document.strong_count() > 0);
+        stamps.retain(|_, cached| cached.document.strong_count() > 0);
         let stamp = fingerprint(document);
-        stamps.insert(address, (Arc::downgrade(document), stamp.clone()));
+        stamps.insert(
+            address,
+            CachedDocumentStamp {
+                document: Arc::downgrade(document),
+                stamp: stamp.clone(),
+            },
+        );
         stamp
     }
 
@@ -284,7 +295,7 @@ enum ReviewSource {
         mode: CompareMode,
         files: Vec<ChangedFile>,
     },
-    Commit(pokarak_core::history::CommitDetail),
+    Commit(Arc<pokarak_core::history::CommitDetail>),
 }
 
 impl ReviewSource {
@@ -320,7 +331,7 @@ impl Pokarak {
         if self.git_history.active {
             self.git_history
                 .review_data()
-                .map(|(detail, _)| ReviewSource::Commit(detail.clone()))
+                .map(|(detail, _)| ReviewSource::Commit(Arc::new(detail.clone())))
         } else {
             self.snapshot().map(|snapshot| ReviewSource::Working {
                 mode: snapshot.compare.clone(),

@@ -27,7 +27,8 @@ Local Git repositories and multiple worktrees. AI or an external IDE can continu
 - File and diff viewing must work without a language server or project indexing.
 - No unsolicited build/import execution for untrusted repositories.
 - Explicit Git actions for branches, remotes, staging, commit/amend, stash and conflict resolution. Repository inspection and worktree viewing remain read-only.
-- Commit graph with parent-relative file diffs and single-commit cherry-pick/revert. Advanced history editing and Spring-specific analysis are later scope.
+- The default commit graph supports repository-wide commit search, read-only worktree and ref navigation, and parent-relative file diffs. Branch menus offer merge and rebase. Commit menus offer single-commit cherry-pick and revert.
+- The graph's working-changes row supports line, hunk and file staging and unstaging, a per-worktree commit draft and commit submission. Advanced history editing and Spring-specific analysis are later scope.
 
 ## Brand Commitments
 Name: 포카락. Project/English spelling: pokarak. Mark: the user's spork reference, a spoon ending in short fork tines.

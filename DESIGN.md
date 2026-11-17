@@ -10,8 +10,11 @@ Mode: operate/read. A compact developer review surface, with a steel spork mark 
 - Native keyboard conventions, visible focus, tooltips, drag-resizable panes. No dashboard cards or decorative metrics.
 
 ## First viewport
-A 36px native titlebar combines macOS window controls, the spork mark, project tabs and open-project action, Graph/Code selection, Stage / Commit, Git actions, refresh and settings. Smaller windows preserve the action labels and collapse secondary icons. Code View adds back and forward navigation.
-Repositories open in Git Graph mode. Left 210px: worktrees/branches. The remaining area has a vertically resizable commit graph above the selected commit detail. Graph rows show branch labels, message, author, date and hash; a working-changes row opens the current files. The lower detail has a resizable changed-file list and read-only historical diff/code, with explicit merge-parent selection and guarded cherry-pick/revert actions. The file toolbar offers unified and synchronized side-by-side diff, History, and Blame.
+A 36px native titlebar keeps project tabs, the open-project action, Graph/Code selection and Stage / Commit together. Wide windows show Fetch, Pull and Push directly. Smaller windows group these under Sync and put secondary actions under More. Code View adds back and forward navigation.
+
+Repositories open in Git Graph mode. A collapsible group for each of worktrees, local branches, remotes, tags and stashes sits to the left of the graph. Selecting a reference reveals its commit. Reference labels, graph lanes and commit messages have their own columns. Branch hover follows its first parent through merges. Cmd-F searches commit messages, authors and hashes across the repository. A commit context menu offers cherry-pick and revert. Local branch context menus name the source and destination for merge and rebase.
+
+Selecting a commit opens its changed files and read-only diff below the graph. The file toolbar offers unified and synchronized side-by-side diff, History and Blame, with parent selection for merges. Selecting the working-changes row opens staging, a diff and a commit message in the same pane. Each worktree remembers the pane dimensions and which sections are collapsed.
 
 Code View retains the existing changed files/all files, search and current-file reader, including per-worktree reading positions and language navigation. File/text search switches to Code View. Historical editors never invoke current-source language navigation. Project/worktree opens return to the graph and reject old asynchronous history results. Footer: worktree path and loading/analysis status. The worktree sidebar has no explanatory footer caption.
 

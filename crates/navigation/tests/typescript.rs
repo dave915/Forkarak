@@ -24,6 +24,12 @@ impl Project {
             .output()
             .unwrap();
         assert!(output.status.success());
+        // Test-only dependency linking; never modifies the user's repository or configuration.
+        if let Some(sdk) = std::env::var_os("POKARAK_TS_SDK") {
+            fs::create_dir(root.join("node_modules")).unwrap();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(sdk, root.join("node_modules/typescript")).unwrap();
+        }
         fs::write(root.join("tsconfig.json"), r#"{"compilerOptions":{"target":"ES2022","module":"CommonJS","strict":true,"allowJs":true,"checkJs":true,"jsx":"preserve"},"include":["*.ts","*.tsx","*.js","*.jsx"]}"#).unwrap();
         fs::write(root.join("model.ts"), format!("export interface Greeter {{ greet(): string; }}\nexport class Hello implements Greeter {{ greet() {{ return '{marker}'; }} }}\nexport function greet() {{ return '{marker}'; }}\n")).unwrap();
         fs::write(root.join("entry.ts"), "import { greet, Greeter, Hello } from './model';\nconst emoji = '😀'; greet();\nconst x: Greeter = new Hello();\nx.greet();\n").unwrap();
@@ -164,8 +170,129 @@ fn real_typescript_navigation_and_disk_updates() {
     other.shutdown();
     // No language-server logs, package installs, or compiler output in fixtures.
     for project in [&a, &b] {
-        assert!(!project.root.join("node_modules").exists());
+        assert_eq!(
+            project.root.join("node_modules").exists(),
+            std::env::var_os("POKARAK_TS_SDK").is_some()
+        );
+        if let Some(sdk) = std::env::var_os("POKARAK_TS_SDK") {
+            assert_eq!(
+                fs::read_link(project.root.join("node_modules/typescript")).unwrap(),
+                PathBuf::from(sdk)
+            );
+            assert_eq!(
+                fs::read_dir(project.root.join("node_modules"))
+                    .unwrap()
+                    .count(),
+                1
+            );
+        }
         assert!(!project.root.join(".log").exists());
         assert!(!project.root.join("model.js").exists());
     }
+}
+
+#[test]
+#[ignore = "requires managed TypeScript tools; validates unsaved editor LSP features"]
+fn real_typescript_unsaved_editor_features() {
+    use pokarak_navigation::{DocumentSnapshot, FormattingOptions, TextEdit};
+    let directory = std::env::var_os("POKARAK_TOOLS_DIR")
+        .map(PathBuf::from)
+        .expect("POKARAK_TOOLS_DIR");
+    let server = installed_configs(&directory)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.language == "typescript")
+        .unwrap();
+    let project = Project::new("unsaved");
+    let mut nav = project.navigator(&server);
+    let source = "// 😀한\nfunction dirtyName(value:number){return value+1;}\nconst numberValue: number = 'wrong';\ndirtyName(1);\n";
+    let snapshot =
+        DocumentSnapshot::new(project.root.clone(), "draft.ts".into(), source.into(), 11).unwrap();
+    // The source does not exist on disk. Both definition and references must use didOpen text.
+    let definition = nav.navigate_buffer(&snapshot, 3, 3, Definition).unwrap();
+    assert!(
+        definition
+            .value
+            .locations
+            .iter()
+            .any(|hit| hit.path == project.root.join("draft.ts") && hit.line == 1),
+        "{:?}",
+        definition.value
+    );
+    let references = nav.navigate_buffer(&snapshot, 1, 12, References).unwrap();
+    assert!(
+        references.value.locations.iter().any(|hit| hit.line == 3),
+        "{:?}",
+        references.value
+    );
+    let completions = nav.complete_buffer(&snapshot, 3, 5).unwrap();
+    assert!(
+        completions
+            .value
+            .items
+            .iter()
+            .any(|item| item.label == "dirtyName")
+    );
+    let candidate = completions
+        .value
+        .items
+        .iter()
+        .find(|item| item.label == "dirtyName")
+        .unwrap();
+    let resolved = nav.resolve_completion_buffer(&snapshot, candidate).unwrap();
+    assert!(
+        resolved
+            .value
+            .detail
+            .as_deref()
+            .unwrap_or("")
+            .contains("dirtyName")
+    );
+    let signature = nav
+        .signature_help_buffer(&snapshot, 3, 11)
+        .unwrap()
+        .value
+        .unwrap();
+    assert!(
+        signature
+            .signatures
+            .iter()
+            .any(|s| s.label.contains("dirtyName"))
+    );
+    let hover = nav.hover_buffer(&snapshot, 1, 12).unwrap().value.unwrap();
+    assert!(hover.contents.iter().any(|s| s.value.contains("dirtyName")));
+    let symbols = nav.document_symbols(&snapshot).unwrap();
+    assert!(symbols.value.iter().any(|item| item.name == "dirtyName"));
+    let diagnostics = nav.diagnostics(&snapshot).unwrap();
+    assert!(
+        diagnostics
+            .value
+            .iter()
+            .any(|item| item.code == Some(serde_json::json!(2322))),
+        "{:?}",
+        diagnostics.value
+    );
+    let edits = nav
+        .format_buffer(&snapshot, &FormattingOptions::default())
+        .unwrap();
+    assert!(!edits.value.is_empty());
+    let formatted = TextEdit::apply_all(source, &edits.value).unwrap();
+    assert!(formatted.contains("value: number"), "{formatted}");
+    assert!(!project.root.join("draft.ts").exists());
+    let changed = DocumentSnapshot::new(
+        project.root.clone(),
+        "draft.ts".into(),
+        source.replace("'wrong'", "42"),
+        18,
+    )
+    .unwrap();
+    let diagnostics = nav.diagnostics(&changed).unwrap();
+    assert!(
+        !diagnostics
+            .value
+            .iter()
+            .any(|item| item.code == Some(serde_json::json!(2322)))
+    );
+    assert!(!snapshot.is_current());
+    nav.shutdown();
 }

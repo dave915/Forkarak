@@ -91,7 +91,7 @@ Java and Kotlin server runtimes are distinct from a project's language level. A 
 
 Kotlin's default entry now selects **official JetBrains Kotlin LSP**. The managed installation supplies its native launcher and an isolated Maven tool, with telemetry disabled. It is not the fwcd server. The UI's existing trust action passes `NavigatorOptions::allow_project_imports = true` after warning about Gradle/Maven execution; that is sufficient, with no additional hidden approval. The JSON `allowProjectImports` option remains supported. This opt-in also enables JDT Maven/Gradle imports. Kotlin import failures are returned as errors, and import completion is bounded before semantic results are delivered.
 
-Without that opt-in, JDT gets disabled Maven/Gradle imports, disabled automatic build-configuration updates, and disabled autobuild. The TS server receives `disableAutomaticTypingAcquisition: true` and `tsserver.useSyntaxServer: "never"`; the latter prevents early definition requests from being answered by the adapter's partial syntax-only project. Its logs are directed outside the repository. Forkarak never sends build/install/execute-command requests, rejects server-initiated workspace edits and unsupported commands, and never executes project setup commands. External language servers are trusted executables, not sandboxed processes; a custom server is responsible for respecting these settings.
+Without that opt-in, JDT gets disabled Maven/Gradle imports, disabled automatic build-configuration updates, and disabled autobuild. The TS server receives `disableAutomaticTypingAcquisition: true` and `tsserver.useSyntaxServer: "never"`; the latter prevents early definition requests from being answered by the adapter's partial syntax-only project. Its logs are directed outside the repository. Forkarak never sends build/install or arbitrary execute-command requests (the editor diagnostics adapter permits only two fixed read-only TypeScript requests), rejects server-initiated workspace edits and unsupported commands, and never executes project setup commands. External language servers are trusted executables, not sandboxed processes; a custom server is responsible for respecting these settings.
 
 ## Lifecycle and boundaries
 
@@ -129,3 +129,99 @@ PATH=/Users/han/.cargo/bin:/usr/bin:/bin cargo test -p pokarak-navigation --test
 The TS test checks real definition/references/implementation, TSX/JSX imports, UTF-16 positions, disk updates, and separate roots. The JVM suite checks real JDT Java 17 navigation and official Kotlin-only/mixed Maven navigation. Java-origin queries against the Kotlin-only bundle are capability probes and returned no locations; full bidirectional Java/Kotlin support is not claimed. JDT reference result status warns that Kotlin callers may be missing. See [the complete validation matrix](../../docs/language-analysis.md).
 
 Protocol reference: [Language Server Protocol 3.17](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/). TypeScript initialization settings: [typescript-language-server configuration](https://github.com/typescript-language-server/typescript-language-server/blob/master/docs/configuration.md).
+
+## Explicit analysis of editor drafts
+
+The existing `navigate` API stays disk-backed. The additive editor API accepts an
+immutable `DocumentSnapshot::new(root, path, text, version)` with the exact displayed
+**working source**, a canonical worktree identity and a nonnegative LSP integer
+version. Versions increase per file. Never pass a historical preview. All calls
+still run on a background thread, after the existing project trust/import gate.
+Construction, retaining drafts, and viewing files start no process.
+
+```rust,ignore
+let snapshot = DocumentSnapshot::new(root, path, draft, document_version)?;
+let pending = snapshot.clone(); // retain outside the Navigator mutex
+let definitions = navigator.navigate_buffer(&snapshot, line0, utf16, NavigationKind::Definition)?;
+let completions = navigator.complete_buffer(&snapshot, line0, utf16)?;
+let diagnostics = navigator.diagnostics(&snapshot)?;
+let symbols = navigator.document_symbols(&snapshot)?;
+let hover = navigator.hover_buffer(&snapshot, line0, utf16)?;
+let signature = navigator.signature_help_buffer(&snapshot, line0, utf16)?;
+// On source edit, file/worktree switch, or replacing this view:
+pending.invalidate();
+```
+
+Each `BufferResult<T>` contains `snapshot` and `value`, with `is_current()`.
+Invalidation is thread-safe and interrupts outstanding target-document I/O,
+including initialization, without acquiring the Navigator mutex. Results also
+reject changed source contexts, regressing versions, same-version/different-text
+reuse, changed symlink targets and another worktree. Retain the pending clone and
+invalidate it whenever the displayed document identity changes, including while a
+request holds the mutex. The UI must additionally check its root/file/request
+identity before applying or displaying results. `cancellation_handle()` remains
+the permanent whole-Navigator stop for trust revocation, project close and quit.
+
+`retain_buffer(&snapshot)` registers another dirty source without server startup.
+The next explicit analysis request synchronizes all retained drafts for its server
+session; failed sessions restore them before subsequent queries. Disk refresh
+preserves these buffers. `release_buffer(path)` explicitly returns a file to disk
+synchronization; legacy `navigate` refuses to replace a retained draft implicitly.
+An invalidated view's last registered text stays retained until replaced or
+released; invalidation alone never discards a draft. Snapshot versions identify UI
+sources, while internal wire versions remain monotonic when mixed with disk calls.
+Definitions and references in dirty files use their registered source for previews.
+No semantic request falls back to text search.
+
+Completion includes insertion text, optional range edits, additional edits, detail,
+documentation and explicitly tagged insertion format (1 plain text, 2 snippet).
+Snippet support is not advertised, but unexpected snippets retain their tag so a
+consumer can reject or explicitly handle them. Keep the returned item intact for
+`resolve_completion_buffer(&snapshot, &item)`: opaque server data and the source
+identity are retained internally. Resolution requires server support and rejects
+candidates from another file/root/version. Commands embedded in candidates are
+never executed. Hover handles Markdown, plain text and legacy marked strings.
+Signature help includes parameter labels or validated UTF-16 offsets, active
+signature/parameter, and documentation. Unsupported capabilities are errors; null
+hover/signature results are `None`. Documentation remains display-only.
+
+Diagnostics prefer `textDocument/diagnostic`. TypeScript adapters advertising
+`typescript.tsserverRequest` use only two hardcoded synchronous read-only commands:
+`syntacticDiagnosticsSync` and `semanticDiagnosticsSync`, through
+`workspace/executeCommand`, after the exact buffer is synchronized. Their one-based
+UTF-16 locations are converted and validated. There is no public arbitrary
+execute-command API. This narrow route avoids attaching unversioned asynchronous
+TS reports to a newer draft; see the [adapter's command protocol](https://github.com/typescript-language-server/typescript-language-server#send-tsserver-command).
+Other push-only servers must include a matching document version; unversioned
+reports are an explicit error. Import/build/installation commands and server edits
+remain rejected.
+
+`format_buffer(&snapshot, &FormattingOptions { tab_size, insert_spaces })` returns
+validated, nonoverlapping `TextEdit` ranges. `TextEdit::apply_all(original, &edits)`
+converts zero-based UTF-16 positions to byte offsets without splitting surrogate
+pairs, and returns a new string. It never saves. Check the result's snapshot
+against the current draft before applying, and keep disk save explicit.
+
+`set_formatter_configs(Vec<FormatterConfig>)` configures per-language stdin/stdout
+formatters using `language`, `program`, `args`, without starting one. The supported
+language IDs/aliases match existing server configuration. `{path}` and `{root}`
+expand as single argv values; there is no shell expansion. Configure stdin-mode
+arguments only, such as `--stdin-filepath {path}`; do not supply in-place/write
+flags. An explicit configured formatter takes precedence over LSP formatting,
+shares cancellation/deadlines, bounds output and stderr, and returns a full-source
+replacement edit. Without one, the current server must advertise document
+formatting. Automatic formatting/saving is never enabled here; S14/S15/S17 toggles
+and save behavior belong to the UI. S12 server paths/argv keep the existing
+Navigator configuration mechanism; S16 consumes the explicit formatter setter.
+
+The mock peer tests cover dirty/nonexistent drafts, UTF-16/CRLF ranges, full and
+incremental synchronization, roots, cancellation/invalidation, cross-file drafts,
+capabilities, malformed edits, diagnostics and the TS command whitelist, signature
+parameter offsets, hover, candidate resolution and configured formatter failures.
+The opt-in real TypeScript test also checks these editor features, changed-draft
+diagnostics and unchanged disk. For an SDK supplied separately from the adapter,
+set `POKARAK_TS_SDK` to a compatible TypeScript package directory; authored fixtures
+link only this dependency and verify the server creates no additional dependencies,
+logs or compiler output. TypeScript 7 no longer supplies the legacy `tsserver.js`
+required by this adapter; the verified fixture used TypeScript 6.0.3. Existing real
+JDT navigation was also revalidated; Kotlin imports were not run for this change.

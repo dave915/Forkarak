@@ -1,9 +1,12 @@
 //! Read-only, root-scoped semantic navigation over stdio LSP.
 //! Construct only after trust; call on an application background thread.
+mod buffer;
 mod build_root;
 mod cancellation;
 mod client;
 mod config;
+mod formatter;
+mod intelligence;
 mod paths;
 mod transport;
 
@@ -20,8 +23,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub use buffer::{
+    BufferResult, CompletionItem, CompletionResult, Diagnostic, DocumentSnapshot, DocumentSymbol,
+    FormatterConfig, FormattingOptions, Position, TextEdit, TextRange,
+};
 pub use cancellation::CancellationHandle;
 pub use config::{NavigatorOptions, default_configs, discover_program, installed_configs};
+pub use intelligence::{
+    HoverResult, MarkupContent, ParameterInformation, ParameterLabel, SignatureHelp,
+    SignatureInformation,
+};
 pub use paths::{path_to_uri, uri_to_path};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -55,6 +66,8 @@ struct ClientOrigin {
 
 pub struct Navigator {
     root: PathBuf,
+    buffer_versions: BTreeMap<PathBuf, DocumentSnapshot>,
+    formatters: Vec<FormatterConfig>,
     configs: Vec<ServerConfig>,
     options: NavigatorOptions,
     clients: BTreeMap<String, Client>,
@@ -87,6 +100,8 @@ impl Navigator {
         }
         Self {
             root,
+            buffer_versions: BTreeMap::new(),
+            formatters: Vec::new(),
             configs,
             options,
             clients: BTreeMap::new(),
@@ -160,59 +175,9 @@ impl Navigator {
         validate_position(&text, line, column)?;
         // A dependency source keeps the originating import session even if its
         // language or filesystem root differs from the selected worktree source.
-        let origin = if let Some(origin) = self.external_sources.get(&path) {
-            origin.clone()
-        } else {
-            let mut config = self.configs.iter().rev().find(|c| c.language == language)
-                .or_else(|| self.configs.iter().rev().find(|c| c.language == family(language)))
-                .cloned().with_context(|| format!("No language server configured for {language}; semantic navigation is unavailable"))?;
-            Client::check_import_permission(&config, &self.options)?;
-            // Check installation before inspecting Maven reactors or creating any
-            // server workspace. Discovery checks files only and preserves argv.
-            if config.language == "kotlin" || is_jetbrains(&config) {
-                config.program = config::kotlin_program(&config)?
-                    .to_string_lossy()
-                    .into_owned();
-            } else if config.language == "java" {
-                config.program = config::java_program(&config)?
-                    .to_string_lossy()
-                    .into_owned();
-            }
-            let import_root = if language == "kotlin" || is_jetbrains(&config) || is_jdt(&config) {
-                build_root::discover(&self.root, &path, is_jdt(&config))?
-            } else {
-                self.root.clone()
-            };
-            let server_family = if is_jetbrains(&config) {
-                "jetbrains-jvm"
-            } else {
-                family(language)
-            };
-            let key = serde_json::to_string(&(
-                server_family,
-                &config.program,
-                &config.args,
-                &import_root,
-            ))?;
-            ClientOrigin {
-                key,
-                config,
-                import_root,
-            }
-        };
+        let origin = self.origin_for(&path, language)?;
         let key = &origin.key;
-        if !self.clients.contains_key(key) {
-            let mut launch_config = origin.config.clone();
-            launch_config.language = family(&launch_config.language).into();
-            let client = Client::start(
-                &self.root,
-                &origin.import_root,
-                &launch_config,
-                &self.options,
-                &self.cancellation,
-            )?;
-            self.clients.insert(key.clone(), client);
-        }
+        self.ensure_client(&origin, None)?;
         let client = self.clients.get_mut(key).unwrap();
         let response = client.navigate(&path, text, language, line, column, &kind);
         let response = match response {
@@ -251,6 +216,98 @@ impl Navigator {
             semantic: true,
             status,
         })
+    }
+
+    fn check_ready(&self) -> Result<()> {
+        self.cancellation.check()?;
+        if self.stopped {
+            bail!("Navigator has been shut down");
+        }
+        if let Some(error) = &self.setup_error {
+            bail!("{error}");
+        }
+        Ok(())
+    }
+
+    fn origin_for(&self, path: &Path, language: &str) -> Result<ClientOrigin> {
+        let origin = if let Some(origin) = self.external_sources.get(path) {
+            origin.clone()
+        } else {
+            let mut config = self.configs.iter().rev().find(|c| c.language == language)
+                .or_else(|| self.configs.iter().rev().find(|c| c.language == family(language)))
+                .cloned().with_context(|| format!("No language server configured for {language}; semantic navigation is unavailable"))?;
+            Client::check_import_permission(&config, &self.options)?;
+            // Check installation before inspecting Maven reactors or creating any
+            // server workspace. Discovery checks files only and preserves argv.
+            if config.language == "kotlin" || is_jetbrains(&config) {
+                config.program = config::kotlin_program(&config)?
+                    .to_string_lossy()
+                    .into_owned();
+            } else if config.language == "java" {
+                config.program = config::java_program(&config)?
+                    .to_string_lossy()
+                    .into_owned();
+            }
+            let import_root = if language == "kotlin" || is_jetbrains(&config) || is_jdt(&config) {
+                build_root::discover(&self.root, path, is_jdt(&config))?
+            } else {
+                self.root.clone()
+            };
+            let server_family = if is_jetbrains(&config) {
+                "jetbrains-jvm"
+            } else {
+                family(language)
+            };
+            let key = serde_json::to_string(&(
+                server_family,
+                &config.program,
+                &config.args,
+                &import_root,
+            ))?;
+            ClientOrigin {
+                key,
+                config,
+                import_root,
+            }
+        };
+        Ok(origin)
+    }
+
+    fn ensure_client(
+        &mut self,
+        origin: &ClientOrigin,
+        snapshot: Option<&DocumentSnapshot>,
+    ) -> Result<()> {
+        let key = &origin.key;
+        if !self.clients.contains_key(key) {
+            let mut launch_config = origin.config.clone();
+            launch_config.language = family(&launch_config.language).into();
+            let mut client = Client::start(
+                &self.root,
+                &origin.import_root,
+                &launch_config,
+                &self.options,
+                &self.cancellation,
+                snapshot,
+            )?;
+            // Recreate every retained draft after a protocol failure/restart, not
+            // just the requested file: cross-file semantics must see dirty sources.
+            client.transport.set_snapshot(snapshot.cloned());
+            for retained in self.buffer_versions.values() {
+                let Some(language) = language(retained.path()) else {
+                    continue;
+                };
+                if self.origin_for(retained.path(), language)?.key == *key {
+                    if resolved_path(retained.path())? != retained.path() {
+                        bail!("Retained source changed its filesystem target");
+                    }
+                    client.restore_buffer(retained, language)?;
+                }
+            }
+            client.transport.set_snapshot(None);
+            self.clients.insert(key.clone(), client);
+        }
+        Ok(())
     }
 
     /// Call on filesystem-change notifications; navigation also refreshes all open buffers.
@@ -327,6 +384,10 @@ impl Navigator {
         self.clients.clear();
         let _ = self.cancellation.cancel();
         self.external_sources.clear();
+        for snapshot in self.buffer_versions.values() {
+            snapshot.invalidate();
+        }
+        self.buffer_versions.clear();
         self.stopped = true;
         self.last_status = "Analysis stopped".into();
     }

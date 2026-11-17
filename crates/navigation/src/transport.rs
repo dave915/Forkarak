@@ -68,6 +68,7 @@ pub(crate) fn read_frame(reader: &mut impl BufRead) -> Result<Value> {
 }
 
 pub(crate) struct Transport {
+    snapshot: Option<crate::DocumentSnapshot>,
     process: Arc<OwnedProcess>,
     cancellation: CancellationHandle,
     rx: Option<Receiver<std::result::Result<Value, String>>>,
@@ -151,6 +152,7 @@ impl Transport {
             }
         });
         Ok(Self {
+            snapshot: None,
             process,
             cancellation: cancellation.clone(),
             rx: Some(response_rx),
@@ -159,6 +161,10 @@ impl Transport {
             threads: vec![reader, log_reader, writer],
             stopped: false,
         })
+    }
+
+    pub fn set_snapshot(&mut self, snapshot: Option<crate::DocumentSnapshot>) {
+        self.snapshot = snapshot;
     }
 
     pub fn send(&self, message: &Value, deadline: Instant) -> Result<()> {
@@ -189,6 +195,9 @@ impl Transport {
     fn wait<T>(&self, receiver: &Receiver<T>, deadline: Instant, operation: &str) -> Result<T> {
         loop {
             self.cancellation.check()?;
+            if let Some(snapshot) = &self.snapshot {
+                snapshot.check()?;
+            }
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .with_context(|| format!("{operation} timed out"))?;

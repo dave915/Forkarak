@@ -501,7 +501,11 @@ impl Pokarak {
                 }
                 app.reviewed_files.checking = false;
                 app.reviewed_files.checking_context = None;
-                if app.selected_review().as_ref().map(|(current, _)| current) != Some(&key) {
+                if app
+                    .selected_review()
+                    .as_ref()
+                    .is_none_or(|(current, stamp)| current != &key || stamp != &expected)
+                {
                     return;
                 }
                 match result {

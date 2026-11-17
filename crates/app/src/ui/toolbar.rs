@@ -49,14 +49,13 @@ impl Pokarak {
                 )
             })
             .when(self.current.is_some(), |bar| {
-                bar.child(divider(palette))
-                    .child(self.workspace_modes(compact, cx))
+                bar.child(self.workspace_modes(compact, cx))
                     .when(!self.git_history.active, |bar| {
                         bar.child(self.reading_navigation(cx))
                     })
-                    .child(divider(palette))
                     .child(
                         Button::new("stage-commit")
+                            .ml_1()
                             .label("Stage / 커밋")
                             .when(!compact, |button| {
                                 button.icon(IconName::GitCommitHorizontal)
@@ -80,9 +79,9 @@ impl Pokarak {
                             .tooltip("브랜치 작업·원격 동기화·저장소 설정")
                             .on_click(cx.listener(|app, _, w, cx| app.open_git_actions(w, cx))),
                     )
-                    .child(divider(palette))
                     .child(
                         Button::new("refresh")
+                            .ml_1()
                             .icon(IconName::RefreshCw)
                             .ghost()
                             .small()
@@ -111,8 +110,7 @@ impl Pokarak {
                 px(80.)
             })
             .bg(palette.rgb(SIDE))
-            .border_b_1()
-            .border_color(palette.rgb(LINE))
+            .border_b_0()
             .child(content)
             .into_any_element()
     }
@@ -135,7 +133,8 @@ impl Pokarak {
         }
 
         TabBar::new("project-tabs")
-            .underline()
+            .segmented()
+            .bg(palette.rgb(SIDE))
             .small()
             .min_w_0()
             .w_full()
@@ -194,15 +193,14 @@ impl Pokarak {
         let palette = Palette::new(cx);
         let graph = self.git_history.active;
         div()
+            .ml_1()
             .flex_none()
             .flex()
             .items_center()
             .gap(px(2.))
             .p(px(2.))
             .rounded(px(6.))
-            .bg(palette.rgb(BG))
-            .border_1()
-            .border_color(palette.rgb(LINE))
+            .bg(palette.rgb(PANEL))
             .child(
                 Button::new("view-graph")
                     .label("Git 그래프")
@@ -261,8 +259,4 @@ impl Pokarak {
                     .on_click(cx.listener(|app, _, w, cx| app.navigate_history(false, w, cx))),
             )
     }
-}
-
-fn divider(palette: Palette) -> Div {
-    div().w(px(1.)).h(px(18.)).flex_none().bg(palette.rgb(LINE))
 }

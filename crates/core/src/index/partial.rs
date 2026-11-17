@@ -37,6 +37,14 @@ pub struct PartialPreview {
 }
 
 impl PartialPreview {
+    /// The exact two snapshots used to calculate the selectable diff.
+    pub fn source_texts(&self) -> (&str, &str) {
+        (
+            self.old.as_ref().map_or("", |v| v.text.as_str()),
+            self.new.as_ref().map_or("", |v| v.text.as_str()),
+        )
+    }
+
     pub fn lines(&self) -> &[DiffLine] {
         &self.rows
     }

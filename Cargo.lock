@@ -4782,7 +4782,9 @@ dependencies = [
  "serde",
  "serde_json",
  "smol",
+ "syntect",
  "tempfile",
+ "two-face",
 ]
 
 [[package]]

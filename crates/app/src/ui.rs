@@ -9,6 +9,7 @@ mod patch;
 mod reader_navigation;
 mod settings;
 mod split_diff;
+mod syntax;
 #[cfg(target_os = "macos")]
 mod terminal_dock;
 mod toolbar;

@@ -1,19 +1,19 @@
 #!/bin/bash
 # Installed with a small preamble containing its app and command locations.
 set -euo pipefail
-APP_PATH="${POKARAK_APP_PATH:-${HOME}/Applications/Pokarak.app}"
-BIN_DIR="${POKARAK_BIN_DIR:-${HOME}/.local/bin}"
+APP_PATH="${FORKARAK_APP_PATH:-${HOME}/Applications/Forkarak.app}"
+BIN_DIR="${FORKARAK_BIN_DIR:-${HOME}/.local/bin}"
 fail() { echo "Error: $*" >&2; exit 1; }
 
 case "${1:-}" in
     -h|--help|help)
         cat <<'USAGE'
-Pokarak — native Git worktree review
-Usage: pokarak [PROJECT ...]
-       pokarak update [--version vX.Y.Z]
-       pokarak --version
+Forkarak — native Git worktree review
+Usage: forkarak [PROJECT ...]
+       forkarak update [--version vX.Y.Z]
+       forkarak --version
 
-Quit Pokarak before updating. Project paths may contain spaces or Korean text.
+Quit Forkarak before updating. Project paths may contain spaces or Korean text.
 USAGE
         exit 0 ;;
     --version)
@@ -25,7 +25,7 @@ USAGE
         exec /bin/bash "$APP_PATH/Contents/Resources/install.sh" --app-dir "$(dirname "$APP_PATH")" --bin-dir "$BIN_DIR" "$@" ;;
 esac
 
-[[ -d "$APP_PATH" ]] || fail "Pokarak is not installed at $APP_PATH; run install.sh again"
+[[ -d "$APP_PATH" ]] || fail "Forkarak is not installed at $APP_PATH; run install.sh again"
 PROJECTS=()
 PATHS_ONLY=false
 for path in "$@"; do

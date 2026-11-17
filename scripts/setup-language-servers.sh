@@ -1,11 +1,11 @@
 #!/bin/sh
-# Explicit, opt-in installer. Never called by Pokarak startup. No global JAVA_HOME.
+# Explicit, opt-in installer. Never called by Forkarak startup. No global JAVA_HOME.
 set -eu
 exec python3 - "$@" <<'PY'
 import argparse, concurrent.futures, hashlib, json, os, pathlib, platform, re
 import shutil, subprocess, tempfile, urllib.parse, urllib.request, xml.etree.ElementTree as ET
 
-parser = argparse.ArgumentParser(description='Install isolated Pokarak language tools from official release metadata')
+parser = argparse.ArgumentParser(description='Install isolated Forkarak language tools from official release metadata')
 parser.add_argument('--tools-dir', type=pathlib.Path, default=pathlib.Path.home()/'.local/share/pokarak/tools')
 parser.add_argument('--update', action='store_true', help='Resolve current official releases instead of reusing installed metadata')
 args = parser.parse_args()
@@ -16,7 +16,7 @@ root.mkdir(parents=True, exist_ok=True)
 
 
 def fetch(url):
-    request = urllib.request.Request(url, headers={'User-Agent': 'pokarak-language-tools/1', 'Accept': 'application/json'})
+    request = urllib.request.Request(url, headers={'User-Agent': 'forkarak-language-tools/1', 'Accept': 'application/json'})
     with urllib.request.urlopen(request, timeout=60) as response:
         return response.read()
 

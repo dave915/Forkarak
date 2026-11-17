@@ -10,8 +10,8 @@ usage() {
 Usage: ./scripts/release-macos.sh --version vX.Y.Z [--binary PATH]
 
 Builds with Cargo --locked (or packages an existing arm64 binary) and produces:
-  dist/release/Pokarak-macos-arm64.zip
-  dist/release/pokarak-macos-arm64.tar.gz
+  dist/release/Forkarak-macos-arm64.zip
+  dist/release/forkarak-macos-arm64.tar.gz
   dist/release/SHA256SUMS
   dist/release/install.sh
 
@@ -45,8 +45,8 @@ if [[ -n "$BINARY" ]]; then
 else
     "$ROOT_DIR/scripts/package-macos.sh"
 fi
-APP_PATH="$ROOT_DIR/dist/Pokarak.app"
-STAGE="$(mktemp -d "$ROOT_DIR/dist/.pokarak-release.XXXXXX")"
+APP_PATH="$ROOT_DIR/dist/Forkarak.app"
+STAGE="$(mktemp -d "$ROOT_DIR/dist/.forkarak-release.XXXXXX")"
 cleanup() { /bin/rm -rf "$STAGE"; }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -61,18 +61,17 @@ else
 fi
 /usr/bin/codesign --verify --strict "$APP_PATH"
 # Do not ship Finder metadata or quarantine attributes from the build machine.
-/usr/bin/ditto -c -k --norsrc --keepParent "$APP_PATH" "$STAGE/Pokarak-macos-arm64.zip"
-# Installers shipped through v0.2.0 only accept the original archive root.
-COPYFILE_DISABLE=1 /usr/bin/tar -czf "$STAGE/pokarak-macos-arm64.tar.gz" -s '|^Pokarak[.]app|포카락.app|' -C "$ROOT_DIR/dist" Pokarak.app
+/usr/bin/ditto -c -k --norsrc --keepParent "$APP_PATH" "$STAGE/Forkarak-macos-arm64.zip"
+COPYFILE_DISABLE=1 /usr/bin/tar -czf "$STAGE/forkarak-macos-arm64.tar.gz" -C "$ROOT_DIR/dist" Forkarak.app
 /bin/cp "$ROOT_DIR/scripts/install.sh" "$STAGE/install.sh"
 (
     cd "$STAGE"
-    /usr/bin/shasum -a 256 Pokarak-macos-arm64.zip pokarak-macos-arm64.tar.gz install.sh > SHA256SUMS
+    /usr/bin/shasum -a 256 Forkarak-macos-arm64.zip forkarak-macos-arm64.tar.gz install.sh > SHA256SUMS
 )
 OUTPUT="$ROOT_DIR/dist/release"
 [[ ! -L "$OUTPUT" ]] || fail "Refusing a symlink release directory"
 mkdir -p "$OUTPUT"
-for asset in Pokarak-macos-arm64.zip pokarak-macos-arm64.tar.gz SHA256SUMS install.sh; do
+for asset in Forkarak-macos-arm64.zip forkarak-macos-arm64.tar.gz SHA256SUMS install.sh; do
     /bin/mv -f "$STAGE/$asset" "$OUTPUT/$asset"
 done
 echo "Release assets prepared for $TAG at $OUTPUT"

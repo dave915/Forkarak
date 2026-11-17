@@ -1,5 +1,7 @@
 # Native macOS verification record
 
+최신 1.0.0 릴리스 검증은 [별도 기록](releases/1.0.0-verification.md)을 참고하세요. 아래 내용은 초기 개발 시점의 기록입니다.
+
 Recorded 2026-11-17 (Asia/Seoul). Forkarak is a Rust, GPUI + GPUI Kit macOS desktop application. This record separates test logs, root-reported interaction checks, source inspection and pending work. It is not a web or iOS verification report.
 
 The documentation pass inspected `PRODUCT.md`, `DESIGN.md`, `README.md` and the app source. The documentation worktree starts at `d46873b8b96a62c39de81b41abf6d3a9f3cb953f`; its app source is older than the implementation documented here. The updated `main.rs`, `prefs.rs`, `theme.rs`, settings/sidebar methods and reader/comparison rendering were read from `/Users/han/dev/pokarak`. They include applied comparison state, full diff lines, light/dark palettes, System appearance, persisted settings and the Worktrees/Branches selector. At inspection these root changes were uncommitted. The sidecar's `provenance.sourceSha256` records all five app source files; `ui.rs` was `bd1eba55a47b35713c1a93c4a5db1ab2d10dd7067257e6b6c092c832b13dd997` and `theme.rs` was `3f4261c2f1fc9b9f2c438258b361a2eec801827f9af62dd0590726bdbe1d0bc8`. These identify inspected source, not a release binary.

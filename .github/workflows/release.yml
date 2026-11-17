@@ -39,17 +39,27 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add aarch64-apple-darwin
+          rustup component add rustfmt clippy
       - name: Test installation and updates
         run: |
           python3 scripts/test-distribution.py
           python3 scripts/test-cli-launcher.py
+          python3 scripts/test-language-resources.py
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Check application
+        run: cargo clippy --locked --workspace --all-targets --features pokarak-navigation/test-server -- -D warnings
       - name: Test application
         working-directory: /tmp
         run: cargo test --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" --workspace --features pokarak-navigation/test-server
       - name: Build release
         run: ./scripts/release-macos.sh --version "$RELEASE_TAG"
-      - name: Record source revision
-        run: git rev-parse HEAD > dist/release/source-revision.txt
+      - name: Verify bundled Java installation and relocation
+        run: python3 scripts/test-prepared-language-app.py --app dist/Forkarak.app
+      - name: Record source revision and release notes
+        run: |
+          git rev-parse HEAD > dist/release/source-revision.txt
+          cp "docs/releases/${RELEASE_TAG#v}.md" dist/release/release-notes.md
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-arm64-release
@@ -61,6 +71,7 @@ jobs:
             dist/release/SHA256SUMS
             dist/release/install.sh
             dist/release/source-revision.txt
+            dist/release/release-notes.md
 
   publish:
     needs: build
@@ -84,20 +95,9 @@ jobs:
             echo 'Release already exists. Publish a new version rather than replacing assets.' >&2
             exit 1
           fi
-          cat > release/notes.md <<'NOTES'
-          Forkarak(포카락)은 커밋 그래프, 워크트리 비교, 줄 단위 스테이징을 지원하는 Apple Silicon Mac용 Git 클라이언트입니다. macOS 13 이상이 필요합니다.
-
-          설치 (Rust, Xcode, GitHub 로그인 불필요):
-          ```sh
-          /bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/Forkarak/releases/latest/download/install.sh | /bin/bash'
-          ```
-          설치 후 앱은 `~/Applications/Forkarak.app`, 명령은 `~/.local/bin/forkarak`에 있습니다.
-          v0.2.7부터 앱에서 **설정 → 업데이트 확인**을 사용할 수 있습니다. 새 버전 알림에서 **업데이트 다운로드**를 누르고 준비가 끝나면 **업데이트하고 재시작**을 선택하세요. 터미널에서는 앱을 종료하고 `~/.local/bin/forkarak update`를 실행하세요.
-
-          이번 빌드는 ad-hoc 서명이며 Apple Developer ID 공증은 없습니다.
-          NOTES
+          test -s release/release-notes.md
           gh release create "$RELEASE_TAG" \
             release/Forkarak-macos-arm64.zip release/forkarak-macos-arm64.tar.gz release/SHA256SUMS \
             release/install.sh release/source-revision.txt \
             --verify-tag --latest --title "Forkarak $RELEASE_TAG" \
-            --notes-file release/notes.md
+            --notes-file release/release-notes.md

@@ -22,10 +22,10 @@ Herdr is the user's primary environment for AI work spanning projects and other 
 
 ## Current Capabilities and Constraints
 
-- Multiple project tabs in one window, per-project worktrees, individual/all-project close, and a recent-project welcome screen.
+- Multiple project tabs in one window, drag reordering in the tab bar and project list with persisted shared order, per-project worktrees, individual/all-project close, and a recent-project welcome screen.
 - Worktree discovery and switching without checkout or mutation.
 - Separate file tabs, selected file, scroll position, panel visibility, and navigation history per worktree.
-- Project and worktree opens currently enter Git Graph mode; selectable default working screens and restoration of the last active screen are planned below.
+- Project and worktree opens follow the selected Editor/Git default or restore the last working screen, file and reading position when enabled.
 - Multiple native terminal sessions per worktree, with tab selection, individual close/restart, and live-session retention while hidden.
 - Code View defaults to working files versus HEAD. Explicit GUI and CLI branch comparisons use merge-base(base, HEAD), include committed and working changes, and retain their applied baseline per worktree. Graph branch filtering remains independent.
 - External file, commit and reference changes refresh automatically after a quiet interval. Active editing, saves, Git operations, dialogs and marked staging selections defer the queued refresh. Selected files, drafts and code/diff/graph reading positions are preserved.
@@ -47,9 +47,9 @@ Herdr is the user's primary environment for AI work spanning projects and other 
 - Explicit Stash Apply and Pop actions identify the selected shared stash and destination worktree. Conflict resolution compares Ours and Theirs together, offers Base, navigates conflict regions and files, and retains in-session resolution drafts. Saving and staging the result is explicit.
 - Worktree-scoped Git operation history retains successful and failed output for the current app session. Current limits are 20 operations per worktree and 32 KiB per output stream; history is cleared on exit.
 
-## Planned Product Experience
+## 1.0.0 Product Experience
 
-The detailed scope is maintained in [the improvement backlog](docs/improvement-backlog.md): 64 feature/UX items and 35 settings items. That list includes both improvements to existing behavior and future capabilities; the current capabilities above describe the implemented baseline.
+The detailed scope is maintained in [the improvement backlog](docs/improvement-backlog.md): 64 feature/UX items and 35 settings items. The sections below describe the integrated 1.0.0 experience. The backlog retains the original requirement numbering; language-server and platform limitations remain documented separately.
 
 ### Default Working Screen and Restoration
 

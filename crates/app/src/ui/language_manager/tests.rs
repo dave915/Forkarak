@@ -20,8 +20,10 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap().join("앱 언어 도구");
         let tools = ManagedTools::new(root.clone(), None).unwrap();
-        let mut manager = LanguageManager::default();
-        manager.tools = Ok(tools);
+        let mut manager = LanguageManager {
+            tools: Ok(tools),
+            ..LanguageManager::default()
+        };
         manager.refresh();
         Self {
             _temp: temp,

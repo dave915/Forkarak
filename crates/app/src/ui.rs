@@ -10,6 +10,8 @@ use analysis_feedback::AnalysisFeedback;
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
 use crate::theme::{self, Palette, ThemeChoice};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
+use git_actions::integration::IntegrationKind;
 use gpui_kit::component::{
     Disableable, Icon, Selectable, Sizable, StyledExt, WindowExt,
     button::{Button, ButtonVariants},
@@ -2027,6 +2029,10 @@ impl Pokarak {
                                     this.compare(true, window, cx);
                                 });
                             };
+                            let menu_target=weak.clone();
+                            let menu_scope=root.clone();
+                            let menu_branch=name.clone();
+                            let can_integrate=name!=current;
                             let a11y_activate = activate.clone();
                             let key_activate = activate.clone();
                             div()
@@ -2112,6 +2118,17 @@ impl Pokarak {
                                                     .text_color(palette.rgb(MUTED))
                                                     .child("현재"),
                                             )
+                                        })
+                                        .context_menu(move |mut menu,_,_| {
+                                            if can_integrate {
+                                                for (kind,label) in [(IntegrationKind::Merge,"현재 브랜치에 Merge…"),(IntegrationKind::Rebase,"이 브랜치 위로 Rebase…")] {
+                                                    let target=menu_target.clone(); let scope=menu_scope.clone(); let branch=menu_branch.clone();
+                                                    menu=menu.item(PopupMenuItem::new(label).on_click(move |_,w,cx|{
+                                                        let _=target.update(cx,|app,cx|{if app.current==scope {app.open_integration(kind,Some(branch.clone()),w,cx);}});
+                                                    }));
+                                                }
+                                            }
+                                            menu
                                         }),
                                 )
                                 .into_any_element()

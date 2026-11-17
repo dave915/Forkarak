@@ -1,5 +1,7 @@
 //! Explicit Git actions; branch-sidebar selection remains comparison-only.
 use super::*;
+pub(super) mod integration;
+use integration::IntegrationKind;
 use gpui_kit::component::{
     IndexPath,
     select::{SearchableVec, Select, SelectState},
@@ -57,6 +59,9 @@ enum Page {
     Pull,
     Remotes,
     Identity,
+    Merge,
+    Rebase,
+    Conflicts,
 }
 
 impl Pokarak {
@@ -292,9 +297,10 @@ impl Pokarak {
     ) {
         let weak = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, _| {
-            let mut sections = div().v_flex().gap_5().child(scope(&state.root, state.current_branch.as_deref()));
+            let mut sections = div().id("git-action-sections").max_h(px(355.)).overflow_y_scroll().v_flex().gap_3().child(scope(&state.root, state.current_branch.as_deref()));
             for (heading, actions) in [
                 ("브랜치", vec![("만들기…", Page::Create), ("체크아웃…", Page::Checkout), ("삭제…", Page::Delete)]),
+                ("브랜치 통합", vec![("Merge…",Page::Merge), ("Rebase…",Page::Rebase), ("Stash / 충돌 해결…",Page::Conflicts)]),
                 ("원격 동기화", vec![("Fetch…", Page::Fetch), ("Push…", Page::Push), ("Pull (ff-only)…", Page::Pull)]),
                 ("저장소 Git 설정", vec![("원격 저장소 관리…", Page::Remotes), ("작성자 이름·이메일…", Page::Identity)]),
             ] {
@@ -311,7 +317,7 @@ impl Pokarak {
                 }
                 sections = sections.child(div().v_flex().gap_2().child(div().font_weight(FontWeight::MEDIUM).child(heading)).child(row));
             }
-            dialog.title("Git 작업").width(px(600.)).child(sections.child(note("브랜치 사이드바는 비교 기준을 선택합니다. 실제 브랜치 전환은 ‘체크아웃’으로 실행합니다.")).child(close_row()))
+            dialog.title("Git 작업").width(px(600.)).margin_top(px(16.)).child(sections).footer(close_row())
         });
     }
 
@@ -329,6 +335,9 @@ impl Pokarak {
             Page::Fetch | Page::Push | Page::Pull => {
                 self.show_network_form(state, page, window, cx)
             }
+            Page::Merge => self.open_integration(IntegrationKind::Merge,None,window,cx),
+            Page::Rebase => self.open_integration(IntegrationKind::Rebase,None,window,cx),
+            Page::Conflicts => self.open_git_workflow(window,cx),
             Page::Remotes => self.show_remote_settings(state, window, cx),
             Page::Identity => self.show_identity_form(state, window, cx),
         }

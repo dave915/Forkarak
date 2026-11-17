@@ -86,7 +86,7 @@ impl WorkflowWrite {
     }
 }
 impl Pokarak {
-    fn workflow_read<T: Send + 'static>(
+    pub(super) fn workflow_read<T: Send + 'static>(
         &mut self,
         root: PathBuf,
         job: impl FnOnce(GitOperations) -> anyhow::Result<T> + Send + 'static,
@@ -101,7 +101,7 @@ impl Pokarak {
         let token = self.workflow.request;
         let navigation_generation = self.request;
         self.error = None;
-        self.status = "Stash / 충돌 정보를 읽는 중…".into();
+        self.status = "Git 작업 정보를 읽는 중…".into();
         let target = root.clone();
         let task = cx.background_spawn(async move { GitOperations::open(&target).and_then(job) });
         cx.spawn_in(window, async move |this, cx| {
@@ -119,11 +119,11 @@ impl Pokarak {
                 }
                 match result {
                     Ok(data) => {
-                        this.status = "Stash / 충돌 정보 준비됨".into();
+                        this.status = "Git 작업 정보 준비됨".into();
                         ready(this, data, window, cx);
                     }
                     Err(error) => {
-                        this.error = Some(format!("Stash / 충돌 — {}\n{error:#}", root.display()));
+                        this.error = Some(format!("Git 작업 — {}\n{error:#}", root.display()));
                         this.status = "Git workflow 읽기 실패".into();
                     }
                 }

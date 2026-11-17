@@ -133,6 +133,7 @@ fn history_root_merge_refs_and_stable_pagination() {
             .map(|e| &e.graph)
             .collect::<Vec<_>>()
     );
+    assert_eq!(rows.last().unwrap().graph.track, fork.track);
     assert_eq!(rows.last().unwrap().commit.oid, root);
     assert!(rows.last().unwrap().graph.edges.is_empty());
     let d = commit_detail(&f.root, &merge, 0).unwrap();

@@ -1,7 +1,10 @@
 use pokarak_core::CompareMode;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 static SESSION_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub fn set_session_dir(path: PathBuf) {
@@ -48,6 +51,7 @@ pub struct SavedView {
     pub code: bool,
     pub all_files: bool,
     pub graph_detail_collapsed: bool,
+    pub collapsed_graph_sections: HashSet<String>,
     pub graph_height: Option<f32>,
     pub graph_files_width: Option<f32>,
     pub filter: String,

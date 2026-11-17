@@ -212,32 +212,35 @@ impl Pokarak {
                 (window.viewport_size().height - px(245.)).max(px(150.)),
             );
         let resize = weak.clone();
-        v_resizable("graph-detail-panes")
-            .on_resize(move |state, _, cx| {
-                if let Some(height) = state.read(cx).sizes().first().copied() {
-                    let _ = resize.update(cx, |app, _| {
-                        if let Some(session) =
-                            app.current.as_ref().and_then(|r| app.sessions.get_mut(r))
-                        {
-                            session.saved.graph_height = Some(height.into());
-                        }
-                    });
-                }
-            })
-            .child(
-                resizable_panel()
-                    .size(graph_height)
-                    .size_range(px(150.)..px(1200.))
-                    .child(graph),
-            )
-            .child(resizable_panel().size_range(px(180.)..px(1600.)).child(
-                if self.inline_commit_active() {
-                    self.render_inline_commit(window, cx)
-                } else {
-                    self.render_graph_detail(cx)
-                },
-            ))
-            .into_any_element()
+        let resize_root = self.current.clone();
+        v_resizable(SharedString::from(format!(
+            "graph-detail-panes:{resize_root:?}"
+        )))
+        .on_resize(move |state, _, cx| {
+            if let Some(height) = state.read(cx).sizes().first().copied() {
+                let _ = resize.update(cx, |app, _| {
+                    if let Some(session) =
+                        resize_root.as_ref().and_then(|r| app.sessions.get_mut(r))
+                    {
+                        session.saved.graph_height = Some(height.into());
+                    }
+                });
+            }
+        })
+        .child(
+            resizable_panel()
+                .size(graph_height)
+                .size_range(px(150.)..px(1200.))
+                .child(graph),
+        )
+        .child(resizable_panel().size_range(px(180.)..px(1600.)).child(
+            if self.inline_commit_active() {
+                self.render_inline_commit(window, cx)
+            } else {
+                self.render_graph_detail(cx)
+            },
+        ))
+        .into_any_element()
     }
 
     pub(super) fn set_graph_detail_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
@@ -273,6 +276,7 @@ impl Pokarak {
         let busy = history_disabled(self);
         let weak = cx.entity().downgrade();
         let resize = weak.clone();
+        let resize_root = self.current.clone();
         let binary = ui.document.as_ref().is_some_and(|doc| doc.binary);
         let merge = detail.commit.parents.len() > 1;
         let mut parents = div().flex().items_center().gap_1();
@@ -469,11 +473,11 @@ impl Pokarak {
                 .child(parents))
             .child(div().h(px(26.)).flex_none().px_3().flex().items_center().text_size(px(11.)).text_color(palette.rgb(MUTED))
                 .child(format!("{}  ·  {}  ·  {}", short(&detail.commit.oid), visible(&detail.commit.author), detail.commit.date)))
-            .child(div().flex_1().min_h_0().child(h_resizable("history-file-panes")
+            .child(div().flex_1().min_h_0().child(h_resizable(SharedString::from(format!("history-file-panes:{resize_root:?}")))
                 .on_resize(move |state,_,cx| {
                     if let Some(width) = state.read(cx).sizes().first().copied() {
                         let _=resize.update(cx, |app,_| {
-                            if let Some(session)=app.current.as_ref().and_then(|r|app.sessions.get_mut(r)) {
+                            if let Some(session)=resize_root.as_ref().and_then(|r|app.sessions.get_mut(r)) {
                                 session.saved.graph_files_width=Some(width.into());
                             }
                         });

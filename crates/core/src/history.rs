@@ -255,7 +255,13 @@ fn graph_row(lanes: &mut Vec<GraphLane>, next_track: &mut usize, commit: &Commit
     let track = lanes.remove(lane).track;
     let mut insertion = lane.min(lanes.len());
     for (index, parent) in commit.parents.iter().enumerate() {
-        if !lanes.iter().any(|l| &l.oid == parent) {
+        if let Some(existing) = lanes.iter_mut().find(|l| &l.oid == parent) {
+            // Two first-parent tracks meet here. Keep the older track (the
+            // trunk at a merge) regardless of which side topo-order showed first.
+            if index == 0 {
+                existing.track = existing.track.min(track);
+            }
+        } else {
             lanes.insert(
                 insertion,
                 GraphLane {

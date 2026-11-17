@@ -4,7 +4,6 @@ use pokarak_core::history::navigation::{Catalog, RefGroup, SearchResults};
 #[derive(Default)]
 pub(super) struct NavigationUi {
     pub(super) catalog: Option<Arc<Catalog>>,
-    closed: HashSet<Group>,
 }
 
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
@@ -14,6 +13,16 @@ enum Group {
 }
 
 impl Group {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Worktrees => "worktrees",
+            Self::Refs(RefGroup::Local) => "local",
+            Self::Refs(RefGroup::Remote) => "remote",
+            Self::Refs(RefGroup::Tag) => "tags",
+            Self::Refs(RefGroup::Stash) => "stashes",
+        }
+    }
+
     fn title(self) -> &'static str {
         match self {
             Self::Worktrees => "워크트리",
@@ -142,6 +151,7 @@ impl Pokarak {
             .filter(|t| !t.is_detached)
             .map(|t| t.branch.clone())
             .collect();
+        let wip = self.inline_commit_active();
         let selected = self
             .git_history
             .detail
@@ -167,7 +177,8 @@ impl Pokarak {
                 (
                     section,
                     count,
-                    self.git_history.nav.closed.contains(&section),
+                    self.session()
+                        .is_some_and(|s| s.saved.collapsed_graph_sections.contains(section.key())),
                 )
             })
             .collect();
@@ -185,15 +196,31 @@ impl Pokarak {
                             let header = Button::new(("graph-ref-section", index))
                                 .ghost()
                                 .small()
-                                .justify_start()
                                 .flex_1()
                                 .min_w_0()
-                                .icon(if closed {
-                                    IconName::ChevronRight
-                                } else {
-                                    IconName::ChevronDown
-                                })
-                                .label(format!("{}  {count}", group.title()))
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .min_w_0()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .child(
+                                            Icon::new(if closed {
+                                                IconName::ChevronRight
+                                            } else {
+                                                IconName::ChevronDown
+                                            })
+                                            .size(px(12.)),
+                                        )
+                                        .child(div().flex_1().text_ellipsis().child(group.title()))
+                                        .child(
+                                            div()
+                                                .text_color(palette.rgb(MUTED))
+                                                .text_size(px(11.))
+                                                .child(count.to_string()),
+                                        ),
+                                )
                                 .accessibility_label(format!(
                                     "{} {count}개 {}",
                                     group.title(),
@@ -201,8 +228,16 @@ impl Pokarak {
                                 ))
                                 .on_click(move |_, _, cx| {
                                     let _ = target.update(cx, |app, cx| {
-                                        if !app.git_history.nav.closed.remove(&group) {
-                                            app.git_history.nav.closed.insert(group);
+                                        if let Some(session) = app
+                                            .current
+                                            .as_ref()
+                                            .and_then(|r| app.sessions.get_mut(r))
+                                        {
+                                            let sections =
+                                                &mut session.saved.collapsed_graph_sections;
+                                            if !sections.remove(group.key()) {
+                                                sections.insert(group.key().to_owned());
+                                            }
                                         }
                                         cx.notify();
                                     });
@@ -274,7 +309,11 @@ impl Pokarak {
                         let target = weak.clone();
                         let select_scope = scope.clone();
                         let jump = oid.clone();
-                        let selected = selected.as_ref() == Some(&oid);
+                        let selected = if wip {
+                            tree.is_some_and(|t| t.path == scope)
+                        } else {
+                            selected.as_ref() == Some(&oid)
+                        };
                         let button = Button::new(("graph-reference", index))
                             .ghost()
                             .small()

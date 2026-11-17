@@ -470,11 +470,12 @@ pub(super) fn check_field(
     Checkbox::new(id)
         .label(label)
         .checked(*state.read(cx))
-        .on_click(move |checked, _, cx| {
+        .on_click(move |checked, window, cx| {
             target.update(cx, |value, cx| {
                 *value = *checked;
                 cx.notify();
-            })
+            });
+            window.refresh();
         })
 }
 

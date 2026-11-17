@@ -38,7 +38,6 @@ fn bundle_for_executable(executable: &Path) -> Option<PathBuf> {
 fn installer(bundle: Option<&Path>) -> Result<Command, String> {
     let mut command = Command::new("/bin/bash");
     command
-        .process_group(0)
         .current_dir("/")
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
@@ -216,6 +215,7 @@ impl Helper {
         let (stdout, out) = output_pipe().map_err(|e| e.to_string())?;
         let (stderr, err) = output_pipe().map_err(|e| e.to_string())?;
         let child = command
+            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(out)
             .stderr(err)
@@ -263,6 +263,11 @@ impl Helper {
             if seen {
                 return Ok(vec![]);
             }
+            if stdout_done && stderr_done && marker.is_some() {
+                // Leave the child waitable for cancellation, even if only its
+                // descendants are still running after a failed handshake.
+                return Err(self.error("업데이트 도우미가 확인 응답 없이 연결을 종료했습니다."));
+            }
             if stdout_done
                 && stderr_done
                 && let Some(status) = self
@@ -273,7 +278,7 @@ impl Helper {
                     .map_err(|e| e.to_string())?
             {
                 self.child.take();
-                if status.success() && marker.is_none() && line.len() <= 128 {
+                if status.success() && line.len() <= 128 {
                     return Ok(line);
                 }
                 return Err(self.error(&format!(
@@ -307,28 +312,24 @@ impl Drop for Helper {
         let mut stdout = self.stdout.try_clone().ok();
         let mut stderr = self.stderr.try_clone().ok();
         thread::spawn(move || {
-            let mut exited = |child: &mut Child| {
-                for _ in 0..50 {
+            let mut drain_for = |grace: Duration| {
+                let deadline = Instant::now() + grace;
+                while Instant::now() < deadline {
                     for socket in [&mut stdout, &mut stderr].into_iter().flatten() {
                         let _ = drain(socket, |_| {});
                     }
-                    if matches!(child.try_wait(), Ok(Some(_))) {
-                        return true;
-                    }
                     thread::sleep(POLL);
                 }
-                false
             };
-            if exited(&mut child) {
-                return;
-            }
+            drain_for(Duration::from_secs(1));
             #[cfg(target_os = "macos")]
             if let Some(group) = rustix::process::Pid::from_raw(child.id() as i32) {
                 use rustix::process::{Signal, kill_process_group};
+                // spawn placed this child in its own process group. Keep the
+                // leader unreaped until both signals have been sent: its PID
+                // reserves the group ID even if it exits at EOF or on TERM.
                 let _ = kill_process_group(group, Signal::TERM);
-                if exited(&mut child) {
-                    return;
-                }
+                drain_for(Duration::from_secs(1));
                 let _ = kill_process_group(group, Signal::KILL);
             }
             let _ = child.kill();
@@ -345,7 +346,7 @@ mod tests {
 
     fn shell(script: &str) -> Command {
         let mut command = Command::new("/bin/bash");
-        command.process_group(0).args(["-c", script, "fixture"]);
+        command.args(["-c", script, "fixture"]);
         command
     }
 
@@ -499,33 +500,102 @@ exit 7"#,
         wait_for(&canceled);
     }
     #[cfg(target_os = "macos")]
-    #[test]
-    fn timeout_reaps_the_whole_process_group_even_if_it_ignores_eof_and_term() {
-        use rustix::process::{Pid, test_kill_process_group};
+    fn assert_cancellation_stops_group(leader_behavior: &str) {
         let temp = tempdir().unwrap();
-        let group_file = temp.path().join("group");
-        let mut command = shell(r#"trap '' TERM; echo "$$" > "$1"; /bin/sleep 40 & wait"#);
-        command.arg(&group_file);
-        let mut helper = Helper::spawn(command).unwrap();
-        wait_for(&group_file);
-        let pid = Pid::from_raw(
-            fs::read_to_string(group_file)
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(
-            helper
-                .receive(Some(READY), Duration::from_millis(50))
-                .is_err()
+        let ready = temp.path().join("child-pid");
+        let mut command = shell(
+            r#"
+            if [[ "$2" == exit ]]; then
+                trap 'echo TERM > "$1/terminated"; exit 0' TERM
+            else
+                trap '' TERM
+            fi
+            /bin/bash -c '
+                trap "" TERM
+                echo "$$" > "$1/pending"
+                /bin/mv "$1/pending" "$1/child-pid"
+                exec /bin/sleep 40
+            ' child "$1" </dev/null >/dev/null 2>&1 &
+            if [[ "$2" == fail ]]; then
+                while [[ ! -e "$1/fail" ]]; do /bin/sleep 0.05; done
+                exit 1
+            fi
+            wait "$!"
+        "#,
         );
+        command.arg(temp.path()).arg(leader_behavior);
+        let mut helper = Helper::spawn(command).unwrap();
+        let leader = helper.child.as_ref().unwrap().id();
+        wait_for(&ready);
+        let descendant: u32 = fs::read_to_string(ready).unwrap().trim().parse().unwrap();
+        let pids = format!("{leader},{descendant}");
+        let alive = || {
+            let output = Command::new("/bin/ps")
+                .args(["-p", &pids, "-o", "pgid=,state="])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success() || output.status.code() == Some(1),
+                "ps failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .filter(|line| {
+                    let mut columns = line.split_whitespace();
+                    let group: u32 = columns.next().unwrap().parse().unwrap();
+                    // launchd may retain an exited orphan as a zombie in CI.
+                    group == leader && !columns.next().unwrap().starts_with('Z')
+                })
+                .count()
+        };
+        assert_eq!(
+            alive(),
+            2,
+            "both fixture processes must be live in the helper group"
+        );
+        if leader_behavior == "fail" {
+            fs::write(temp.path().join("fail"), "").unwrap();
+            let error = helper
+                .receive(Some(READY), Duration::from_secs(5))
+                .unwrap_err();
+            assert!(error.contains("확인 응답 없이"), "{error}");
+        } else {
+            assert!(
+                helper
+                    .receive(Some(READY), Duration::from_millis(50))
+                    .is_err()
+            );
+        }
         drop(helper);
         let deadline = Instant::now() + Duration::from_secs(8);
-        while test_kill_process_group(pid).is_ok() && Instant::now() < deadline {
-            thread::sleep(POLL);
+        while alive() > 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(100));
         }
-        assert_eq!(test_kill_process_group(pid), Err(rustix::io::Errno::SRCH));
+        assert_eq!(alive(), 0, "a live fixture process survived cancellation");
+        if leader_behavior == "exit" {
+            assert!(
+                temp.path().join("terminated").exists(),
+                "leader should exit on TERM"
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn timeout_kills_a_term_resistant_child_even_after_its_leader_exits() {
+        assert_cancellation_stops_group("exit");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn timeout_stops_a_term_resistant_leader_and_child() {
+        assert_cancellation_stops_group("ignore");
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn pre_handshake_exit_stops_descendants_with_closed_output() {
+        assert_cancellation_stops_group("fail");
     }
 }

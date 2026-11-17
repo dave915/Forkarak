@@ -143,7 +143,7 @@ impl Pokarak {
         )
     }
     /// Quit/release owns cancellation explicitly; InstallControl clones alone do not.
-    pub(super) fn cancel_language_installers(&mut self, cx: &mut Context<Self>) -> Task<()> {
+    pub(super) fn cancel_language_installers(&mut self, cx: &mut App) -> Task<()> {
         self.language_manager.cancel_request();
         self.language_manager.timer = None;
         let controls = std::mem::take(&mut self.language_manager.running)

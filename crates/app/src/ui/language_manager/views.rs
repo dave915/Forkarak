@@ -1,7 +1,7 @@
 use super::*;
 
 impl Pokarak {
-    pub(super) fn language_manager_settings(&self, view: WeakEntity<Self>, cx: &App) -> Div {
+    pub(in crate::ui) fn language_manager_settings(&self, view: WeakEntity<Self>, cx: &App) -> Div {
         let palette = Palette::new(cx);
         div().v_flex().gap_1().py_2()
             .child(div().flex().items_center().gap_2()
@@ -14,7 +14,11 @@ impl Pokarak {
             .child(div().text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
                 .child("앱에 포함된 도구와 첫 사용 다운로드를 구분합니다. 설치는 분석 허용과 별개이며 사용자 지정 경로를 유지합니다."))
     }
-    pub(super) fn open_language_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn open_language_manager(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.language_manager.refresh();
         let view = cx.weak_entity();
         window.open_dialog(cx, move |dialog, window, cx| {

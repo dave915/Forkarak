@@ -337,7 +337,7 @@ pub fn historical_diff(root: &Path, detail: &CommitDetail, path: &Path) -> Resul
 pub(crate) fn diff_entries(
     root: &Path,
     path: &Path,
-    old_path: Option<&Path>,
+    path_change: Option<(&Path, &str)>,
     old_entry: Option<&git::Entry>,
     new_entry: Option<&git::Entry>,
 ) -> Result<DiffDocument> {
@@ -348,18 +348,23 @@ pub(crate) fn diff_entries(
     };
     let mut document = DiffDocument {
         path: path.into(),
-        old_path: old_path.map(Path::to_owned),
+        old_path: path_change.map(|(from, _)| from.to_owned()),
         ..Default::default()
     };
     text::render(&mut document, bytes(old_entry)?, bytes(new_entry)?);
     let same_blob = old_entry
         .zip(new_entry)
         .is_some_and(|(a, b)| a.oid == b.oid);
-    if same_blob && (document.binary || document.truncated) {
-        // Content did not change, even when rendering it as text is impossible.
-        document.patch = old_path
-            .map(|from| format!("rename from {from:?}\nrename to {path:?}\n"))
-            .unwrap_or_default();
+    if same_blob {
+        // Report metadata alone even for binary or truncated contents.
+        document.patch.clear();
+        document.lines.clear();
+    }
+    if let Some((from, action)) = path_change {
+        document.patch = format!(
+            "{action} from {from:?}\n{action} to {path:?}\n{}",
+            document.patch
+        );
         document.lines = text::parse_patch(&document.patch);
     }
     let old_mode = old_entry.map(|entry| entry.mode.as_str());

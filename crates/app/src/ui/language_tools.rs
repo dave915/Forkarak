@@ -166,13 +166,6 @@ impl Pokarak {
         }) {
             return None;
         }
-        if self.snapshot().is_some_and(|s| {
-            s.changes
-                .iter()
-                .any(|f| f.path == path && f.status == FileStatus::Deleted)
-        }) {
-            return None;
-        }
         if !self.code_edits.can_edit(root, &path) {
             return None;
         } // historical, binary, deleted, invalid sources
@@ -381,7 +374,7 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if window.has_active_dialog(cx) || self.git_is_busy() {
+        if window.has_active_dialog(cx) || self.git_is_busy() || self.active_worktree_has_git_job() {
             return;
         }
         self.sync_language_tools(cx);
@@ -501,6 +494,7 @@ impl Pokarak {
             .collect();
         self.language_tools.request = self.language_tools.request.wrapping_add(1);
         let token = self.language_tools.request;
+        let navigation_token = self.navigation_request;
         self.language_tools.pending = Some(tool.clone());
         self.language_tools.retry = Some(tool.clone());
         self.navigating = matches!(tool, Tool::Navigate(_));
@@ -541,7 +535,7 @@ impl Pokarak {
                 }
                 a.language_tools.pending = None;
                 a.navigating = false;
-                if !a.accepts_language(&identity, true, cx) {
+                if a.navigation_request != navigation_token || !a.accepts_language(&identity, true, cx) {
                     a.status =
                         "선택 또는 소스가 변경되어 오래된 분석 결과를 적용하지 않았습니다.".into();
                     cx.notify();

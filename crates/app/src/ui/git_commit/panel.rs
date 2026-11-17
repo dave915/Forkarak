@@ -74,6 +74,8 @@ impl Pokarak {
         let message = feedback.or_else(|| {
             if self.git_is_busy() {
                 Some(self.status.as_str())
+            } else if self.commit_ui.progress.is_some() {
+                Some("진행 중인 Git 작업은 작업 상태의 계속 / 중단을 사용하세요. Stage / Unstage는 사용할 수 있습니다.")
             } else if snapshot.is_some_and(|s| s.has_conflicts) {
                 Some("미해결 충돌이 있습니다. Stash / 충돌 해결에서 먼저 해결하세요.")
             } else {
@@ -114,7 +116,9 @@ impl Pokarak {
                 weak,
                 "commit-amend",
                 "이전 커밋 수정…",
-                disabled || snapshot.is_none_or(|s| s.has_conflicts || s.previous.is_none()),
+                disabled
+                    || self.commit_ui.progress.is_some()
+                    || snapshot.is_none_or(|s| s.has_conflicts || s.previous.is_none()),
                 |app, w, cx| app.confirm_index_amend(w, cx),
             ))
             .child(
@@ -122,7 +126,9 @@ impl Pokarak {
                     weak,
                     "commit-create",
                     "Staged 커밋",
-                    disabled || snapshot.is_none_or(|s| s.has_conflicts || s.staged.is_empty()),
+                    disabled
+                        || self.commit_ui.progress.is_some()
+                        || snapshot.is_none_or(|s| s.has_conflicts || s.staged.is_empty()),
                     |app, w, cx| app.submit_index_commit(CommitMode::New, w, cx),
                 )
                 .primary()

@@ -7,7 +7,10 @@ mod client;
 mod config;
 mod formatter;
 mod intelligence;
+mod languages;
+pub mod managed;
 mod paths;
+mod snippet;
 mod transport;
 
 use anyhow::{Context, Result, bail};
@@ -32,6 +35,11 @@ pub use config::{NavigatorOptions, default_configs, discover_program, installed_
 pub use intelligence::{
     HoverResult, MarkupContent, ParameterInformation, ParameterLabel, SignatureHelp,
     SignatureInformation,
+};
+pub use languages::{LanguageSupport, language_catalog, language_family, language_for_path};
+pub use managed::{
+    InstallControl, InstallPhase, InstallProgress, InstalledTool, ManagedTools, ToolArtifact,
+    ToolDistribution, ToolPackage, ToolStatus,
 };
 pub use paths::{path_to_uri, uri_to_path};
 
@@ -115,6 +123,23 @@ impl Navigator {
             stopped: false,
             cancellation: CancellationHandle::default(),
         }
+    }
+
+    /// Explicit analysis activation only. Returns the server's actual negotiated
+    /// capabilities, tied to the same current worktree/file/version as buffer results.
+    pub fn capabilities_buffer(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+    ) -> Result<BufferResult<Value>> {
+        let result = (|| {
+            self.retain_buffer(snapshot)?;
+            let language =
+                language(snapshot.path()).context("No configured language for this file")?;
+            let origin = self.origin_for(snapshot.path(), language)?;
+            self.ensure_client(&origin, Some(snapshot))?;
+            Ok(self.clients.get(&origin.key).unwrap().capabilities())
+        })();
+        self.finish_buffer(snapshot, result)
     }
 
     /// Canonical worktree namespace. The UI must discard responses for a root it has left.

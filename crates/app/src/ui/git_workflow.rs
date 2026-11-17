@@ -1,4 +1,5 @@
 //! One explicit workflow entry; every write uses git_actions' shared job guard.
+mod status;
 use super::*;
 use pokarak_core::operations::workflow::{
     ConflictContent, ConflictFile, ConflictSnapshot, InProgress, ProgressKind, Resolution,
@@ -13,6 +14,8 @@ pub(super) struct WorkflowUi {
     saving_resolution: bool,
     draft: Option<ResolutionDraft>,
     retained: HashMap<(PathBuf, PathBuf), ResolutionDraft>,
+    status: HashMap<PathBuf, Result<WorkflowState, String>>,
+    status_request: u64,
 }
 struct ResolutionDraft {
     root: PathBuf,
@@ -106,6 +109,9 @@ impl WorkflowWrite {
     }
 }
 impl Pokarak {
+    pub(in crate::ui) fn invalidate_workflow_read(&mut self) {
+        self.workflow.request += 1;
+    }
     pub(super) fn finish_resolution_save(&mut self, success: bool) {
         if std::mem::take(&mut self.workflow.saving_resolution) && success {
             self.workflow.draft = None;
@@ -134,12 +140,17 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.git_is_busy() || self.current.as_ref() != Some(&root) {
+        if self.git_is_busy()
+            || self.loading
+            || self.opening_path.is_some()
+            || self.current.as_ref() != Some(&root)
+        {
             return;
         }
         self.workflow.request += 1;
         let token = self.workflow.request;
         let navigation_generation = self.request;
+        let dialog_bound = window.has_active_dialog(cx);
         self.error = None;
         self.status = "Git 작업 정보를 읽는 중…".into();
         let target = root.clone();
@@ -153,6 +164,8 @@ impl Pokarak {
                 if this.current.as_ref() != Some(&root)
                     || this.request != navigation_generation
                     || this.git_is_busy()
+                    || this.opening_path.is_some()
+                    || (dialog_bound && !window.has_active_dialog(cx))
                 {
                     cx.notify();
                     return;
@@ -277,7 +290,7 @@ impl Pokarak {
                         app.confirm_workflow(abort_root.clone(), format!("{} 중단", abort_progress.kind.label()), "이 워크트리의 진행 중 작업을 중단하고 Git이 이전 상태로 복원합니다. 충돌 해결 중 작성한 내용이 사라질 수 있습니다. Stash 항목은 삭제하지 않습니다.".into(), WorkflowWrite::Finish { progress:abort_progress.clone(),abort:true }, w,cx);
                     })));
             } else if !state.conflicts.is_empty() {
-                body = body.child(workflow_note("진행 중인 merge/rebase가 없습니다. Stash 적용 충돌은 파일만 해결하세요. 보관된 stash는 유지됩니다."));
+                body = body.child(workflow_note("진행 중인 Merge / Rebase / Cherry-pick / Revert가 없습니다. Stash 적용 충돌은 파일만 해결하세요. 보관된 stash는 유지됩니다."));
             }
             let mut conflicts = div().id("workflow-conflicts").h(ui_px(112.)).overflow_y_scroll().v_flex().gap_1();
             if state.conflicts.is_empty() { conflicts = conflicts.child(workflow_note("미해결 index stage가 없습니다.")); }

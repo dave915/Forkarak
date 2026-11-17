@@ -134,7 +134,7 @@ impl Pokarak {
                 .collect::<Vec<_>>()
         })
         .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-        .h(px(204.))
+        .h_full()
         .w_full()
         .into_any_element()
     }

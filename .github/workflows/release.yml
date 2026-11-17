@@ -46,17 +46,17 @@ jobs:
       - name: Build release
         run: ./scripts/release-macos.sh --version "$RELEASE_TAG"
       - name: Record source revision
-        run: git rev-parse HEAD > dist/source-revision.txt
+        run: git rev-parse HEAD > dist/release/source-revision.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-arm64-release
           if-no-files-found: error
           retention-days: 7
           path: |
-            dist/pokarak-macos-arm64.tar.gz
-            dist/SHA256SUMS
-            dist/install.sh
-            dist/source-revision.txt
+            dist/release/pokarak-macos-arm64.tar.gz
+            dist/release/SHA256SUMS
+            dist/release/install.sh
+            dist/release/source-revision.txt
 
   publish:
     needs: build

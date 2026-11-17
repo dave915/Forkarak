@@ -37,11 +37,15 @@ fn network_defaults(
     let upstream = current_source.then_some(sync.upstream.as_ref()).flatten();
     let remote = if let Some(upstream) = upstream {
         // '.' is a local tracking relationship, not a network destination.
-        state
-            .remotes
-            .iter()
-            .find(|r| r.name == upstream.remote)
-            .map(|r| r.name.clone())
+        if upstream.remote == "." {
+            None
+        } else {
+            state
+                .remotes
+                .iter()
+                .find(|r| r.name == upstream.remote)
+                .map(|r| r.name.clone())
+        }
     } else if current_source {
         state
             .remotes
@@ -52,10 +56,14 @@ fn network_defaults(
     } else {
         None
     };
-    let branch = upstream
-        .and_then(|u| u.branch.strip_prefix("refs/heads/"))
-        .unwrap_or_else(|| source.unwrap_or_default())
-        .to_owned();
+    let branch = match upstream {
+        Some(upstream) => upstream
+            .branch
+            .strip_prefix("refs/heads/")
+            .unwrap_or_default(),
+        None => source.unwrap_or_default(),
+    }
+    .to_owned();
     NetworkDefaults {
         remote,
         branch,
@@ -383,6 +391,7 @@ impl Pokarak {
             else { body = body.child(note("원격 추적 참조만 가져옵니다. 작업 파일과 현재 브랜치는 유지합니다.")); }
             if sync.upstream.as_ref().is_some_and(|u| u.remote == ".") { body = body.child(note("현재 upstream은 로컬 브랜치입니다. 네트워크 원격을 직접 선택하세요.")); }
             if state.remotes.is_empty() { body = body.child(note("등록된 원격이 없습니다. Git 작업의 원격 저장소 관리에서 추가하세요.")); }
+            if !fetch && !push && state.current_branch.is_none() { body = body.child(note("Detached HEAD에서는 Pull할 수 없습니다. 먼저 로컬 브랜치를 체크아웃하세요.")); }
             if !fetch && head(&starts).is_none() { body = body.child(note("현재 HEAD에 커밋이 없습니다. 먼저 커밋을 만들거나 기존 브랜치를 확인하세요.")); }
             let mut buttons = div().flex().flex_wrap().justify_end().gap_2().child(close_button());
             for prune in if fetch { vec![true, false] } else { vec![false] } {
@@ -537,6 +546,8 @@ mod tests {
         let detail = sync_detail(&sync);
         assert!(detail.contains("알 수 없음"));
         assert!(detail.contains("기록 없음"));
+        sync.upstream.as_mut().unwrap().branch = "refs/tags/v1".into();
+        assert!(network_defaults(&state, &sync, Some("main")).branch.is_empty());
         sync.upstream = None;
         assert!(network_defaults(&state, &sync, Some("main")).set_upstream);
     }

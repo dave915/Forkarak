@@ -4721,7 +4721,7 @@ dependencies = [
 
 [[package]]
 name = "pokarak"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
@@ -4737,7 +4737,7 @@ dependencies = [
 
 [[package]]
 name = "pokarak-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -4750,7 +4750,7 @@ dependencies = [
 
 [[package]]
 name = "pokarak-navigation"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "libc",

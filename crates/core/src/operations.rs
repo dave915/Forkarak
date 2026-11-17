@@ -8,6 +8,7 @@ pub mod commit_actions;
 mod file_save;
 pub mod history_actions;
 pub mod integration;
+pub mod sync;
 pub mod workflow;
 pub mod worktrees;
 pub use file_save::save_file;
@@ -974,6 +975,11 @@ mod tests {
     mod branch_integration {
         use super::*;
         include!("operations/integration/tests.rs");
+    }
+
+    mod branch_sync {
+        use super::*;
+        include!("operations/sync/tests.rs");
     }
 
     #[test]

@@ -229,7 +229,15 @@ PLIST="$STAGED_APP/Contents/Info.plist"
 # and identifies the thin Mach-O executable without invoking developer tools.
 [[ "$(LC_ALL=C /usr/bin/file -b "$STAGED_APP/Contents/MacOS/forkarak")" == 'Mach-O 64-bit executable arm64' ]] || fail "Release executable is not an arm64 Mach-O executable"
 [[ -f "$STAGED_APP/Contents/Resources/forkarak-cli.sh" && -f "$STAGED_APP/Contents/Resources/install.sh" ]] || fail "Release CLI resources are missing"
-/usr/bin/codesign --verify --strict "$STAGED_APP" || fail "App signature verification failed"
+/usr/bin/codesign --verify --strict --deep "$STAGED_APP" || fail "App signature verification failed"
+# Older public bundles predate managed language resources. When either new
+# resource is present, require the complete pair and verify without devtools.
+LANGUAGE_ROOT="$STAGED_APP/Contents/Resources/language-tools"
+LANGUAGE_CHECK="$STAGED_APP/Contents/Resources/verify-language-resources.sh"
+if [[ -e "$LANGUAGE_ROOT" || -e "$LANGUAGE_CHECK" ]]; then
+    [[ -d "$LANGUAGE_ROOT" && -f "$LANGUAGE_CHECK" ]] || fail 'Language resource validation files are missing'
+    /bin/bash "$LANGUAGE_CHECK" "$LANGUAGE_ROOT" || fail 'Bundled language resource validation failed'
+fi
 
 if [[ -n "$RUNNING_APP" ]]; then
     [[ "$(/usr/bin/plutil -extract CFBundlePackageType raw -o - "$PLIST")" == APPL ]] || fail "Release is not a launchable application"

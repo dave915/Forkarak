@@ -13,6 +13,16 @@ Python 3, curl, and tar are needed for setup. The script uses official release m
 
 The script writes `installed.json` (versions, source URLs, checksums, executable argv), `language-servers.example.json`, and an experimental `language-servers.kotlin-jvm.example.json` inside the tools directory. It does not write `~/.config/pokarak/language-servers.json`, shell profiles, global `JAVA_HOME`, or inspected projects. The Kotlin/JVM example is for reproducing capability probes, **not** a claim of Java-source navigation support.
 
+### Kotlin만 설치하기
+
+Kotlin 정의·사용처 탐색에 필요한 서버는 Homebrew로 설치할 수 있습니다. 설치한 뒤 포카락의 오류 행에서 **다시 시도**를 누르세요.
+
+```sh
+brew install JetBrains/utils/kotlin-lsp
+```
+
+별도 경로에 설치했다면 `~/.config/pokarak/language-servers.json`에서 `kotlin`의 `program`을 실행 파일의 절대 경로로 지정할 수 있습니다. [JetBrains의 Kotlin 서버 설치 안내](https://github.com/Kotlin/kotlin-lsp#install-kotlin-lsp-cli)
+
 ## Installed runtimes
 
 These versions were installed and tested on 2026-11-16:

@@ -36,7 +36,13 @@ impl AnalysisFeedback {
     }
 
     pub fn append(&mut self, raw: &str) {
-        if raw.trim().is_empty() {
+        let raw = raw.trim_end_matches(['\r', '\n']);
+        if raw.trim().is_empty()
+            || self
+                .output
+                .strip_suffix(raw)
+                .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with('\n'))
+        {
             return;
         }
         if !self.output.is_empty() {
@@ -55,10 +61,18 @@ impl AnalysisFeedback {
     }
 }
 
+fn missing_kotlin_server(raw: &str) -> bool {
+    raw.contains("Language server unavailable for kotlin:")
+}
+
 /// Never expose protocol JSON or multiline stderr in the summary row.
 fn error_summary(raw: &str) -> String {
     let text = raw.to_lowercase();
-    let summary = if text.contains("nobuildsystemfound") {
+    let summary = if missing_kotlin_server(raw) {
+        "Kotlin 언어 서버를 찾지 못했습니다. 설치하거나 실행 경로를 설정한 뒤 다시 시도하세요."
+    } else if text.contains("cannot run program \"mvn\"") && text.contains("no such file") {
+        "Maven 프로젝트를 분석하려면 mvn이 필요합니다. Maven 설치와 실행 경로를 확인하세요."
+    } else if text.contains("nobuildsystemfound") {
         "Maven/Gradle 프로젝트 설정이 없습니다. 소스 상위 폴더의 pom.xml 또는 Gradle 설정을 확인하세요."
     } else if [
         "unsupportedclassversionerror",
@@ -158,6 +172,19 @@ impl Pokarak {
                     .text_color(palette.rgb(RED))
                     .child(error_summary(error)),
             )
+            .when(missing_kotlin_server(error), |row| {
+                row.child(
+                    Button::new("kotlin-install-guide")
+                        .label("설치 안내")
+                        .ghost()
+                        .small()
+                        .on_click(|_, _, cx| {
+                            cx.open_url(
+                                "https://github.com/Kotlin/kotlin-lsp#install-kotlin-lsp-cli",
+                            )
+                        }),
+                )
+            })
             .child(
                 Button::new("error-details")
                     .label("Details")
@@ -177,6 +204,10 @@ impl Pokarak {
                         .small()
                         .disabled(self.navigating)
                         .on_click(cx.listener(move |this, _, window, cx| {
+                            if missing_kotlin_server(&retry.error) {
+                                // Re-read an executable path configured since the failed request.
+                                this.stop_analysis(cx);
+                            }
                             this.error = None;
                             this.request_navigation(
                                 retry.kind.clone(),
@@ -321,12 +352,19 @@ mod tests {
         assert!(!error_summary(raw).contains("JDK"));
         assert!(!error_summary("Project import failed: dependencies").contains("JDK"));
         assert!(
+            error_summary(r#"Cannot run program "mvn": No such file or directory"#).contains("mvn")
+        );
+        assert!(
             !error_summary("Project import failed: source class file version 61").contains("JDK")
         );
         assert!(error_summary("UnsupportedClassVersionError").contains("JDK"));
         assert_eq!(
             error_summary("git fetch failed\nsecret multiline diagnostic"),
             "git fetch failed"
+        );
+        assert!(
+            error_summary("Language server unavailable for kotlin: missing executable")
+                .contains("Kotlin")
         );
         assert!(!error_summary("{\"message\":\"raw json\"}").contains('{'));
         assert!(error_summary(&"한".repeat(5000)).chars().count() <= 121);
@@ -341,7 +379,13 @@ mod tests {
         feedback.observe(&root, &error);
         assert_eq!(feedback.output, raw);
         feedback.observe(&root, &None);
+        feedback.append("\n");
+        feedback.observe(&root, &error);
         assert_eq!(feedback.output, raw);
+        feedback.append("another diagnostic");
+        feedback.observe(&root, &None);
+        feedback.observe(&root, &error);
+        assert_eq!(feedback.output, format!("{raw}\nanother diagnostic\n{raw}"));
         feedback.observe(&Some(PathBuf::from("/fixture/b")), &None);
         assert!(feedback.output.is_empty());
         feedback.append(&"한".repeat(100000));

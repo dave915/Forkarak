@@ -163,10 +163,17 @@ impl Navigator {
         let origin = if let Some(origin) = self.external_sources.get(&path) {
             origin.clone()
         } else {
-            let config = self.configs.iter().rev().find(|c| c.language == language)
+            let mut config = self.configs.iter().rev().find(|c| c.language == language)
                 .or_else(|| self.configs.iter().rev().find(|c| c.language == family(language)))
                 .cloned().with_context(|| format!("No language server configured for {language}; semantic navigation is unavailable"))?;
             Client::check_import_permission(&config, &self.options)?;
+            // A missing Kotlin installation should not inspect Maven reactors or start
+            // the /usr/bin/env wrapper on every definition/references click.
+            if config.language == "kotlin" || is_jetbrains(&config) {
+                config.program = config::kotlin_program(&config)?
+                    .to_string_lossy()
+                    .into_owned();
+            }
             let import_root = if language == "kotlin" || is_jetbrains(&config) || is_jdt(&config) {
                 build_root::discover(&self.root, &path, is_jdt(&config))?
             } else {

@@ -25,7 +25,7 @@
 ```sh
 installer="$(mktemp)"
 curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh -o "$installer" && \
-  /bin/bash "$installer" --version v0.1.1 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
+  /bin/bash "$installer" --version v0.1.2 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
 rm -f "$installer"
 ```
 
@@ -64,8 +64,8 @@ git push origin HEAD v0.2.0
 로컬 패키징은 다음과 같다. `--binary`는 기존 arm64 실행 파일을 사용하며 다시 빌드하지 않는다.
 
 ```sh
-./scripts/release-macos.sh --version v0.1.1
-./scripts/release-macos.sh --version v0.1.1 --binary /absolute/path/to/pokarak
+./scripts/release-macos.sh --version v0.1.2
+./scripts/release-macos.sh --version v0.1.2 --binary /absolute/path/to/pokarak
 python3 scripts/test-distribution.py
 ```
 
@@ -78,7 +78,7 @@ python3 scripts/test-distribution.py
 ```sh
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 NOTARY_KEYCHAIN_PROFILE='pokarak-notary' \
-./scripts/release-macos.sh --version v0.1.1
+./scripts/release-macos.sh --version v0.1.2
 ```
 
 이 경로는 hardened runtime과 timestamp로 서명하고, `notarytool submit --wait` 성공 후 ticket을 staple한 번들을 배포한다. 실제 계정이 없어 공증 경로의 Apple 서비스 연동은 검증되지 않았다. 기본 GitHub 워크플로는 인증서와 공증 자격 증명을 구성하지 않으며 ad-hoc 빌드를 게시한다. 공증에는 [Apple이 요구하는 Developer ID 서명](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)이 필요하다. 공증한 앱에도 일반적인 첫 실행 확인창은 남을 수 있다.

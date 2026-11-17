@@ -9,7 +9,7 @@ impl Pokarak {
                 lines: preview.lines().to_vec(),
                 ..Default::default()
             });
-            self.commit_ui.split = Some(cx.new(|_| split_diff::SplitDiff::new(document)));
+            self.commit_ui.split = Some(self.new_split_diff(document, cx));
         }
         cx.notify();
     }

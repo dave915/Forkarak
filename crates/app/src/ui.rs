@@ -2864,7 +2864,7 @@ impl Pokarak {
                     .into_any_element()
             }
         } else if let Some(diff) = diff.filter(|_| self.prefs.split_diff) {
-            diff.split(cx)
+            diff.split(self, cx)
         } else if let Some(diff) = diff {
             let font_size = px(self.prefs.code_font_size);
             let line_number_width = (font_size * 3.5).max(px(45.));

@@ -201,6 +201,9 @@ impl Server {
                         let sender = sender.clone();
                         thread::spawn(move || {
                             let result = (|| -> Result<Value> {
+                                // Darwin may inherit O_NONBLOCK from the listener.
+                                // Accepted clients must wait for a complete frame.
+                                stream.set_nonblocking(false)?;
                                 stream.set_read_timeout(Some(TIMEOUT))?;
                                 stream.set_write_timeout(Some(TIMEOUT))?;
                                 let mut request: Request =
@@ -362,6 +365,27 @@ mod tests {
         let socket = server.socket.clone();
         drop(server);
         assert!(!socket.exists());
+    }
+    #[test]
+    fn accepted_client_can_deliver_a_frame_in_separate_writes() {
+        let server = Server::start().unwrap();
+        let socket = server.socket.clone();
+        let client = thread::spawn(move || {
+            let mut stream = UnixStream::connect(socket).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream.write_all(b"{\"action\":\"status\"").unwrap();
+            thread::sleep(Duration::from_millis(80));
+            stream.write_all(b"}\n").unwrap();
+            serde_json::from_slice::<serde_json::Value>(&line(&mut stream).unwrap()).unwrap()
+        });
+        let pending = server
+            .receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap();
+        pending.reply.send(Ok(json!({"ready":true}))).unwrap();
+        assert_eq!(client.join().unwrap()["result"]["ready"], true);
     }
     #[test]
     fn invalid_actions_and_outside_files_never_reach_ui_queue() {

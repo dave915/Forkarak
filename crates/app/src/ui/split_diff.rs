@@ -296,7 +296,7 @@ impl Render for SplitDiff {
             .unwrap_or(f32::from(font_size) * 0.61);
         let gutter = self.number_digits.max(4) as f32 * advance + 10.;
         let min_pane = gutter + 7. * advance;
-        let row_height = px((f32::from(font_size) * 1.55).ceil());
+        let row_height = theme::code_row_height(font_size);
         let ratio = split_ratio(self.preferred_ratio(cx), self.panel_width, min_pane);
         let limit = max_offset(self.max_columns, advance, gutter, self.panel_width, ratio);
         self.horizontal = self.horizontal.min(limit);

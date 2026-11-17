@@ -8,6 +8,7 @@ mod git_actions;
 mod git_commit;
 mod git_history;
 mod git_workflow;
+mod pane_visibility;
 mod patch;
 mod reader_navigation;
 mod settings;
@@ -118,6 +119,8 @@ actions!(
         FindReferences,
         FindDefinition,
         ToggleCode,
+        ToggleSidebar,
+        ToggleFiles,
         SaveCodeFile
     ]
 );
@@ -162,6 +165,10 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("뒤로", Back),
             MenuItem::action("앞으로", Forward),
         ]),
+        Menu::new("보기").items([
+            MenuItem::action("사이드바 표시 / 숨기기", ToggleSidebar),
+            MenuItem::action("파일 목록 표시 / 숨기기 (코드 보기)", ToggleFiles),
+        ]),
     ]);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
@@ -188,6 +195,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-f", FindText, None),
         KeyBinding::new("alt-f7", FindReferences, None),
         KeyBinding::new("cmd-b", FindDefinition, None),
+        KeyBinding::new("cmd-alt-b", ToggleSidebar, None),
+        KeyBinding::new("cmd-shift-b", ToggleFiles, None),
         KeyBinding::new("cmd-d", ToggleCode, None),
     ]);
 }
@@ -3000,50 +3009,7 @@ impl Render for Pokarak {
                 )
                 .into_any_element()
         } else if let Some(root) = &self.current {
-            let graph = self.git_history.active;
-            let saved = self.session().map(|session| &session.saved);
-            let sidebar = saved.and_then(|s| s.sidebar_width).unwrap_or(210.);
-            let files = saved.and_then(|s| s.code_files_width).unwrap_or(285.);
-            let target = root.clone();
-            let view = cx.weak_entity();
-            // GPUI retains panel sizes by group ID. Start from the saved logical
-            // widths when switching worktrees, modes, or zoom levels.
-            let mut panels = h_resizable(SharedString::from(format!(
-                "workspace-panes:{root:?}:{graph}:{}",
-                self.prefs.display.ui_zoom_percent
-            )))
-            .on_resize(move |state, _, cx| {
-                let sizes = state.read(cx).sizes();
-                let sidebar_width = sizes.first().copied().map(theme::logical_px);
-                let files_width = sizes.get(1).copied().map(theme::logical_px);
-                let _ = view.update(cx, |app, _| {
-                    if let Some(session) = app.sessions.get_mut(&target) {
-                        session.saved.sidebar_width = sidebar_width;
-                        if !graph {
-                            session.saved.code_files_width = files_width;
-                        }
-                    }
-                });
-            })
-            .child(
-                resizable_panel()
-                    .size(ui_px(sidebar))
-                    .size_range(ui_px(160.)..ui_px(420.))
-                    .child(self.render_worktrees(cx)),
-            );
-            if graph {
-                panels = panels.child(resizable_panel().child(self.render_git_graph(window, cx)));
-            } else {
-                panels = panels
-                    .child(
-                        resizable_panel()
-                            .size(ui_px(files))
-                            .size_range(ui_px(200.)..ui_px(600.))
-                            .child(self.render_files(window, cx)),
-                    )
-                    .child(resizable_panel().child(self.render_reader(window, cx)));
-            }
-            panels.into_any_element()
+            self.render_workspace_panes(root, window, cx)
         } else {
             self.render_welcome(cx)
         };
@@ -3060,6 +3026,21 @@ impl Render for Pokarak {
         let root = root.on_action(cx.listener(|app, _: &OpenWorktreeTerminal, window, cx| {
             app.open_worktree_terminal(window, cx)
         }));
+        // Register only available panel actions so native menu entries reflect
+        // the same enabled state as the toolbar (files are a Code-only panel).
+        let root = root.when(
+            self.current.is_some() && self.opening_path.is_none(),
+            |root| {
+                root.on_action(cx.listener(|app, _: &ToggleSidebar, w, cx| {
+                    app.toggle_pane(pane_visibility::Pane::Sidebar, w, cx)
+                }))
+                .when(!self.git_history.active, |root| {
+                    root.on_action(cx.listener(|app, _: &ToggleFiles, w, cx| {
+                        app.toggle_pane(pane_visibility::Pane::Files, w, cx)
+                    }))
+                })
+            },
+        );
         root.key_context(if self.git_history.active { "Pokarak GitGraph" } else { "Pokarak" }).track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(ui_text(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
             .on_action(cx.listener(|this,_:&SearchGitGraph,w,cx|this.open_graph_search(w,cx)))

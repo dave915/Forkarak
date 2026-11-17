@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Exercise packaging and installation against signed disposable app fixtures."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import plistlib
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import time
+import unittest
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+class DistributionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.sandbox = tempfile.TemporaryDirectory(prefix="pokarak-distribution-")
+        cls.base = Path(cls.sandbox.name)
+        cls.source = cls.base / "한글 source with spaces"
+        cls.source.mkdir()
+        shutil.copytree(ROOT / "scripts", cls.source / "scripts")
+        shutil.copytree(ROOT / "assets", cls.source / "assets")
+        shutil.copy2(ROOT / "LICENSE", cls.source / "LICENSE")
+        # The authored fixture version stays stable across application releases.
+        (cls.source / "Cargo.toml").write_text('[workspace]\n[workspace.package]\nversion = "0.1.0"\n')
+        cls.args_file = cls.base / "launched-arguments.txt"
+        cfile = cls.base / "stub.c"
+        cfile.write_text(
+            '#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\nint main(int argc,char **argv) {'
+            f'FILE *f=fopen({json.dumps(str(cls.args_file))},"w");'
+            'if(!f)return 1;for(int i=1;i<argc;i++)fprintf(f,"%s\\n",argv[i]);'
+            'fclose(f);if(argc>1 && !strcmp(argv[1],"--hold"))sleep(60);return 0;}\n'
+        )
+        cls.binary = cls.base / "stub"
+        subprocess.run(["/usr/bin/cc", "-arch", "arm64", "-mmacosx-version-min=13.0", str(cfile), "-o", str(cls.binary)], check=True, capture_output=True)
+        result = subprocess.run(
+            ["/bin/bash", str(cls.source / "scripts/release-macos.sh"), "--version", "v0.1.0", "--binary", str(cls.binary)],
+            capture_output=True, text=True, env={**os.environ, "SIGNING_IDENTITY": "", "NOTARY_KEYCHAIN_PROFILE": ""},
+        )
+        if result.returncode:
+            raise AssertionError(result.stdout + result.stderr)
+        cls.good_release = cls.source / "dist/release"
+        cls.mockbin = cls.base / "mockbin"
+        cls.mockbin.mkdir()
+        # Only curl is replaced. Every validation/packaging tool is the actual
+        # system binary. This maps production URLs onto authored fixture assets.
+        curl = cls.mockbin / "curl"
+        curl.write_text("#!/usr/bin/env python3\n" + '''import json,os,pathlib,shutil,sys
+args=sys.argv[1:]
+url=next(x for x in args if x.startswith('https://'))
+out=pathlib.Path(args[args.index('--output')+1])
+with open(os.environ['POKARAK_CURL_LOG'],'a') as f: f.write(url+'\\n')
+if os.environ.get('POKARAK_FAIL_DOWNLOAD'):
+    sys.exit(22)
+if url.endswith('/releases/latest'):
+    out.write_text(json.dumps({'tag_name':os.environ.get('POKARAK_FIXTURE_TAG','v0.1.0')}))
+else:
+    shutil.copyfile(pathlib.Path(os.environ['POKARAK_FIXTURE_RELEASE'])/url.rsplit('/',1)[1],out)
+''')
+        curl.chmod(0o755)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.sandbox.cleanup()
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(dir=self.base, prefix="case-")
+        self.addCleanup(self.temporary.cleanup)
+        self.case = Path(self.temporary.name)
+        self.home = self.case / "한글 home"
+        self.home.mkdir()
+        self.appdir = self.home / "Applications"
+        self.bindir = self.home / ".local/bin"
+        self.app = self.appdir / "포카락.app"
+        self.cli = self.bindir / "pokarak"
+        self.log = self.case / "curl.log"
+        self.release = self.case / "release"
+        shutil.copytree(self.good_release, self.release)
+        self.env = {**os.environ, "HOME": str(self.home), "PATH": str(self.mockbin) + ":" + os.environ["PATH"], "POKARAK_FIXTURE_RELEASE": str(self.release), "POKARAK_CURL_LOG": str(self.log)}
+
+    def install(self, *args, expected=0):
+        result = subprocess.run(["/bin/bash", str(self.source / "scripts/install.sh"), *args], capture_output=True, text=True, env=self.env)
+        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+        if "Another install" not in result.stderr:
+            self.assertFalse((self.appdir / ".pokarak-install.lock").exists(), "Installer left its lock behind")
+        return result
+
+    def test_install_and_pinned_downloads(self):
+        self.install()
+        self.assertTrue(self.app.is_dir())
+        version = subprocess.check_output([str(self.cli), "--version"], text=True, env=self.env).strip()
+        self.assertEqual(version, "0.1.0")
+        urls = self.log.read_text().splitlines()
+        self.assertEqual(len(urls), 3)
+        self.assertTrue(urls[0].endswith("/releases/latest"))
+        self.assertTrue(all("/releases/download/v0.1.0/" in u for u in urls[1:]))
+        self.assertFalse((self.appdir / ".pokarak-install.lock").exists())
+
+    def test_update_preserves_custom_directories(self):
+        self.appdir = self.case / "custom apps"
+        self.bindir = self.case / "custom commands"
+        self.app = self.appdir / "포카락.app"
+        self.cli = self.bindir / "pokarak"
+        self.install("--app-dir", str(self.appdir), "--bin-dir", str(self.bindir))
+        marker = self.app / "old-installation-marker"
+        marker.write_text("old")
+        new_app = self.case / "new release/포카락.app"
+        shutil.copytree(self.source / "dist/포카락.app", new_app)
+        plist = new_app / "Contents/Info.plist"
+        data = plistlib.loads(plist.read_bytes())
+        data.update(CFBundleShortVersionString="0.1.1", CFBundleVersion="0.1.1")
+        plist.write_bytes(plistlib.dumps(data))
+        self.repack(new_app)
+        self.env["POKARAK_FIXTURE_TAG"] = "v0.1.1"
+        result = subprocess.run([str(self.cli), "update"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertTrue(self.cli.exists())
+        self.assertEqual(subprocess.check_output([str(self.cli), "--version"], env=self.env, text=True).strip(), "0.1.1")
+        self.assertFalse((self.home / "Applications/포카락.app").exists())
+
+    def test_checksum_failure_preserves_app_and_launcher(self):
+        self.install()
+        old_plist = (self.app / "Contents/Info.plist").read_bytes()
+        old_cli = self.cli.read_bytes()
+        (self.release / "pokarak-macos-arm64.tar.gz").write_bytes(b"corrupt download")
+        result = self.install(expected=1)
+        self.assertIn("checksum verification failed", result.stderr)
+        self.assertEqual((self.app / "Contents/Info.plist").read_bytes(), old_plist)
+        self.assertEqual(self.cli.read_bytes(), old_cli)
+
+    def test_download_failure_preserves_app(self):
+        self.install()
+        self.env["POKARAK_FAIL_DOWNLOAD"] = "1"
+        self.install(expected=22)
+        self.assertTrue(self.app.is_dir())
+        self.assertTrue(self.cli.exists())
+
+    def repack(self, app):
+        subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(app)], check=True, capture_output=True)
+        archive = self.release / "pokarak-macos-arm64.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(app, arcname="포카락.app")
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (self.release / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n")
+
+    def test_invalid_bundle_and_version_rejected(self):
+        for key, value in (("CFBundleIdentifier", "invalid.app"), ("CFBundleShortVersionString", "9.9.9")):
+            with self.subTest(key=key):
+                app = self.case / key / "포카락.app"
+                shutil.copytree(self.source / "dist/포카락.app", app)
+                plist = app / "Contents/Info.plist"
+                data = plistlib.loads(plist.read_bytes())
+                data[key] = value
+                plist.write_bytes(plistlib.dumps(data))
+                self.repack(app)
+                self.install(expected=1)
+                self.assertFalse(self.app.exists())
+
+    def test_unrelated_destinations_and_symlinks_refused(self):
+        self.appdir.mkdir()
+        self.app.symlink_to(self.case / "unrelated")
+        self.assertIn("symlink", self.install(expected=1).stderr)
+        self.app.unlink()
+        self.app.mkdir()
+        self.assertIn("not a Pokarak", self.install(expected=1).stderr)
+        self.app.rmdir()
+        self.bindir.mkdir(parents=True, exist_ok=True)
+        self.cli.write_text("#!/bin/bash\necho unrelated\n")
+        self.assertIn("unrelated command", self.install(expected=1).stderr)
+        self.assertIn("unrelated", self.cli.read_text())
+
+    def test_existing_lock_is_preserved(self):
+        self.appdir.mkdir()
+        lock = self.appdir / ".pokarak-install.lock"
+        lock.mkdir()
+        self.assertIn("Another install", self.install(expected=1).stderr)
+        self.assertTrue(lock.exists())
+
+    def test_unsafe_archive_rejected_before_extraction(self):
+        archive = self.release / "pokarak-macos-arm64.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            info = tarfile.TarInfo("포카락.app/Contents/escape")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "/tmp"
+            tar.addfile(info)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        (self.release / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n")
+        self.assertIn("links or special", self.install(expected=1).stderr)
+        self.assertFalse(self.app.exists())
+
+    def test_cli_launch_preserves_unicode_and_relative_paths(self):
+        self.install()
+        self.args_file.unlink(missing_ok=True)
+        paths = ["한글 project", "second with spaces"]
+        paths.append("-literal")
+        result = subprocess.run([str(self.cli), "--", *paths], cwd=self.case, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for _ in range(40):
+            if self.args_file.exists():
+                break
+            time.sleep(0.05)
+        self.assertTrue(self.args_file.exists(), "LaunchServices did not execute the authored fixture")
+        self.assertEqual(self.args_file.read_text().splitlines(), ["--", *[str(self.case.resolve() / p) for p in paths]])
+
+    def test_running_installed_app_is_refused(self):
+        self.install()
+        process = subprocess.Popen([str(self.app / "Contents/MacOS/pokarak"), "--hold"])
+        try:
+            time.sleep(0.1)
+            self.assertIsNone(process.poll())
+            result = self.install(expected=1)
+            self.assertIn("Quit Pokarak", result.stderr)
+            self.assertTrue(self.app.is_dir())
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+
+    def test_option_errors_do_not_download(self):
+        for args in (("--bad",), ("--version",), ("--version", "../bad")):
+            self.install(*args, expected=1)
+        self.assertFalse(self.log.exists())
+        result = subprocess.run(["/bin/bash", str(self.source / "scripts/release-macos.sh"), "--version", "v9.9.9", "--binary", str(self.binary)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("workspace version", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

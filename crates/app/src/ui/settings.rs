@@ -158,7 +158,7 @@ impl Pokarak {
                                 .text_size(ui_text(12.))
                                 .text_color(palette.rgb(MUTED))
                                 .child(
-                                    "코드 글자 크기는 파일 본문, 변경 비교, Blame에 적용됩니다.",
+                                    "코드 글자 크기는 파일 본문, 변경 비교, Blame, 터미널에 적용됩니다.",
                                 ),
                         )
                         .child(

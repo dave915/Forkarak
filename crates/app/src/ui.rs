@@ -9,6 +9,8 @@ mod patch;
 mod reader_navigation;
 mod settings;
 mod split_diff;
+#[cfg(target_os = "macos")]
+mod terminal_dock;
 mod toolbar;
 use analysis_feedback::AnalysisFeedback;
 use split_diff::ReviewDiff;
@@ -95,6 +97,8 @@ actions!(
 );
 
 pub fn bind_keys(cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    crate::terminal::bind_keys(cx);
     cx.on_action(git_actions::request_app_quit);
     cx.set_menus([
         Menu::new("Pokarak").items([
@@ -105,7 +109,7 @@ pub fn bind_keys(cx: &mut App) {
         Menu::new("파일").items([
             MenuItem::action("저장소 열기…", OpenRepository),
             #[cfg(target_os = "macos")]
-            MenuItem::action("워크트리 터미널 열기", OpenWorktreeTerminal),
+            MenuItem::action("워크트리 터미널 표시 / 숨기기", OpenWorktreeTerminal),
             MenuItem::action("새로고침", Refresh),
             MenuItem::action("Stash / 충돌 해결…", OpenGitWorkflow),
             MenuItem::separator(),
@@ -170,6 +174,10 @@ struct ReadingPoint {
 }
 
 struct Session {
+    #[cfg(target_os = "macos")]
+    terminal: Option<Entity<crate::terminal::TerminalDock>>,
+    #[cfg(target_os = "macos")]
+    terminal_visible: bool,
     snapshot: Option<Snapshot>,
     saved: SavedView,
     documents: HashMap<PathBuf, Entity<EditorState>>,
@@ -184,6 +192,10 @@ impl Session {
     fn new(saved: SavedView) -> Self {
         let restoring = saved.selected.is_some();
         Self {
+            #[cfg(target_os = "macos")]
+            terminal: None,
+            #[cfg(target_os = "macos")]
+            terminal_visible: false,
             snapshot: None,
             saved,
             documents: HashMap::new(),
@@ -3155,11 +3167,13 @@ impl Render for Pokarak {
             .or(self.current.as_ref())
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
+        #[cfg(target_os = "macos")]
+        let body = self.with_terminal_dock(body, window);
         let root = div().id("pokarak");
         #[cfg(target_os = "macos")]
-        let root = root.on_action(
-            cx.listener(|app, _: &OpenWorktreeTerminal, _, cx| app.open_worktree_terminal(cx)),
-        );
+        let root = root.on_action(cx.listener(|app, _: &OpenWorktreeTerminal, window, cx| {
+            app.open_worktree_terminal(window, cx)
+        }));
         root.key_context(if self.git_history.active { "Pokarak GitGraph" } else { "Pokarak" }).track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(ui_text(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
             .on_action(cx.listener(|this,_:&SearchGitGraph,w,cx|this.open_graph_search(w,cx)))

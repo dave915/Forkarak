@@ -9,18 +9,6 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 use std::borrow::Cow;
 fn main() {
-    #[cfg(target_os = "macos")]
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(terminal::HELPER_ARG)) {
-        let result = std::env::args_os()
-            .nth(2)
-            .ok_or_else(|| anyhow::anyhow!("터미널 세션이 없습니다"))
-            .and_then(|socket| terminal::exec_shell(&socket));
-        if let Err(error) = result {
-            eprintln!("Pokarak: {error:#}");
-            std::process::exit(1);
-        }
-        return;
-    }
     if std::env::args_os().any(|arg| arg == "--help" || arg == "-h") {
         println!(
             "Pokarak — native Git worktree review\nUsage: pokarak [PROJECT ...] [--window-size WIDTHxHEIGHT]"

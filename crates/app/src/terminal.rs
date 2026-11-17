@@ -356,7 +356,12 @@ mod tests {
         ]);
         let (shell, _rx) = Shell::open(root, env).unwrap();
         wait_for("zsh should load its interactive startup", || {
-            pid_file.is_file()
+            // Redirection creates the file before `print` writes its payload.
+            // Require the complete line from this owned shell, not existence.
+            fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|text| text.strip_suffix('\n')?.parse::<i32>().ok())
+                == Some(shell.leader.as_raw_pid())
         });
         shell
     }

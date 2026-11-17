@@ -1,6 +1,7 @@
 use pokarak_core::{
     ChangedFile, CompareMode, DiffKind, FileStatus, MAX_TEXT_BYTES, diff, read_file,
-    repository_root, repository_watch_paths, search, snapshot, snapshot_current,
+    repository_root, repository_watch_paths, search, search_with_exclusions, snapshot,
+    snapshot_current,
 };
 use std::{
     collections::BTreeMap,
@@ -464,6 +465,402 @@ fn search_locations_are_absolute_zero_based_utf16_and_bounded() {
     assert!(search(&repo.root, "needle", 0).unwrap().is_empty());
     assert!(search(&repo.root, "", 10).unwrap().is_empty());
     assert!(search(&repo.root, "never found", 10).unwrap().is_empty());
+}
+
+fn excluded_search(repo: &Repo, patterns: &[&str]) -> Vec<PathBuf> {
+    search_with_exclusions(
+        &repo.root,
+        "needle",
+        100,
+        &patterns.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+    )
+    .unwrap()
+    .into_iter()
+    .map(|hit| {
+        hit.path
+            .strip_prefix(repo.root.canonicalize().unwrap())
+            .unwrap()
+            .to_path_buf()
+    })
+    .collect()
+}
+
+#[test]
+fn search_exclusions_do_not_spend_the_300_or_10000_hit_budget() {
+    let repo = Repo::new();
+    // Each excluded candidate sorts before the one included file. More than
+    // 300 files and more than 10,000 hits guard both former post-filter caps.
+    for number in 0..301 {
+        repo.write(format!("a-excluded/{number:04}.txt"), "needle\n");
+    }
+    repo.write("a-excluded/many.txt", "needle\n".repeat(10_001));
+    repo.write("z-included.txt", "needle\n");
+    let patterns = vec!["a-excluded/".to_string()];
+    let hits = search_with_exclusions(&repo.root, "needle", 1, &patterns).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].path,
+        repo.root.canonicalize().unwrap().join("z-included.txt")
+    );
+    // Also guard a single excluded candidate producing each excess hit count.
+    for count in [301, 10_001] {
+        repo.write("a-excluded/many.txt", "needle\n".repeat(count));
+        let hits = search_with_exclusions(&repo.root, "needle", 1, &patterns).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].path.ends_with("z-included.txt"));
+    }
+}
+
+#[test]
+fn search_exclusions_basenames_and_directories_match_at_any_depth() {
+    let repo = Repo::new();
+    for path in [
+        "root.tmp",
+        "src/nested.tmp",
+        "src/deep/nested.tmp",
+        "cache/root.rs",
+        "src/cache/nested.rs",
+        "src/deep/cache/more.rs",
+        "src/keep.rs",
+        "cache-file",
+    ] {
+        repo.write(path, "needle\n");
+    }
+    assert_eq!(
+        excluded_search(&repo, &["*.tmp", "cache/"]),
+        vec![PathBuf::from("cache-file"), PathBuf::from("src/keep.rs")],
+    );
+}
+
+#[test]
+fn search_exclusions_directory_only_rules_do_not_exclude_regular_files() {
+    let repo = Repo::new();
+    repo.write("cache", "needle\n");
+    repo.write("src/cache/entry", "needle\n");
+    assert_eq!(
+        excluded_search(&repo, &["cache/"]),
+        vec![PathBuf::from("cache")]
+    );
+    assert!(excluded_search(&repo, &["cache"]).is_empty());
+}
+
+#[test]
+fn search_exclusions_slashes_anchor_at_the_worktree_root() {
+    let repo = Repo::new();
+    for path in ["top.rs", "src/top.rs", "src/file.rs", "nested/src/file.rs"] {
+        repo.write(path, "needle\n");
+    }
+    assert_eq!(
+        excluded_search(&repo, &["/top.rs", "src/*.rs"]),
+        vec![PathBuf::from("nested/src/file.rs")],
+    );
+    assert_eq!(
+        excluded_search(&repo, &["/src/"]),
+        vec![PathBuf::from("nested/src/file.rs"), PathBuf::from("top.rs")],
+    );
+}
+
+#[test]
+fn search_exclusions_double_star_supports_zero_or_many_directories() {
+    let repo = Repo::new();
+    for path in [
+        "src/gen.rs",
+        "src/nested/gen.rs",
+        "src/deep/nested/gen.rs",
+        "generated/a.rs",
+        "nested/generated/b.rs",
+        "keep.rs",
+    ] {
+        repo.write(path, "needle\n");
+    }
+    assert_eq!(
+        excluded_search(&repo, &["src/**/gen.rs", "**/generated/**"]),
+        vec![PathBuf::from("keep.rs")],
+    );
+}
+
+#[test]
+fn search_exclusions_last_matching_rule_controls_files_and_parent_directories() {
+    let repo = Repo::new();
+    for path in [
+        "generated/keep.rs",
+        "generated/drop.rs",
+        "generated/deep/keep.rs",
+        "generated/deep/drop.rs",
+        "outside.rs",
+    ] {
+        repo.write(path, "needle\n");
+    }
+    assert_eq!(
+        excluded_search(&repo, &["generated/", "!generated/**/keep.rs"]),
+        vec![
+            PathBuf::from("generated/deep/keep.rs"),
+            PathBuf::from("generated/keep.rs"),
+            PathBuf::from("outside.rs")
+        ],
+    );
+    // A later parent rule must override an earlier, more specific file rule.
+    assert_eq!(
+        excluded_search(
+            &repo,
+            &["generated/", "!generated/**/keep.rs", "generated/"]
+        ),
+        vec![PathBuf::from("outside.rs")],
+    );
+    assert_eq!(
+        excluded_search(&repo, &["*.rs", "!generated/", "generated/deep/"]),
+        vec![
+            PathBuf::from("generated/drop.rs"),
+            PathBuf::from("generated/keep.rs")
+        ],
+    );
+    assert!(excluded_search(&repo, &["!*.rs", "*.rs"]).is_empty());
+    assert_eq!(
+        excluded_search(&repo, &["generated/", "!generated/", "generated/"]),
+        vec![PathBuf::from("outside.rs")]
+    );
+}
+
+#[test]
+fn search_exclusions_invalid_patterns_fail_before_any_repository_access() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing_root = temp.path().join("not-a-repository");
+    for invalid in [
+        "[unterminated",
+        "[z-a]",
+        "{unclosed",
+        "abc\0def",
+        "abc\ndef",
+        "abc\rdef",
+    ] {
+        let patterns = vec!["valid/**".to_string(), invalid.to_string()];
+        // Validation is not bypassed by empty query, multiline query or limit=0.
+        for (query, limit) in [("needle", 1), ("", 1), ("needle", 0), ("a\nb", 1)] {
+            let error = search_with_exclusions(&missing_root, query, limit, &patterns).unwrap_err();
+            let error = format!("{error:#}");
+            assert!(
+                error.contains("pattern #2") && error.contains("search.exclude"),
+                "{error}"
+            );
+            assert!(error.contains(&format!("{invalid:?}")), "{error}");
+            assert!(!error.contains("select a repository"), "{error}");
+        }
+    }
+}
+
+#[test]
+fn search_exclusions_apply_before_opening_an_excluded_candidate() {
+    let repo = Repo::new();
+    repo.write("a-unreadable", "needle\n");
+    repo.add("a-unreadable");
+    fs::remove_file(repo.root.join("a-unreadable")).unwrap();
+    // A FIFO is rejected by filesystem::open before reading. Unlike permissions
+    // this check is reliable even with elevated privileges; O_NONBLOCK prevents
+    // a failed regression from blocking on a pipe reader.
+    let fifo = std::ffi::CString::new(
+        repo.root
+            .join("a-unreadable")
+            .as_os_str()
+            .as_encoded_bytes(),
+    )
+    .unwrap();
+    // SAFETY: fifo is a valid NUL-terminated path within this authored fixture.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    repo.write("z-readable", "needle\n");
+    assert!(search(&repo.root, "needle", 1).is_err());
+    assert_eq!(
+        excluded_search(&repo, &["a-unreadable"]),
+        vec![PathBuf::from("z-readable")]
+    );
+    assert!(
+        search_with_exclusions(
+            &repo.root,
+            "needle",
+            1,
+            &["a-*".into(), "!a-unreadable".into()]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn search_exclusions_preserve_literal_paths_and_utf16_coordinates() {
+    let repo = Repo::new();
+    let literal = "nested 한/:(glob)*[x]?\\ quoted\t\"\n.rs";
+    repo.write(literal, "irrelevant\n한😀 needle needle\nNEEDLE\n");
+    for path in ["#literal", "!literal", "space ", "Case.TMP", "lower.tmp"] {
+        repo.write(path, "needle\n");
+    }
+    let rules = [
+        "# comment",
+        "",
+        "   ",
+        "\\#literal",
+        "\\!literal",
+        "space\\ ",
+        "*.tmp",
+    ];
+    let relative = excluded_search(&repo, &rules);
+    assert_eq!(
+        relative,
+        vec![
+            PathBuf::from("Case.TMP"),
+            PathBuf::from(literal),
+            PathBuf::from(literal)
+        ]
+    );
+    let hits = search_with_exclusions(
+        &repo.root,
+        "needle",
+        20,
+        &["*".into(), "!nested 한/**".into()],
+    )
+    .unwrap();
+    assert_eq!(hits.len(), 2);
+    assert_eq!(
+        hits[0].path,
+        repo.root.canonicalize().unwrap().join(literal)
+    );
+    assert_eq!((hits[0].line, hits[0].column), (1, 4));
+    assert_eq!((hits[1].line, hits[1].column), (1, 11));
+    assert!(hits[0].preview.contains("한😀 needle"));
+}
+
+#[test]
+fn search_exclusions_escaped_globs_are_literal_and_non_utf8_paths_stay_distinct() {
+    let repo = Repo::new();
+    repo.write("[literal]*?.rs", "needle\n");
+    repo.write("ordinary.rs", "needle\n");
+    // macOS filesystems reject non-UTF-8 names; retain the literal-glob test
+    // everywhere and exercise raw byte paths where the filesystem supports it.
+    let raw = (!cfg!(target_os = "macos"))
+        .then(|| PathBuf::from(OsString::from_vec(b"raw-\xff.rs".to_vec())));
+    if let Some(raw) = &raw {
+        repo.write(raw, "needle\n");
+    }
+    assert_eq!(
+        excluded_search(&repo, &[r"\[literal\]\*\?.rs", "raw-*.rs"]),
+        vec![PathBuf::from("ordinary.rs")],
+    );
+    let hits =
+        search_with_exclusions(&repo.root, "needle", 10, &[r"\[literal\]\*\?.rs".into()]).unwrap();
+    assert_eq!(hits.len(), 1 + usize::from(raw.is_some()));
+    if let Some(raw) = raw {
+        assert!(
+            hits.iter()
+                .any(|hit| hit.path == repo.root.canonicalize().unwrap().join(&raw))
+        );
+    }
+}
+
+#[test]
+fn search_exclusions_linked_worktrees_keep_roots_and_rules_isolated() {
+    let repo = Repo::new();
+    repo.seed();
+    repo.write("same.rs", "needle main\n");
+    repo.add("same.rs");
+    repo.commit();
+    let linked = repo.temp.path().join("generated linked 한");
+    repo.git_os(&[
+        "worktree".as_ref(),
+        "add".as_ref(),
+        "-b".as_ref(),
+        "linked".as_ref(),
+        "--".as_ref(),
+        linked.as_os_str(),
+    ]);
+    fs::write(linked.join("same.rs"), "한😀 needle linked\n").unwrap();
+    fs::write(linked.join("linked-only.rs"), "needle linked only\n").unwrap();
+    repo.write("main-only.rs", "needle main only\n");
+    // The absolute parent name matches neither this basename nor anchored rule.
+    let rules = vec!["generated*".into(), "/main-only.rs".into()];
+    let linked_hits = search_with_exclusions(&linked.join("src"), "needle", 10, &rules).unwrap();
+    assert_eq!(linked_hits.len(), 2);
+    assert!(
+        linked_hits
+            .iter()
+            .all(|hit| hit.path.starts_with(linked.canonicalize().unwrap()))
+    );
+    let same = linked_hits
+        .iter()
+        .find(|hit| hit.path.ends_with("same.rs"))
+        .unwrap();
+    assert_eq!((same.line, same.column), (0, 4));
+    assert!(same.preview.contains("linked"));
+    let main_hits = search_with_exclusions(&repo.root, "needle", 10, &rules).unwrap();
+    assert_eq!(main_hits.len(), 1);
+    assert!(main_hits[0].preview.contains("main"));
+    assert!(excluded_search(&repo, &["*.rs"]).is_empty());
+    assert_eq!(
+        search_with_exclusions(&linked, "needle", 10, &[])
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(search(&repo.root, "needle", 10).unwrap().len(), 2);
+}
+
+#[test]
+fn search_exclusions_preserve_search_safety_limits_and_empty_rules_compatibility() {
+    let repo = Repo::new();
+    repo.seed();
+    repo.write("search.rs", "한😀 needle needle\n");
+    repo.write("binary.dat", b"needle\0");
+    repo.write("invalid-utf8.dat", b"needle\xff");
+    repo.write("huge.txt", "needle\n".repeat(MAX_TEXT_BYTES / 7 + 1));
+    repo.write(".gitignore", "ignored.rs\n");
+    repo.write("ignored.rs", "needle\n");
+    repo.write("tracked-ignored.rs", "needle\n");
+    repo.add("tracked-ignored.rs");
+    repo.write(".gitignore", "ignored.rs\ntracked-ignored.rs\n");
+    let outside = repo.temp.path().join("outside.rs");
+    fs::write(&outside, "needle\n").unwrap();
+    symlink(&outside, repo.root.join("link.rs")).unwrap();
+    symlink(repo.temp.path(), repo.root.join("outside-link")).unwrap();
+    for limit in [0, 1, 10, 10_001] {
+        for query in ["needle", "", "never found", "NEEDLE", "a\nb", "a\rb"] {
+            let old = search(&repo.root, query, limit).unwrap();
+            let new = search_with_exclusions(&repo.root, query, limit, &[]).unwrap();
+            assert_eq!(
+                old.iter()
+                    .map(|h| (&h.path, h.line, h.column, &h.preview))
+                    .collect::<Vec<_>>(),
+                new.iter()
+                    .map(|h| (&h.path, h.line, h.column, &h.preview))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+    // Reinclusion does not bypass binary/size/symlink/Git-ignore safety.
+    let hits =
+        search_with_exclusions(&repo.root, "needle", 20, &["*".into(), "!*".into()]).unwrap();
+    assert_eq!(hits.len(), 3);
+    assert!(
+        hits.iter()
+            .all(|hit| hit.path.ends_with("search.rs") || hit.path.ends_with("tracked-ignored.rs"))
+    );
+    assert!(
+        search_with_exclusions(
+            &repo.root,
+            "needle",
+            20,
+            &["*".into(), "!ignored.rs".into()]
+        )
+        .unwrap()
+        .is_empty()
+    );
+    repo.write("many.rs", "needle\n".repeat(10_001));
+    assert_eq!(
+        search_with_exclusions(
+            &repo.root,
+            "needle",
+            usize::MAX,
+            &["search.rs".into(), "tracked-ignored.rs".into()]
+        )
+        .unwrap()
+        .len(),
+        10_000
+    );
 }
 
 #[test]

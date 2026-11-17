@@ -10,6 +10,7 @@ use crate::{
     ChangedFile, CompareMode, DiffDocument, DiffKind, FileStatus, Snapshot, SourceLocation,
     filesystem::{self, Node, feed},
     git::{self, Entry, Index, Tree},
+    search_exclusions::SearchExclusions,
     text,
 };
 
@@ -372,7 +373,13 @@ pub(crate) fn read_file(root: &Path, path: &Path) -> Result<String> {
         .with_context(|| format!("{} is binary or is not valid UTF-8 text", path.display()))
 }
 
-pub(crate) fn search(root: &Path, query: &str, limit: usize) -> Result<Vec<SourceLocation>> {
+pub(crate) fn search_with_exclusions(
+    root: &Path,
+    query: &str,
+    limit: usize,
+    exclude_patterns: &[String],
+) -> Result<Vec<SourceLocation>> {
+    let exclusions = SearchExclusions::compile(exclude_patterns)?;
     if query.is_empty() || limit == 0 || query.contains(['\n', '\r']) {
         return Ok(Vec::new());
     }
@@ -383,6 +390,10 @@ pub(crate) fn search(root: &Path, query: &str, limit: usize) -> Result<Vec<Sourc
         .collect::<BTreeSet<_>>();
     let mut hits = Vec::new();
     for path in paths {
+        let path = filesystem::relative(&root, &path)?;
+        if exclusions.excludes(&path) {
+            continue;
+        }
         if !matches!(filesystem::open(&root, &path)?, Node::File(_)) {
             continue;
         }

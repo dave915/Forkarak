@@ -1,0 +1,41 @@
+{
+  "tool": "built-in image_gen",
+  "prompts": [
+    {
+      "name": "charcoal",
+      "reference": "/Users/taehyun/.codex/generated_images/01a1ea1f-8ba9-7d80-a252-2039dd203c02/exec-8eca389b-de8a-4dbf-8896-f1dd7ef33a01.png",
+      "transparent_background": true,
+      "prompt": "Use case: background-extraction. Asset type: production macOS app icon, one square 1024x1024 PNG with real alpha. Edit target is the supplied user's APPROVED charcoal app icon. Remove ONLY the pale gray/white photographic backdrop and outside drop shadow surrounding the rounded charcoal square. Preserve the complete charcoal rounded-square tile and the silver metallic spork inside it EXACTLY: same centered placement, short FOUR tines with three slots, rounded spoon body, short refined handle, identical proportions, bevel, material, highlights, shading and charcoal color. Do NOT redesign or reinterpret anything. Retain a clean softly antialiased rounded tile silhouette, no white fringe. Keep the complete tile centered with approximately the same 8% transparent inset on each side in a square canvas. The tile itself is opaque, only outside its rounded silhouette is fully transparent. No text, watermark, mockup, presentation background or comparison sheet. One finished icon only."
+    },
+    {
+      "name": "deep-blue",
+      "reference": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-bbfe7993-4fc4-497f-8cd5-68932d7f1238.png",
+      "transparent_background": true,
+      "prompt": "Use case: precise-object-edit. Asset type: production macOS app icon color variant. The supplied transparent CHARCOAL icon is the edit target. Change ONLY the rounded-square tile background from charcoal to deep navy blue, approximately #173B56. Preserve the silver metallic spork IDENTICALLY: exact four short tines, three slots, round spoon body, short refined handle, exact silhouette, position, dimensions, proportions, metallic shading, specular highlights, beveled edge and spork shadow. Preserve tile shape, corners, square canvas framing and inset. Keep background softly shaded as the original, just hue-changed. Outside the rounded-square tile must remain truly transparent alpha, no outside photographic background or drop shadow. Do not redraw, reshape, rotate, widen or lengthen the spork. Do not add objects, text, logos, border, watermark or comparison sheet. Return ONE icon only."
+    },
+    {
+      "name": "deep-green",
+      "reference": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-bbfe7993-4fc4-497f-8cd5-68932d7f1238.png",
+      "transparent_background": true,
+      "prompt": "Use case: precise-object-edit. Asset type: production macOS app icon color variant. The supplied transparent CHARCOAL icon is the edit target. Change ONLY the rounded-square tile background from charcoal to deep forest green, approximately #1B3D35. Preserve the silver metallic spork IDENTICALLY: exact four short tines, three slots, round spoon body, short refined handle, exact silhouette, position, dimensions, proportions, metallic shading, specular highlights, beveled edge and spork shadow. Preserve tile shape, corners, square canvas framing and inset. Keep background softly shaded as the original, just hue-changed. Outside the rounded-square tile must remain truly transparent alpha, no outside photographic background or drop shadow. Do not redraw, reshape, rotate, widen or lengthen the spork. Do not add objects, text, logos, border, watermark or comparison sheet. Return ONE icon only."
+    },
+    {
+      "name": "plum",
+      "reference": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-bbfe7993-4fc4-497f-8cd5-68932d7f1238.png",
+      "transparent_background": true,
+      "prompt": "Use case: precise-object-edit. Asset type: production macOS app icon color variant. The supplied transparent CHARCOAL icon is the edit target. Change ONLY the rounded-square tile background from charcoal to dark muted plum, approximately #49334B. Preserve the silver metallic spork IDENTICALLY: exact four short tines, three slots, round spoon body, short refined handle, exact silhouette, position, dimensions, proportions, metallic shading, specular highlights, beveled edge and spork shadow. Preserve tile shape, corners, square canvas framing and inset. Keep background softly shaded as the original, just hue-changed. Outside the rounded-square tile must remain truly transparent alpha, no outside photographic background or drop shadow. Do not redraw, reshape, rotate, widen or lengthen the spork. Do not add objects, text, logos, border, watermark or comparison sheet. Return ONE icon only."
+    },
+    {
+      "name": "ivory",
+      "reference": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-bbfe7993-4fc4-497f-8cd5-68932d7f1238.png",
+      "transparent_background": true,
+      "prompt": "Use case: precise-object-edit. Asset type: production macOS application icon light background variant. Edit ONLY the tile BACKGROUND of the supplied approved charcoal silver-spork icon to warm light ivory, approximately #E9E3D6, with a subtle matte gradient and the same rounded-square shape. The silver metallic spork must remain IDENTICAL: four short rounded tines and three slots, round spoon body, short refined handle, exact silhouette, position, scale, proportions, metal material, bevel and highlights. Keep its existing natural soft dark cast shadow and gray metallic edge clearly visible against the light tile so all tines, spoon body and handle are readable at Dock size. Do not flatten the silver into white or change geometry. Preserve canvas framing/inset. Outside the rounded tile is true transparent alpha with no photographic backdrop, outside shadow or white fringe. Clean smooth antialiased tile edge, no stray colored pixels. No text, watermark, borders, other objects or comparison sheet; ONE finished icon only."
+    },
+    {
+      "name": "light-blue",
+      "reference": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-bbfe7993-4fc4-497f-8cd5-68932d7f1238.png",
+      "transparent_background": true,
+      "prompt": "Use case: precise-object-edit. Asset type: production macOS application icon light background variant. Edit ONLY the tile BACKGROUND of the supplied approved charcoal silver-spork icon to light ice blue, approximately #D6E4EE, with a subtle matte gradient and the same rounded-square shape. The silver metallic spork must remain IDENTICAL: four short rounded tines and three slots, round spoon body, short refined handle, exact silhouette, position, scale, proportions, metal material, bevel and highlights. Keep its existing natural soft dark cast shadow and gray metallic edge clearly visible against the light tile so all tines, spoon body and handle are readable at Dock size. Do not flatten the silver into white or change geometry. Preserve canvas framing/inset. Outside the rounded tile is true transparent alpha with no photographic backdrop, outside shadow or white fringe. Clean smooth antialiased tile edge, no stray colored pixels. No text, watermark, borders, other objects or comparison sheet; ONE finished icon only."
+    }
+  ]
+}

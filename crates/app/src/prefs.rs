@@ -126,6 +126,19 @@ pub fn config_path() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/pokarak/session.json")
 }
 impl Preferences {
+    /// Application-only: project overrides must never change the app's Dock icon.
+    pub fn app_icon(&self) -> crate::app_icon::IconChoice {
+        self.options
+            .get(crate::app_icon::PREFERENCE_KEY)
+            .and_then(serde_json::Value::as_str)
+            .and_then(crate::app_icon::IconChoice::from_id)
+            .unwrap_or_default()
+    }
+
+    pub fn set_app_icon(&mut self, choice: crate::app_icon::IconChoice) {
+        self.set_option(None, crate::app_icon::PREFERENCE_KEY, choice.id().into());
+    }
+
     pub fn option_bool(&self, root: Option<&Path>, key: &str, fallback: bool) -> bool {
         self.option(root, key)
             .and_then(serde_json::Value::as_bool)
@@ -181,12 +194,77 @@ impl Preferences {
 
     pub fn try_save(&self) -> std::io::Result<()> {
         let path = config_path();
+        self.try_save_to(&path)
+    }
+
+    fn try_save_to(&self, path: &Path) -> std::io::Result<()> {
         let parent = path.parent().expect("session configuration directory");
         std::fs::create_dir_all(parent)?;
         let mut temp = tempfile::NamedTempFile::new_in(parent)?;
         serde_json::to_writer_pretty(temp.as_file_mut(), self)?;
         temp.persist(path)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod app_icon_tests {
+    use super::Preferences;
+    use crate::app_icon::{IconChoice, PREFERENCE_KEY};
+    use serde_json::json;
+    use std::path::Path;
+
+    #[test]
+    fn explicit_colors_and_follow_default_survive_real_session_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("session.json");
+        let mut prefs: Preferences = serde_json::from_value(json!({
+            "code_font_size": 19,
+            "split_diff": true,
+            "options": { "future.setting": { "preserved": true } }
+        }))
+        .unwrap();
+        assert_eq!(prefs.app_icon(), IconChoice::FollowDefault);
+        for choice in IconChoice::ALL {
+            prefs.set_app_icon(choice);
+            prefs.try_save_to(&path).unwrap();
+            prefs = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(prefs.app_icon(), choice);
+            assert_eq!(prefs.options[PREFERENCE_KEY], choice.id());
+            assert_eq!(prefs.display.code_font_size, 19.);
+            assert!(prefs.split_diff);
+            assert_eq!(prefs.options["future.setting"]["preserved"], true);
+        }
+        prefs.set_app_icon(IconChoice::Charcoal);
+        assert!(prefs.app_icon().override_bytes().is_some());
+        prefs.set_app_icon(IconChoice::FollowDefault);
+        prefs.try_save_to(&path).unwrap();
+        let next: Preferences = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        // Clearing the runtime override delegates to the next installed bundle,
+        // rather than persisting the current bundle's charcoal image as a color.
+        assert!(next.app_icon().override_bytes().is_none());
+        assert_eq!(next.options[PREFERENCE_KEY], "follow_default");
+    }
+
+    #[test]
+    fn project_and_unknown_icon_values_cannot_reset_other_preferences() {
+        let mut prefs = Preferences::default();
+        prefs.set_app_icon(IconChoice::Ivory);
+        prefs.set_option(
+            Some(Path::new("/fixture/project")),
+            PREFERENCE_KEY,
+            json!("deep-blue"),
+        );
+        assert_eq!(prefs.app_icon(), IconChoice::Ivory);
+        prefs.set_option(None, PREFERENCE_KEY, json!("future-icon"));
+        prefs.options.insert("preserve.me".into(), json!(42));
+        let next: Preferences =
+            serde_json::from_value(serde_json::to_value(&prefs).unwrap()).unwrap();
+        assert_eq!(next.app_icon(), IconChoice::FollowDefault);
+        assert_eq!(next.options["preserve.me"], 42);
+        prefs.set_app_icon(IconChoice::Charcoal);
+        prefs.remove_option(None, PREFERENCE_KEY);
+        assert_eq!(prefs.app_icon(), IconChoice::FollowDefault);
     }
 }
 

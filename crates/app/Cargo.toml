@@ -23,5 +23,11 @@ tempfile = "3"
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSImage"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData"] }
 rustix = { version = "1", features = ["process", "termios"] }
 alacritty_terminal = { version = "0.26.0", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSBitmapImageRep", "NSGraphicsContext", "NSGraphics", "objc2-core-foundation"] }

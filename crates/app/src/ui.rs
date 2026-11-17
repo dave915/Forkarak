@@ -587,6 +587,9 @@ impl Pokarak {
     pub fn new(initial: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut prefs = Preferences::load();
         prefs.display = prefs.display.validated();
+        if let Err(error) = crate::app_icon::apply(prefs.app_icon()) {
+            eprintln!("앱 아이콘을 복원하지 못했습니다: {error}");
+        }
         let resume = prefs.update_workspace.take();
         if resume.is_some() {
             prefs.save();

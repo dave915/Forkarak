@@ -1,0 +1,14 @@
+{
+  "tool": "built-in image_gen",
+  "original_selected_jpg": "/tmp/codex-remote-attachments/01a1ea1f-8ba9-7d80-a252-2039dd203c02/35988240-F29E-4634-98BB-4A82D73FEB60/2-사진-2.jpg",
+  "original_generated_png": "/Users/taehyun/.codex/generated_images/01a1ea1f-8ba9-7d80-a252-2039dd203c02/exec-8eca389b-de8a-4dbf-8896-f1dd7ef33a01.png",
+  "assets": {
+    "charcoal": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-bbfe7993-4fc4-497f-8cd5-68932d7f1238.png",
+    "deep-blue": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-719f7c05-5a30-4b2e-b795-02484b09a6d1.png",
+    "deep-green": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-c5e55ce7-49e8-4179-949b-5cfac0bfd4db.png",
+    "plum": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-bd98b83c-3ae8-49f1-8d37-64370d0d93c3.png",
+    "ivory": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-1e2eb28a-8289-43eb-bee0-1a9bcfcf43df.png",
+    "light-blue": "/Users/taehyun/.codex/generated_images/01a1e9e4-8c19-7e92-8899-c944c1344c16/exec-ebf37587-7b83-47c3-b04c-dd49a26d7370.png"
+  },
+  "production_note": "All assets preserve approved four-tine silver spork. Normalize alpha/frame for icns production; light variants have stray outside white islands needing clean rounded silhouette masking."
+}

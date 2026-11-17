@@ -461,7 +461,7 @@ impl Pokarak {
             let scope_text=root.as_ref().map(|root|format!("프로젝트: {} · 별도 지정하지 않은 항목은 앱 설정을 상속합니다.",root.display())).unwrap_or_else(||"앱 기본값 · 이 설정은 검사 중인 저장소 밖에 저장됩니다.".into());
             let mut content=div().id(SharedString::from(format!("settings-scroll-{}-{}",category.id(),root.is_some()))).v_flex().flex_1().min_w_0().gap_1().max_h(window.viewport_size().height-ui_px(255.)).overflow_y_scroll().child(div().font_weight(FontWeight::SEMIBOLD).child(category.label()));
             if category==Category::Appearance {
-                content=content.child(appearance(app,&weak,cx));
+                content=content.child(appearance(app,&weak,cx)).child(app_icons(app,&weak,&state,cx));
             }
             for &field in FIELDS.iter().filter(|field|field.category==category) {content=content.child(field_row(field,&app.prefs,&state,&weak,cx));}
             if category==Category::Language {content=content.child(app.language_manager_settings(weak.clone(),cx)).child(trust_settings(app,&weak,&state,cx));}
@@ -482,9 +482,9 @@ impl Pokarak {
                         for field in FIELDS.iter().filter(|field|field.category==category && !(root.is_some() && field.app_only)) {app.prefs.remove_option(root.as_deref(),field.key);}
                         if category==Category::Language {app.prefs.remove_option(root.as_deref(),"language.enabled");app.cancel_managed_language_request();}
                         let old_display=app.prefs.display; let old_theme=app.prefs.theme;
-                        if category==Category::Appearance && root.is_none() {app.prefs.display=DisplaySettings::DEFAULT;app.prefs.theme=ThemeChoice::System;}
+                        if category==Category::Appearance && root.is_none() {app.prefs.display=DisplaySettings::DEFAULT;app.prefs.theme=ThemeChoice::System;app.prefs.remove_option(None,crate::app_icon::PREFERENCE_KEY);}
                         if let Err(error)=app.prefs.try_save(){app.prefs.options=backup_options;app.prefs.project_options=backup_projects;app.prefs.display=old_display;app.prefs.theme=old_theme;return format!("초기화를 저장하지 못했습니다: {error}");}
-                        if category==Category::Appearance && root.is_none(){theme::apply(app.prefs.theme,app.prefs.display,window,cx);}
+                        if category==Category::Appearance && root.is_none(){theme::apply(app.prefs.theme,app.prefs.display,window,cx);if let Err(error)=crate::app_icon::apply(app.prefs.app_icon()){return format!("설정 초기화됨 · 앱 아이콘 복원 실패: {error}");}}
                         cx.notify(); format!("{} · {} 초기화됨",if root.is_some(){"프로젝트 재정의"}else{"앱 설정"},category.label())
                     }).unwrap_or_default();
                     let _=reset.update(cx,|app,cx|reset_state.borrow_mut().load_inputs(&app.prefs,window,cx)); reset_state.borrow_mut().feedback=message;notify(&reset,cx);
@@ -561,6 +561,77 @@ fn appearance(app: &Pokarak, view: &WeakEntity<Pokarak>, cx: &App) -> Div {
         );
     }
     div().v_flex().gap_2().child(themes).child(Setting::Zoom.row(display,view)).child(Setting::InterfaceFont.row(display,view)).child(Setting::CodeFont.row(display,view)).child(div().text_size(ui_text(11.)).text_color(palette.rgb(MUTED)).child("배율은 화면 전체의 크기·간격을 바꿉니다. 일반 글자는 UI에, 코드 글자는 코드·diff·Blame에 적용됩니다. 터미널은 터미널·실행에서 별도로 조절합니다. 표시 설정은 앱 전체에 적용됩니다.")).child(preview)
+}
+
+fn app_icons(app: &Pokarak, view: &WeakEntity<Pokarak>, state: &DialogState, cx: &App) -> Div {
+    use crate::app_icon::{self, IconChoice};
+    let palette = Palette::new(cx);
+    let mut choices = div().flex().flex_wrap().gap_1();
+    for choice in IconChoice::ALL {
+        let selected = app.prefs.app_icon() == choice;
+        let (view, state) = (view.clone(), state.clone());
+        choices = choices.child(
+            Button::new(SharedString::from(format!("app-icon-{}", choice.id())))
+                .ghost()
+                .selected(selected)
+                .w(ui_px(80.))
+                .h(ui_px(110.))
+                .px_1()
+                .accessibility_label(format!(
+                    "앱 아이콘 · {}{}",
+                    choice.label(),
+                    if selected { " · 선택됨" } else { "" }
+                ))
+                .tooltip(if choice == IconChoice::FollowDefault {
+                    "업데이트에 포함된 기본 아이콘을 따릅니다"
+                } else {
+                    "이 색상을 유지합니다 · Dock에 바로 적용"
+                })
+                .child(
+                    div()
+                        .v_flex()
+                        .items_center()
+                        .gap_1()
+                        .child(img(choice.preview_path()).w(ui_px(56.)).h(ui_px(56.)))
+                        .child(div().text_size(ui_text(10.)).child(choice.label()))
+                        .child(div().text_size(ui_text(10.)).child(if selected {
+                            "✓ 선택됨"
+                        } else {
+                            " "
+                        })),
+                )
+                .on_click(move |_, _, cx| {
+                    let message = view
+                        .update(cx, |app, cx| {
+                            let previous = app.prefs.app_icon();
+                            let saved = app.prefs.options.get(app_icon::PREFERENCE_KEY).cloned();
+                            if let Err(error) = app_icon::apply(choice) {
+                                return format!("앱 아이콘을 변경하지 못했습니다: {error}");
+                            }
+                            app.prefs.set_app_icon(choice);
+                            if let Err(error) = app.prefs.try_save() {
+                                match saved {
+                                    Some(value) => {
+                                        app.prefs.set_option(None, app_icon::PREFERENCE_KEY, value)
+                                    }
+                                    None => app.prefs.remove_option(None, app_icon::PREFERENCE_KEY),
+                                }
+                                let _ = app_icon::apply(previous);
+                                return format!("앱 아이콘을 저장하지 못했습니다: {error}");
+                            }
+                            cx.notify();
+                            format!("앱 아이콘 · {} 적용됨", choice.label())
+                        })
+                        .unwrap_or_default();
+                    feedback(&state, &view, message, cx);
+                }),
+        );
+    }
+    div().v_flex().gap_1().py_2().border_b_1().border_color(palette.rgb(LINE))
+        .child(div().font_weight(FontWeight::MEDIUM).child("앱 아이콘 · 앱 전체"))
+        .child(choices)
+        .child(div().text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
+            .child("Dock에 바로 적용되며 다음 실행에도 유지됩니다. ‘기본값 따르기’는 업데이트의 기본 아이콘을 따릅니다. Finder 아이콘은 앱에 포함된 기본 아이콘을 사용합니다."))
 }
 fn trust_settings(app: &Pokarak, view: &WeakEntity<Pokarak>, state: &DialogState, cx: &App) -> Div {
     let mut section=div().v_flex().gap_2().pt_2().child("분석 허용 워크트리").child(div().text_size(ui_text(11.)).child("허용 추가는 해당 워크트리에서 언어 분석을 켤 때 확인합니다. 해제하면 실행 중인 해당 분석을 중지합니다."));

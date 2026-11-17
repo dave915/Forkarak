@@ -64,9 +64,7 @@ impl Pokarak {
         let ui = &self.git_history;
         let busy = history_disabled(self);
         let weak = cx.entity().downgrade();
-        let columns = super::rows::Columns::new(&ui.entries, window);
-        let header = columns.header(palette);
-        let list = self.commit_rows(columns, cx);
+        let table = self.commit_table(window, cx);
         let saved = self.session().map(|session| &session.saved);
         let collapsed = saved.is_some_and(|view| view.graph_detail_collapsed);
         let count = match self.change_count {
@@ -187,26 +185,7 @@ impl Pokarak {
                         app.open_inline_commit(window, cx);
                     })),
             )
-            .child(header)
-            .child(if ui.entries.is_empty() {
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .p_4()
-                    .text_color(palette.rgb(MUTED))
-                    .child(if self.loading || ui.loading {
-                        "커밋을 불러오는 중…"
-                    } else if ui.error.is_some() {
-                        "기록을 불러오지 못했습니다. 새로고침으로 다시 시도하세요."
-                    } else {
-                        "아직 커밋이 없습니다. 미커밋 변경에서 첫 커밋을 만들 수 있습니다."
-                    })
-                    .into_any_element()
-            } else {
-                list.into_any_element()
-            })
+            .child(table)
             .when_some(ui.error.clone(), |view, error| {
                 view.child(
                     div()

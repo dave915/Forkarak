@@ -1,46 +1,7 @@
 use super::*;
 
-pub(super) struct Columns {
-    labels: f32,
-    graph: f32,
-    step: f32,
-    show_author: bool,
-}
-
-impl Columns {
-    pub fn new(entries: &[HistoryEntry], window: &Window) -> Self {
-        let narrow = window.viewport_size().width < px(1100.);
-        let lanes = entries.iter().map(|e| e.graph.columns).max().unwrap_or(1);
-        let graph = (lanes as f32 * 13. + 16.).clamp(50., if narrow { 104. } else { 150. });
-        Self {
-            labels: if narrow { 128. } else { 166. },
-            graph,
-            step: ((graph - 16.) / lanes.saturating_sub(1).max(1) as f32).min(13.),
-            show_author: !narrow,
-        }
-    }
-
-    pub fn header(&self, palette: Palette) -> Div {
-        div()
-            .h(px(26.))
-            .flex_none()
-            .px_2()
-            .flex()
-            .items_center()
-            .gap_2()
-            .bg(palette.rgb(SIDE))
-            .text_size(px(11.))
-            .text_color(palette.rgb(MUTED))
-            .child(div().w(px(self.labels)).flex_none().child("브랜치 / 태그"))
-            .child(div().w(px(self.graph)).flex_none().child("그래프"))
-            .child(div().flex_1().child("커밋 메시지"))
-            .when(self.show_author, |r| {
-                r.child(div().w(px(90.)).flex_none().child("작성자"))
-            })
-            .child(div().w(px(76.)).flex_none().child("날짜"))
-            .child(div().w(px(82.)).flex_none().child("커밋"))
-    }
-}
+use super::columns::Columns;
+use crate::prefs::GraphColumn;
 
 impl Pokarak {
     pub(super) fn clear_graph_hover(&mut self) {
@@ -166,7 +127,7 @@ impl Pokarak {
                         .find(|r| r.starts_with("refs/heads/"))
                         .or_else(|| refs.first());
                     let refs_cell = div()
-                        .w(px(columns.labels))
+                        .w(px(columns.width(GraphColumn::Refs)))
                         .min_w_0()
                         .flex_none()
                         .flex()
@@ -215,42 +176,45 @@ impl Pokarak {
                         .tooltip(label.clone())
                         .accessibility_label(label)
                         .child(
-                            div()
+                            Columns::row()
                                 .w_full()
                                 .h_full()
                                 .min_w_0()
-                                .px_2()
-                                .flex()
-                                .items_center()
-                                .gap_2()
                                 .child(refs_cell)
                                 .child(graph_view(
                                     entry.graph.clone(),
-                                    columns.graph,
-                                    columns.step,
+                                    columns.width(GraphColumn::Graph),
+                                    columns.lane_step,
                                     index,
                                     trace.as_ref(),
                                     palette,
                                 ))
                                 .child(
                                     div()
-                                        .flex_1()
+                                        .w(px(columns.width(GraphColumn::Message)))
+                                        .flex_none()
                                         .min_w_0()
                                         .text_ellipsis()
                                         .text_color(palette.rgb(if related { TEXT } else { MUTED }))
                                         .child(visible(&commit.subject)),
                                 )
-                                .when(columns.show_author, |r| {
-                                    r.child(metadata_cell(90., visible(&commit.author), palette))
-                                })
                                 .child(metadata_cell(
-                                    76.,
+                                    columns.width(GraphColumn::Author),
+                                    visible(&commit.author),
+                                    palette,
+                                ))
+                                .child(metadata_cell(
+                                    columns.width(GraphColumn::Date),
                                     commit.date.get(..10).unwrap_or(&commit.date).to_owned(),
                                     palette,
                                 ))
                                 .child(
-                                    metadata_cell(82., short(&oid).to_owned(), palette)
-                                        .font_family("JetBrains Mono"),
+                                    metadata_cell(
+                                        columns.width(GraphColumn::Hash),
+                                        short(&oid).to_owned(),
+                                        palette,
+                                    )
+                                    .font_family("JetBrains Mono"),
                                 ),
                         )
                         .on_click(move |_, w, cx| {

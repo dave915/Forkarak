@@ -43,6 +43,17 @@ pub struct SavedPosition {
     pub scroll_y: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphColumn {
+    Refs,
+    Graph,
+    Message,
+    Author,
+    Date,
+    Hash,
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SavedView {
@@ -56,6 +67,7 @@ pub struct SavedView {
     pub graph_height: Option<f32>,
     pub graph_files_width: Option<f32>,
     pub diff_split_ratio: Option<f32>,
+    pub graph_columns: HashMap<GraphColumn, f32>,
     pub filter: String,
     pub text_search: bool,
     pub comparison: CompareMode,

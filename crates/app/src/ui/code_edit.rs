@@ -718,6 +718,10 @@ impl CodeEdits {
         self.buffer(root, path).is_some_and(Buffer::dirty)
     }
 
+    pub(super) fn stale(&self, root: &Path, path: &Path) -> bool {
+        self.buffer(root, path).is_some_and(|buffer| buffer.stale)
+    }
+
     pub(super) fn saving_in(&self, root: &Path) -> bool {
         self.buffers.values().any(|buffer| buffer.draft.key.root == root && buffer.saving)
     }

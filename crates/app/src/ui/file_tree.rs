@@ -273,6 +273,11 @@ impl Pokarak {
         let has_folders = !tree.directories.is_empty();
         let filtering = !self.text_search && !self.filter.is_empty();
         let rows = Arc::new(tree.rows);
+        let reviewed = rows
+            .iter()
+            .filter(|row| !row.directory)
+            .map(|row| (row.path.clone(), self.file_review_state(&row.path)))
+            .collect::<HashMap<_, _>>();
         let weak = cx.entity().downgrade();
         div()
             .size_full()
@@ -326,6 +331,14 @@ impl Pokarak {
                             .text_color(palette.rgb(MUTED))
                             .child(count.to_string()),
                     ),
+            )
+            .child(
+                div()
+                    .px_2()
+                    .pb_1()
+                    .text_size(ui_text(11.))
+                    .text_color(palette.rgb(MUTED))
+                    .child(self.review_counts()),
             )
             .child(
                 div()
@@ -506,6 +519,30 @@ impl Pokarak {
                                                 .min_w_0()
                                                 .text_ellipsis()
                                                 .child(row.label.clone()),
+                                        )
+                                        .when(
+                                            reviewed.get(&row.path)
+                                                == Some(&reviewed_files::ReviewState::Reviewed),
+                                            |row| {
+                                                row.child(
+                                                    div()
+                                                        .flex_none()
+                                                        .text_color(palette.rgb(GREEN))
+                                                        .child("✓"),
+                                                )
+                                            },
+                                        )
+                                        .when(
+                                            reviewed.get(&row.path)
+                                                == Some(&reviewed_files::ReviewState::Pending),
+                                            |row| {
+                                                row.child(
+                                                    div()
+                                                        .flex_none()
+                                                        .text_color(palette.rgb(MUTED))
+                                                        .child("…"),
+                                                )
+                                            },
                                         )
                                         .when_some(status, |d, (label, color)| {
                                             d.child(

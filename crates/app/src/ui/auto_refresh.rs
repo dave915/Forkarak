@@ -195,6 +195,7 @@ impl Pokarak {
         };
         let now = Instant::now();
         if self.changed.swap(false, Ordering::Relaxed) {
+            self.reviewed_files.invalidate_working(&root);
             self.auto_refresh.queue(now);
         }
         let blocked = self.auto_refresh_blocked(window, cx);
@@ -208,6 +209,7 @@ impl Pokarak {
             return;
         };
         self.check_code_disk_changes(cx);
+        self.verify_reviewed_files(cx);
         self.checking_changes = true;
         self.count_pending = self.git_history.active;
         let generation = self.request;

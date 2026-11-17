@@ -16,6 +16,7 @@ mod git_workflow;
 mod pane_visibility;
 mod patch;
 mod reader_navigation;
+mod reviewed_files;
 mod settings;
 mod split_diff;
 mod syntax;
@@ -254,6 +255,7 @@ impl Session {
 }
 
 pub struct Pokarak {
+    reviewed_files: reviewed_files::ReviewedFiles,
     auto_refresh: auto_refresh::AutoRefresh,
     code_edits: code_edit::CodeEdits,
     git_history: git_history::HistoryUi,
@@ -589,6 +591,7 @@ impl Pokarak {
             }
         }));
         let mut this = Self {
+            reviewed_files: reviewed_files::ReviewedFiles::load(),
             auto_refresh: auto_refresh::AutoRefresh::default(),
             code_edits: code_edit::CodeEdits::load(),
             workflow: git_workflow::WorkflowUi::default(),
@@ -982,6 +985,7 @@ impl Pokarak {
             return;
         };
         self.checking_changes = false;
+        self.reviewed_files.invalidate_working(&root);
         self.count_pending = false;
         if self.git_history.active {
             self.refresh_graph_inventory(root, window, cx);
@@ -1117,6 +1121,7 @@ impl Pokarak {
             .retain(|path, _| session.saved.tabs.contains(path));
         session.snapshot = Some(snapshot);
         session.diffs.clear();
+        self.verify_reviewed_files(cx);
         self.status = "준비됨".into();
         if let Some(pending) = pending_file {
             self.pending_history = pending.history_restore;
@@ -1973,6 +1978,7 @@ impl Pokarak {
                     .child(path.to_string_lossy().to_string()),
             )
             .child(self.code_analysis_control(cx))
+            .child(self.reviewed_file_button(cx))
             .child(
                 Button::new("diff")
                     .label("변경")
@@ -2460,6 +2466,7 @@ impl Render for Pokarak {
             .children(self.branch_review_controls(cx))
             .children(self.update_banner(cx))
             .children(self.code_drafts_banner(cx))
+            .children(self.reviewed_files_notice(cx))
             .when(self.opening_path.is_none() && self.external_change,|d|d.child(div().h(ui_px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(ui_text(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")
                 .child(Button::new("apply-refresh").label("갱신").ghost().small().on_click(cx.listener(|this,_,w,cx|this.refresh(w,cx))))))

@@ -390,6 +390,10 @@ impl Pokarak {
             }
         }
         let changed_files = detail.files.clone();
+        let reviewed = changed_files
+            .iter()
+            .map(|file| (file.path.clone(), self.file_review_state(&file.path)))
+            .collect::<HashMap<_, _>>();
         let selected = ui.selected.clone();
         let target = weak.clone();
         let files = uniform_list("history-files", changed_files.len(), move |range, _, cx| {
@@ -398,7 +402,15 @@ impl Pokarak {
                     let file = &changed_files[index];
                     let path = file.path.clone();
                     let (status, _) = file_status(&file.status);
-                    let display_path = visible(&path.to_string_lossy());
+                    let display_path = format!(
+                        "{}{}",
+                        match reviewed.get(&path) {
+                            Some(reviewed_files::ReviewState::Reviewed) => "✓ ",
+                            Some(reviewed_files::ReviewState::Pending) => "… ",
+                            _ => "",
+                        },
+                        visible(&path.to_string_lossy())
+                    );
                     let target = target.clone();
                     file_icons::changed_file_button(
                         ("history-file", index),
@@ -439,7 +451,11 @@ impl Pokarak {
                     .text_size(ui_text(12.))
                     .border_b_1()
                     .border_color(palette.rgb(LINE))
-                    .child(format!("변경 파일  {}", detail.files.len())),
+                    .child(format!(
+                        "변경 파일 {} · {}",
+                        detail.files.len(),
+                        self.review_counts()
+                    )),
             )
             .child(files);
         let preview = if let Some(doc) = ui
@@ -491,6 +507,7 @@ impl Pokarak {
                     .gap_1()
                     .border_b_1()
                     .border_color(palette.rgb(LINE))
+                    .child(self.reviewed_file_button(cx))
                     .child(
                         history_button(&weak, "history-diff", "Diff", busy, |app, window, cx| {
                             app.set_split_diff(false);

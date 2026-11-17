@@ -65,7 +65,8 @@ impl Pokarak {
                     "external_change":self.external_change,"auto_refresh_pending":self.auto_refresh.pending(),
                     "auto_refresh_completed":self.auto_refresh.completed,"status":self.status,
                     "reading_point":point,"draft_dirty":dirty,"history_loading":self.git_history.read_pending(),
-                    "graph_selection":self.git_history.selection(),"graph_scroll_y":self.git_history.scroll_y()}),
+                    "graph_selection":self.git_history.selection(),"graph_scroll_y":self.git_history.scroll_y(),
+                    "file_review_state":self.selected_review_status(),"review_counts":self.review_counts()}),
             );
         }
         if self.loading {

@@ -54,6 +54,13 @@ pub(super) struct HistoryUi {
 }
 
 impl HistoryUi {
+    pub(super) fn review_data(&self) -> Option<(&CommitDetail, Option<&Arc<DiffDocument>>)> {
+        Some((
+            self.detail.as_ref()?,
+            self.document.as_ref().map(|doc| &doc.document),
+        ))
+    }
+
     pub(super) fn read_pending(&self) -> bool {
         self.loading || matches!(self.next_page, NextPage::Loading)
     }
@@ -436,6 +443,7 @@ impl Pokarak {
         self.git_history.document = None;
         self.git_history.editor = None;
         self.git_history.code = code;
+        self.verify_reviewed_files(cx);
         self.show_history_detail(window, cx);
         if let Some(path) = file {
             self.load_history_file(path, window, cx);

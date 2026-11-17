@@ -86,6 +86,10 @@ impl HistoryUi {
     fn accepts_read(&self, request: u64, root: &Path) -> bool {
         self.active && self.request == request && self.root.as_deref() == Some(root)
     }
+
+    fn accepts_code_sidebar(&self, request: u64, root: &Path) -> bool {
+        !self.active && self.request == request && self.root.as_deref() == Some(root)
+    }
 }
 impl Pokarak {
     pub(super) fn graph_page_loaded(&self) -> bool {
@@ -510,5 +514,27 @@ mod tests {
         assert!(ui.accepts_read(8, &feature));
         ui.active = false;
         assert!(!ui.accepts_read(8, &feature));
+    }
+
+    #[test]
+    fn shared_code_catalog_cannot_cross_worktree_refresh_or_graph_navigation() {
+        let main = PathBuf::from("/fixture/main");
+        let feature = PathBuf::from("/fixture/feature");
+        let mut ui = HistoryUi {
+            root: Some(feature.clone()),
+            request: 8,
+            ..Default::default()
+        };
+        assert!(ui.accepts_code_sidebar(8, &feature));
+        assert!(!ui.accepts_code_sidebar(8, &main));
+        assert!(!ui.accepts_read(8, &feature));
+        // Reference navigation promotes Code's catalog to a Graph read scope.
+        ui.active = true;
+        assert!(ui.accepts_read(8, &feature));
+        assert!(!ui.accepts_code_sidebar(8, &feature));
+        ui.reset(false);
+        ui.root = Some(feature.clone());
+        assert!(!ui.accepts_code_sidebar(8, &feature));
+        assert!(ui.accepts_code_sidebar(ui.request, &feature));
     }
 }

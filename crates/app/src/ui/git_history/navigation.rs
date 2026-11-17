@@ -35,6 +35,73 @@ impl Group {
 }
 
 impl Pokarak {
+    /// The same catalog backs both sidebars. Loading it does not activate the
+    /// graph, start language analysis, or delay the working-file reader.
+    pub(in crate::ui) fn load_code_sidebar(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.current.clone() else {
+            return;
+        };
+        self.git_history.root = Some(root.clone());
+        let request = self.git_history.request;
+        let generation = self.request;
+        let branch = self.graph_branch().map(str::to_owned);
+        let target = root.clone();
+        let task = cx.background_spawn(async move {
+            let scoped = branch
+                .as_ref()
+                .map(|branch| history::navigation::open_branch(&target, branch, 1))
+                .transpose()?
+                .flatten();
+            match scoped {
+                Some((_, catalog)) => Ok((catalog, false)),
+                None => history::navigation::open(&target, 1)
+                    .map(|(_, catalog)| (catalog, branch.is_some())),
+            }
+        });
+        cx.spawn(async move |view, cx| {
+            let result = task.await;
+            let _ = view.update(cx, |app, cx| {
+                if app.current.as_ref() != Some(&root)
+                    || app.request != generation
+                    || !app.git_history.accepts_code_sidebar(request, &root)
+                {
+                    return;
+                }
+                match result {
+                    Ok((catalog, missing_branch)) => {
+                        if missing_branch {
+                            app.save_graph_branch(None, cx);
+                        }
+                        app.git_history.nav.catalog = Some(Arc::new(catalog));
+                    }
+                    Err(error) => {
+                        app.error = Some(format!("참조 목록을 읽을 수 없습니다: {error:#}"))
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub(in crate::ui) fn jump_to_graph_reference(
+        &mut self,
+        reference: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let oid = self
+            .git_history
+            .nav
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.refs.iter().find(|r| r.name == reference))
+            .map(|r| r.oid.clone());
+        if let Some(oid) = oid {
+            self.jump_to_graph_oid(oid, window, cx);
+        }
+    }
+
     pub(in crate::ui) fn graph_search_control(&self, cx: &mut Context<Self>) -> Button {
         Button::new("graph-search")
             .small()
@@ -104,8 +171,21 @@ impl Pokarak {
     }
 
     fn jump_to_graph_oid(&mut self, oid: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self.loading || self.git_is_busy() || !self.git_history.active {
+        if self.loading
+            || self.git_is_busy()
+            || self.opening_path.is_some()
+            || self.git_history.nav.catalog.is_none()
+        {
             return;
+        }
+        if !self.git_history.active {
+            self.persist(cx);
+            self.file_request += 1;
+            self.file_loading = false;
+            self.navigation_request += 1;
+            self.navigating = false;
+            self.pending_cli_file = None;
+            self.show_history_list(window, cx);
         }
         if let Some(i) = self
             .git_history

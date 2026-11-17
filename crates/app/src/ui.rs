@@ -1,6 +1,7 @@
 mod analysis_feedback;
 mod cli_control;
 mod code_edit;
+mod code_workspace;
 mod file_icons;
 mod file_inspector;
 mod file_tree;
@@ -27,7 +28,6 @@ use split_diff::ReviewDiff;
 
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
 use crate::theme::{self, Palette, ThemeChoice, ui_px, ui_text};
-use git_actions::integration::IntegrationKind;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::{
@@ -227,7 +227,8 @@ struct Session {
     restoring: bool,
 }
 impl Session {
-    fn new(saved: SavedView) -> Self {
+    fn new(mut saved: SavedView) -> Self {
+        saved.comparison = CompareMode::Uncommitted;
         let restoring = saved.selected.is_some();
         Self {
             #[cfg(target_os = "macos")]
@@ -265,7 +266,6 @@ pub struct Pokarak {
     update_view: Option<(PathBuf, crate::prefs::UpdateView)>,
     sessions: HashMap<PathBuf, Session>,
     search_input: Entity<InputState>,
-    base_input: Entity<InputState>,
     filter: String,
     text_search: bool,
     loading: bool,
@@ -300,7 +300,7 @@ pub struct Pokarak {
     external_change: bool,
     checking_changes: bool,
     cli_control: Option<crate::control::Server>,
-    pending_cli_file: Option<cli_control::PendingFile>,
+    pending_cli_file: Option<code_workspace::PendingFile>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -552,11 +552,6 @@ impl Pokarak {
             .or_else(|| prefs.last_root.clone());
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("파일 이름 검색   ⌘P"));
-        let base_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value("main")
-                .placeholder("기준 브랜치")
-        });
         let mut subscriptions = vec![cx.subscribe_in(
             &search_input,
             window,
@@ -579,15 +574,6 @@ impl Pokarak {
                 _ => {}
             },
         )];
-        subscriptions.push(cx.subscribe_in(
-            &base_input,
-            window,
-            |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { .. } => this.compare(true, window, cx),
-                InputEvent::Change => cx.notify(),
-                _ => {}
-            },
-        ));
         subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
             if this.prefs.theme == ThemeChoice::System {
                 theme::apply(this.prefs.theme, this.prefs.display, window, cx);
@@ -612,7 +598,6 @@ impl Pokarak {
             pending_projects,
             sessions: HashMap::new(),
             search_input,
-            base_input,
             filter: String::new(),
             text_search: false,
             loading: false,
@@ -743,18 +728,22 @@ impl Pokarak {
             .documents
             .get(&path)
             .map(|doc| doc.read(cx).cursor_position())
-            .unwrap_or_default();
+            .unwrap_or(Position::new(session.saved.line, session.saved.column));
         let scroll = session
             .documents
             .get(&path)
             .map(|doc| doc.read(cx).scroll_offset())
-            .unwrap_or_default();
+            .unwrap_or_else(|| point(px(session.saved.scroll_x), px(session.saved.scroll_y)));
         Some(ReadingPoint {
             scroll_x: scroll.x.into(),
             scroll_y: scroll.y.into(),
             path,
             code: session.saved.code,
-            row: scroll_row(&session.scroll),
+            row: if session.restoring {
+                session.saved.diff_row
+            } else {
+                scroll_row(&session.scroll)
+            },
             line: position.line,
             column: position.character,
         })
@@ -1097,10 +1086,10 @@ impl Pokarak {
             self.refresh_graph_inventory(root, window, cx);
             return;
         }
-        let mode = self
-            .session()
-            .map(|s| s.saved.comparison.clone())
-            .unwrap_or_default();
+        if let Some(session) = self.sessions.get_mut(&root) {
+            session.prepare_code_snapshot();
+        }
+        let mode = CompareMode::Uncommitted;
         self.persist(cx);
         self.request += 1;
         let token = self.request;
@@ -1122,15 +1111,7 @@ impl Pokarak {
                     }
                     Err(error) => {
                         this.error = Some(format!("{error:#}"));
-                        this.status = "비교 기준을 확인하세요".into();
-                        if let Some(s) = this
-                            .current
-                            .as_ref()
-                            .and_then(|root| this.sessions.get_mut(root))
-                            && let Some(snapshot) = &s.snapshot
-                        {
-                            s.saved.comparison = snapshot.compare.clone();
-                        }
+                        this.status = "변경사항을 읽을 수 없습니다".into();
                     }
                 }
                 cx.notify();
@@ -1201,7 +1182,7 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let cli_file = self.take_pending_cli_file();
+        let pending_file = self.take_pending_cli_file();
         self.capture_code_buffers(cx);
         self.inventory = snapshot.worktrees.clone();
         self.change_count = Some(snapshot.worktree.changed_files);
@@ -1210,27 +1191,13 @@ impl Pokarak {
         let root = self.current.clone().unwrap();
         let session = self.sessions.get_mut(&root).unwrap();
         let code_edits = &self.code_edits;
-        let selection = session
-            .saved
-            .selected
-            .clone()
-            .filter(|p| {
-                p.is_absolute()
-                    || code_edits.dirty(&root, p)
-                    || snapshot.files.contains(p)
-                    || snapshot.changes.iter().any(|f| &f.path == p)
-            })
-            .or_else(|| snapshot.changes.first().map(|f| f.path.clone()));
+        let selection = session.snapshot_selection(&snapshot);
         session.saved.comparison = snapshot.compare.clone();
-        if let CompareMode::Branch(base) = &snapshot.compare {
-            self.base_input
-                .update(cx, |input, cx| input.set_value(base.clone(), window, cx));
-        }
-        if cli_file.is_none() {
+        if pending_file.is_none() {
             session.saved.selected = selection.clone();
         }
         session.saved.tabs.retain(|path| {
-            if code_edits.dirty(&root, path) {
+            if session.saved.selected.as_ref() == Some(path) || code_edits.dirty(&root, path) {
                 true
             } else if path.is_absolute() {
                 path.is_file()
@@ -1247,8 +1214,10 @@ impl Pokarak {
         session.snapshot = Some(snapshot);
         session.diffs.clear();
         self.status = "준비됨".into();
-        if let Some((path, position)) = cli_file {
-            self.open_file(path, true, Some(position), window, cx);
+        if let Some(pending) = pending_file {
+            self.pending_history = pending.history_restore;
+            self.pending_location_revision = pending.target_revision;
+            self.open_file(pending.path, pending.history, pending.position, window, cx);
         } else if let Some(path) = selection.filter(|_| !self.git_history.active) {
             self.open_file(path, false, None, window, cx);
         }
@@ -1270,6 +1239,30 @@ impl Pokarak {
             return;
         };
         self.capture_positions(cx);
+        self.capture_code_buffers(cx);
+        if self
+            .sessions
+            .get_mut(&root)
+            .is_some_and(Session::prepare_code_snapshot)
+        {
+            self.file_request += 1;
+            self.navigation_request += 1;
+            self.file_loading = false;
+            self.navigating = false;
+            self.refresh(window, cx);
+            self.pending_cli_file = Some(code_workspace::PendingFile {
+                root,
+                snapshot_request: self.request,
+                file_request: self.file_request,
+                path,
+                position,
+                history,
+                history_restore: self.pending_history.take(),
+                target_revision: self.pending_location_revision.take(),
+            });
+            return;
+        }
+        self.pending_cli_file = None;
         let history_restore = self.pending_history.take();
         let target_revision = self.pending_location_revision.take();
         let previous = if history {
@@ -1570,26 +1563,6 @@ impl Pokarak {
         }
         self.persist(cx);
         cx.notify();
-    }
-
-    fn compare(&mut self, branch: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.leave_git_graph();
-        let Some(root) = &self.current else {
-            return;
-        };
-        let mode = if branch {
-            let base = self.base_input.read(cx).value().to_string();
-            if base.trim().is_empty() {
-                self.error = Some("기준 브랜치를 입력하세요. 예: main 또는 origin/main".into());
-                cx.notify();
-                return;
-            }
-            CompareMode::Branch(base.trim().into())
-        } else {
-            CompareMode::Uncommitted
-        };
-        self.sessions.get_mut(root).unwrap().saved.comparison = mode;
-        self.refresh(window, cx);
     }
 
     fn stop_analysis(&mut self, cx: &mut Context<Self>) {
@@ -1950,447 +1923,30 @@ impl Pokarak {
         cx.notify();
     }
 
-    fn render_sidebar_header(&self, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .h(ui_px(44.))
-            .flex_none()
-            .px_2()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                Button::new("sidebar-worktrees")
-                    .label("워크트리")
-                    .ghost()
-                    .small()
-                    .text_size(ui_text(12.))
-                    .selected(!self.prefs.show_branches)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.prefs.show_branches = false;
-                        this.prefs.save();
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("sidebar-branches")
-                    .label("브랜치")
-                    .ghost()
-                    .small()
-                    .text_size(ui_text(12.))
-                    .selected(self.prefs.show_branches)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.prefs.show_branches = true;
-                        this.prefs.save();
-                        cx.notify();
-                    })),
-            )
-            .when(!self.prefs.show_branches, |row| {
-                row.child(div().flex_1()).child(
-                    Button::new("manage-worktrees")
-                        .icon(IconName::Settings)
-                        .small()
-                        .ghost()
-                        .tooltip("워크트리 생성·정리")
-                        .accessibility_label("워크트리 관리")
-                        .disabled(self.git_is_busy() || self.loading)
-                        .on_click(cx.listener(|app, _, w, cx| app.open_worktree_manager(w, cx))),
-                )
-            })
-            .into_any_element()
-    }
-
-    fn render_branches(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = Palette::new(cx);
-        let branches = Arc::new(
-            self.snapshot()
-                .map(|s| s.branches.clone())
-                .unwrap_or_default(),
-        );
-        let current = self
-            .snapshot()
-            .map(|s| s.worktree.branch.clone())
-            .unwrap_or_default();
-        let base = match self.snapshot().map(|s| &s.compare) {
-            Some(CompareMode::Branch(base)) => Some(base.clone()),
-            _ => None,
-        };
-        let root = self.current.clone();
-        let weak = cx.entity().downgrade();
-        div()
-            .size_full()
-            .v_flex()
-            .bg(palette.rgb(SIDE))
-            .overflow_hidden()
-            .child(self.render_sidebar_header(cx))
-            .child(if branches.is_empty() {
-                div()
-                    .p_3()
-                    .text_color(palette.rgb(MUTED))
-                    .child("아직 커밋된 브랜치가 없습니다.")
-                    .into_any_element()
-            } else {
-                uniform_list("branches", branches.len(), move |range, _, _| {
-                    range
-                        .map(|index| {
-                            let name = branches[index].clone();
-                            let target = weak.clone();
-                            let scope = root.clone();
-                            let selected = base.as_ref() == Some(&name);
-                            let tooltip = format!("{name}을 기준으로 현재 워크트리와 비교");
-                            let branch = name.clone();
-                            let activate = move |window: &mut Window, cx: &mut App| {
-                                let _ = target.update(cx, |this, cx| {
-                                    if this.current != scope {
-                                        return;
-                                    }
-                                    this.base_input.update(cx, |input, cx| {
-                                        input.set_value(branch.clone(), window, cx)
-                                    });
-                                    this.compare(true, window, cx);
-                                });
-                            };
-                            let menu_target = weak.clone();
-                            let menu_scope = root.clone();
-                            let menu_branch = name.clone();
-                            let can_integrate = name != current;
-                            let a11y_activate = activate.clone();
-                            let key_activate = activate.clone();
-                            div()
-                                .h(ui_px(32.))
-                                .w_full()
-                                .px_2()
-                                .child(
-                                    div()
-                                        .id(("branch", index))
-                                        .size_full()
-                                        .role(accesskit::Role::Button)
-                                        .aria_label(tooltip.clone())
-                                        .aria_selected(selected)
-                                        .tab_index(0)
-                                        .on_a11y_action(
-                                            accesskit::Action::Click,
-                                            move |_, w, cx| a11y_activate(w, cx),
-                                        )
-                                        .on_key_down(move |event, window, cx| {
-                                            if !event.keystroke.modifiers.modified()
-                                                && matches!(
-                                                    event.keystroke.key.as_str(),
-                                                    "enter" | "space"
-                                                )
-                                            {
-                                                window.prevent_default();
-                                                cx.stop_propagation();
-                                                if !event.is_held {
-                                                    key_activate(window, cx);
-                                                }
-                                            }
-                                        })
-                                        .px_2()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .rounded(ui_px(5.))
-                                        .cursor_pointer()
-                                        .bg(if selected {
-                                            palette.selected()
-                                        } else {
-                                            palette.rgb(SIDE)
-                                        })
-                                        .hover(|s| {
-                                            s.bg(if selected {
-                                                palette.selected_hover()
-                                            } else {
-                                                palette.hover()
-                                            })
-                                        })
-                                        .focus_visible(|s| {
-                                            s.border_1().border_color(palette.rgb(BLUE))
-                                        })
-                                        .tooltip(move |window, cx| {
-                                            gpui_kit::component::tooltip::Tooltip::new(
-                                                tooltip.clone(),
-                                            )
-                                            .build(window, cx)
-                                        })
-                                        .on_click(move |_, window, cx| activate(window, cx))
-                                        .child(
-                                            Icon::new(IconName::GitBranch)
-                                                .size(ui_px(15.))
-                                                .flex_none()
-                                                .text_color(if selected {
-                                                    palette.rgb(BLUE)
-                                                } else {
-                                                    palette.rgb(MUTED)
-                                                }),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .text_ellipsis()
-                                                .child(name.clone()),
-                                        )
-                                        .when(name == current, |row| {
-                                            row.child(
-                                                div()
-                                                    .flex_none()
-                                                    .text_size(ui_text(10.))
-                                                    .text_color(palette.rgb(MUTED))
-                                                    .child("현재"),
-                                            )
-                                        })
-                                        .context_menu(move |mut menu, _, _| {
-                                            if can_integrate {
-                                                for (kind, label) in [
-                                                    (
-                                                        IntegrationKind::Merge,
-                                                        "현재 브랜치에 Merge…",
-                                                    ),
-                                                    (
-                                                        IntegrationKind::Rebase,
-                                                        "이 브랜치 위로 Rebase…",
-                                                    ),
-                                                ] {
-                                                    let target = menu_target.clone();
-                                                    let scope = menu_scope.clone();
-                                                    let branch = menu_branch.clone();
-                                                    menu = menu.item(
-                                                        PopupMenuItem::new(label).on_click(
-                                                            move |_, w, cx| {
-                                                                let _ =
-                                                                    target.update(cx, |app, cx| {
-                                                                        if app.current == scope {
-                                                                            app.open_integration(
-                                                                                kind,
-                                                                                Some(
-                                                                                    branch.clone(),
-                                                                                ),
-                                                                                w,
-                                                                                cx,
-                                                                            );
-                                                                        }
-                                                                    });
-                                                            },
-                                                        ),
-                                                    );
-                                                }
-                                            }
-                                            menu
-                                        }),
-                                )
-                                .into_any_element()
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .flex_1()
-                .h_full()
-                .into_any_element()
-            })
-            .into_any_element()
-    }
-
     fn render_worktrees(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.git_history.active {
-            return self.render_graph_sidebar(cx);
-        }
-        if self.prefs.show_branches {
-            return self.render_branches(cx);
-        }
-        let palette = Palette::new(cx);
-        let worktrees = self
-            .snapshot()
-            .map(|s| s.worktrees.clone())
-            .unwrap_or_default();
-        let mut panel = div()
-            .size_full()
-            .v_flex()
-            .bg(palette.rgb(SIDE))
-            .overflow_hidden()
-            .child(self.render_sidebar_header(cx));
-        let mut list = div()
-            .id("worktree-list")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px_2();
-        for (index, tree) in worktrees.into_iter().enumerate() {
-            let active = self.current.as_ref() == Some(&tree.path);
-            let path = tree.path.clone();
-            let a11y_path = path.clone();
-            let a11y_target = cx.entity().downgrade();
-            let missing = tree.is_prunable || !path.exists();
-            let branch = if tree.is_detached {
-                format!("{} (detached)", &tree.head[..tree.head.len().min(8)])
-            } else {
-                tree.branch.clone()
-            };
-            list = list.child(
-                div()
-                    .id(("worktree", index))
-                    .w_full()
-                    .role(accesskit::Role::Button)
-                    .aria_label(format!("워크트리 {}", branch))
-                    .on_a11y_action(accesskit::Action::Click, move |_, window, cx| {
-                        let _ = a11y_target.update(cx, |this, cx| {
-                            this.open_repository(a11y_path.clone(), window, cx)
-                        });
-                    })
-                    .px_2()
-                    .py_2()
-                    .mb_1()
-                    .rounded(ui_px(5.))
-                    .cursor_pointer()
-                    .bg(if active {
-                        palette.selected()
-                    } else {
-                        palette.rgb(SIDE)
-                    })
-                    .hover(|s| {
-                        s.bg(if active {
-                            palette.selected_hover()
-                        } else {
-                            palette.hover()
-                        })
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if !missing {
-                            this.open_repository(path.clone(), window, cx);
-                        }
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(Icon::new(IconName::GitBranch).size(ui_px(15.)).text_color(
-                                if active {
-                                    palette.rgb(BLUE)
-                                } else {
-                                    palette.rgb(MUTED)
-                                },
-                            ))
-                            .child(div().flex_1().text_ellipsis().child(branch))
-                            .child(
-                                div()
-                                    .text_size(ui_text(11.))
-                                    .text_color(palette.rgb(MUTED))
-                                    .child(tree.changed_files.to_string()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .mt_1()
-                            .pl(ui_px(23.))
-                            .text_size(ui_text(11.))
-                            .text_color(palette.rgb(MUTED))
-                            .text_ellipsis()
-                            .child(
-                                tree.path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string(),
-                            ),
-                    )
-                    .when(tree.is_locked || missing, |d| {
-                        d.child(
-                            div()
-                                .text_size(ui_text(11.))
-                                .text_color(palette.rgb(0xe4bb79))
-                                .child(if missing {
-                                    "경로가 없습니다"
-                                } else {
-                                    "잠긴 워크트리"
-                                }),
-                        )
-                    }),
-            );
-        }
-        panel = panel.child(list);
-        panel.into_any_element()
+        self.render_graph_sidebar(cx)
     }
 
-    fn render_comparison(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = Palette::new(cx);
-        let mode = self.snapshot().map(|s| &s.compare);
-        let draft = self.base_input.read(cx).value();
-        let pending = matches!(mode,Some(CompareMode::Branch(base)) if base.as_str()!=draft.trim());
-        div()
-            .h(ui_px(42.))
-            .flex_none()
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(palette.rgb(LINE))
-            .child(
-                Button::new("uncommitted")
-                    .label("미커밋")
-                    .ghost()
-                    .small()
-                    .selected(matches!(mode, Some(CompareMode::Uncommitted)))
-                    .tooltip("HEAD와 현재 파일 비교: staged + unstaged")
-                    .on_click(cx.listener(|this, _, w, cx| this.compare(false, w, cx))),
-            )
-            .child(
-                Button::new("branch-compare")
-                    .label("브랜치 변경")
-                    .ghost()
-                    .small()
-                    .selected(matches!(mode, Some(CompareMode::Branch(_))))
-                    .on_click(cx.listener(|this, _, w, cx| this.compare(true, w, cx))),
-            )
-            .child(
-                div()
-                    .w(ui_px(145.))
-                    .child(Input::new(&self.base_input).small()),
-            )
-            .child(
-                Button::new("apply-base")
-                    .label(if pending { "적용 *" } else { "적용" })
-                    .ghost()
-                    .small()
-                    .disabled(self.loading || draft.trim().is_empty())
-                    .tooltip("입력한 기준 브랜치를 적용합니다. Enter로도 적용할 수 있습니다.")
-                    .on_click(cx.listener(|this, _, window, cx| this.compare(true, window, cx))),
-            )
-            .child(
-                div()
-                    .max_w(ui_px(260.))
-                    .text_ellipsis()
-                    .text_size(ui_text(11.))
-                    .text_color(palette.rgb(MUTED))
-                    .child(match mode {
-                        Some(CompareMode::Branch(base)) => {
-                            format!("적용됨: {base} 공통 조상 → 현재 파일")
-                        }
-                        _ => "적용됨: HEAD → 현재 파일".into(),
-                    }),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("analysis")
-                    .label(if self.navigation.is_some() {
-                        "코드 탐색 켜짐"
-                    } else {
-                        "코드 탐색"
-                    })
-                    .icon(IconName::Waypoints)
-                    .ghost()
-                    .small()
-                    .disabled(self.current.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if this.navigation.is_some() {
-                            this.stop_analysis(cx);
-                            this.status = "코드 탐색 중지됨".into();
-                        } else {
-                            this.trust_prompt = true;
-                        }
-                        cx.notify();
-                    })),
-            )
-            .into_any_element()
+    fn code_analysis_control(&self, cx: &mut Context<Self>) -> Button {
+        Button::new("analysis")
+            .label(if self.navigation.is_some() {
+                "코드 탐색 켜짐"
+            } else {
+                "코드 탐색"
+            })
+            .icon(IconName::Waypoints)
+            .ghost()
+            .small()
+            .disabled(self.current.is_none())
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this.navigation.is_some() {
+                    this.stop_analysis(cx);
+                    this.status = "코드 탐색 중지됨".into();
+                } else {
+                    this.trust_prompt = true;
+                }
+                cx.notify();
+            }))
     }
 
     fn render_reader(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2501,6 +2057,7 @@ impl Pokarak {
                     .text_size(ui_text(11.))
                     .child(path.to_string_lossy().to_string()),
             )
+            .child(self.code_analysis_control(cx))
             .child(
                 Button::new("diff")
                     .label("변경")
@@ -3017,7 +2574,14 @@ impl Render for Pokarak {
             .opening_path
             .as_ref()
             .or(self.current.as_ref())
-            .map(|p| p.to_string_lossy().to_string())
+            .map(|p| {
+                let path = p.to_string_lossy();
+                if self.opening_path.is_none() && !self.git_history.active {
+                    format!("{path}  ·  HEAD → 현재 파일")
+                } else {
+                    path.to_string()
+                }
+            })
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
         #[cfg(target_os = "macos")]
         let body = self.with_terminal_dock(body, window);
@@ -3069,7 +2633,6 @@ impl Render for Pokarak {
             .child(self.render_toolbar(window, cx))
             .children(self.update_banner(cx))
             .children(self.code_drafts_banner(cx))
-            .when(self.opening_path.is_none() && self.current.is_some() && !self.git_history.active,|d|d.child(self.render_comparison(cx)))
             .when(self.opening_path.is_none() && self.external_change,|d|d.child(div().h(ui_px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(ui_text(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")
                 .child(Button::new("apply-refresh").label("갱신").ghost().small().on_click(cx.listener(|this,_,w,cx|this.refresh(w,cx))))))

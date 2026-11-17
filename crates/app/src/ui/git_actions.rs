@@ -1,4 +1,4 @@
-//! Explicit Git actions; branch-sidebar selection remains comparison-only.
+//! Explicit Git actions; sidebar selection navigates without mutating Git.
 mod contextual;
 mod worktree_manager;
 use super::*;

@@ -1188,6 +1188,14 @@ impl Pokarak {
                 .and_then(|c| c.extension_enabled.get(&id))
                 .copied()
                 .unwrap_or(true);
+            let app_enabled = extension.enabled
+                && self
+                    .prefs
+                    .options
+                    .get("extensions.enabled")
+                    .and_then(|value| value.get(&id))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
             let global_id = id.clone();
             let project_id = id.clone();
             let tree_id = id.clone();
@@ -1225,7 +1233,7 @@ impl Pokarak {
                         .child(
                             Checkbox::new(SharedString::from(format!("ext-global-{id}")))
                                 .label("앱에서 사용")
-                                .checked(extension.enabled)
+                                .checked(app_enabled)
                                 .disabled(self.execution.busy)
                                 .on_click(cx.listener(move |app, value, w, cx| {
                                     app.change_extension(

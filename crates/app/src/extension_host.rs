@@ -866,7 +866,9 @@ pub fn run_builtin_spring() -> i32 {
             Ok(r) => r,
             Err(_) => return 2,
         };
-        let result = if request.api_version == HOST_API_VERSION {
+        let result = if semver(&request.api_version)
+            .is_ok_and(|(major, minor, _)| major == 1 && minor == 0)
+        {
             spring_response(&request)
         } else {
             Err(anyhow::anyhow!("호환되지 않는 API"))

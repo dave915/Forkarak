@@ -27,6 +27,9 @@ impl GitOperations {
             (1..=1000).contains(&limit),
             "Choose a reflog limit between 1 and 1000"
         );
+        if self.branch_commit("HEAD")?.is_none() {
+            return Ok(vec![]);
+        }
         let count = format!("--max-count={limit}");
         let bytes = self.metadata(&[
             "log",

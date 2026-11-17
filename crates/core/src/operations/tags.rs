@@ -33,6 +33,7 @@ impl GitOperations {
             "-c",
             &mirror,
             "push",
+            "--progress",
             "--no-force",
             "--no-follow-tags",
             "--no-prune",

@@ -89,6 +89,7 @@ impl GitOperations {
             "-c",
             "push.autoSetupRemote=false",
             "push",
+            "--progress",
             "--no-force",
             "--no-follow-tags",
             "--no-prune",

@@ -306,6 +306,7 @@ impl GitOperations {
                 let spec = format!("+refs/heads/*:refs/remotes/{remote}/*");
                 self.checked(&[
                     "fetch",
+                    "--progress",
                     "--no-tags",
                     "--no-prune-tags",
                     if *prune { "--prune" } else { "--no-prune" },
@@ -325,6 +326,7 @@ impl GitOperations {
                     "-c",
                     &mirror,
                     "push",
+                    "--progress",
                     "--no-force",
                     "--no-follow-tags",
                     "--no-prune",
@@ -347,6 +349,7 @@ impl GitOperations {
                 let reference = format!("refs/heads/{remote_branch}");
                 let fetched = self.checked(&[
                     "fetch",
+                    "--progress",
                     "--no-tags",
                     "--no-prune",
                     "--no-prune-tags",

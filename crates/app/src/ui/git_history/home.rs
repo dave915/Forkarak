@@ -359,22 +359,26 @@ impl Pokarak {
                     let file = &changed_files[index];
                     let path = file.path.clone();
                     let (status, _) = file_status(&file.status);
-                    let label = format!("{status}  {}", visible(&path.to_string_lossy()));
+                    let display_path = visible(&path.to_string_lossy());
                     let target = target.clone();
-                    file_icons::file_button(("history-file", index), &path, label.clone(), cx)
-                        .small()
-                        .disabled(busy)
-                        .on_click(move |_, window, cx| {
-                            let _ = target.update(cx, |app, cx| {
-                                app.load_history_file(path.clone(), window, cx)
-                            });
-                        })
-                        .ghost()
-                        .h(px(29.))
-                        .w_full()
-                        .justify_start()
-                        .tooltip(label)
-                        .selected(selected.as_ref() == Some(&file.path))
+                    file_icons::changed_file_button(
+                        ("history-file", index),
+                        &path,
+                        status,
+                        display_path,
+                        cx,
+                    )
+                    .small()
+                    .disabled(busy)
+                    .on_click(move |_, window, cx| {
+                        let _ = target.update(cx, |app, cx| {
+                            app.load_history_file(path.clone(), window, cx)
+                        });
+                    })
+                    .ghost()
+                    .h(px(29.))
+                    .w_full()
+                    .selected(selected.as_ref() == Some(&file.path))
                 })
                 .collect::<Vec<_>>()
         })

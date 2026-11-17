@@ -63,6 +63,30 @@ pub(super) fn file_button(
         .child(div().min_w_0().text_ellipsis().child(label))
 }
 
+pub(super) fn changed_file_button(
+    id: impl Into<ElementId>,
+    path: &Path,
+    status: &'static str,
+    display_path: String,
+    cx: &App,
+) -> Button {
+    let label = format!("{status} {display_path}");
+    let row = div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap_1()
+        .text_left()
+        .child(icon_for_path(path, cx))
+        .child(div().w(px(14.)).flex_none().child(status))
+        .child(div().flex_1().min_w_0().text_ellipsis().child(display_path));
+    Button::new(id)
+        .accessibility_label(label.clone())
+        .tooltip(label)
+        .child(row)
+}
+
 #[cfg(test)]
 mod tests {
     use super::THEME;

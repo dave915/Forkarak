@@ -385,15 +385,15 @@ impl Pokarak {
                         let status = match file.status { FileStatus::Added|FileStatus::Untracked=>"A",FileStatus::Deleted=>"D",FileStatus::Renamed=>"R",FileStatus::Conflicted=>"U",_=>"M" };
                         // Debug spelling escapes newlines and invalid UTF-8. The
                         // original PathBuf, never this label, reaches Git argv.
-                        let label = format!("{status} {}", display_path(&file.path));
-                        let tip = file.old_path.as_ref().map(|old|format!("{} → {}",display_path(old),display_path(&file.path))).unwrap_or_else(||label.clone());
+                        let name = display_path(&file.path);
+                        let rename_tip = file.old_path.as_ref().map(|old| format!("{} → {name}", display_path(old)));
                         let side=if stage {Side::Unstaged}else{Side::Staged};
                         let selected = app.commit_ui.selected.as_ref()==Some(&file.path) && app.commit_ui.side==Some(side);
                         let target=weak.clone();
                         rows = rows.child(div().flex().items_center().gap_1()
-                            .child(file_icons::file_button((if stage {"work-file"}else{"index-file"},ix),&path,label,cx).small().disabled(disabled)
+                            .child(file_icons::changed_file_button((if stage {"work-file"}else{"index-file"},ix),&path,status,name,cx).small().disabled(disabled)
                                 .on_click(move |_,w,cx|{let _=target.update(cx,|app,cx|app.select_index_preview(path.clone(),side,w,cx));})
-                                .selected(selected).tooltip(tip).flex_1().min_w_0().justify_start().overflow_hidden())
+                                .selected(selected).when_some(rename_tip, |button, tip| button.tooltip(tip)).flex_1().min_w_0().overflow_hidden())
                             .child(commit_button(&weak,(if stage {"stage-file"}else{"unstage-file"},ix),if stage {"Stage"}else{"Unstage"},disabled,move |app,w,cx|app.change_commit_index(stage,StageScope::Files(paths.clone()),w,cx))));
                     }
                 }

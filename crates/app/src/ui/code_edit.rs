@@ -723,7 +723,9 @@ impl CodeEdits {
     }
 
     pub(super) fn saving_in(&self, root: &Path) -> bool {
-        self.buffers.values().any(|buffer| buffer.draft.key.root == root && buffer.saving)
+        self.buffers
+            .values()
+            .any(|buffer| buffer.draft.key.root == root && buffer.saving)
     }
 
     fn buffer(&self, root: &Path, path: &Path) -> Option<&Buffer> {

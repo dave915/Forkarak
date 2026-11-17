@@ -547,7 +547,11 @@ mod tests {
         assert!(detail.contains("알 수 없음"));
         assert!(detail.contains("기록 없음"));
         sync.upstream.as_mut().unwrap().branch = "refs/tags/v1".into();
-        assert!(network_defaults(&state, &sync, Some("main")).branch.is_empty());
+        assert!(
+            network_defaults(&state, &sync, Some("main"))
+                .branch
+                .is_empty()
+        );
         sync.upstream = None;
         assert!(network_defaults(&state, &sync, Some("main")).set_upstream);
     }

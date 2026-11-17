@@ -1,7 +1,5 @@
 //! Code inspects working files against the worktree's explicitly applied base.
-use super::{
-    FileRevision, Path, PathBuf, Pokarak, Position, ReadingPoint, Session, Snapshot,
-};
+use super::{FileRevision, Path, PathBuf, Pokarak, Position, ReadingPoint, Session, Snapshot};
 
 pub(super) struct PendingFile {
     pub root: PathBuf,

@@ -1527,12 +1527,7 @@ impl Pokarak {
         cx.notify();
     }
 
-    fn select_reader_mode(
-        &mut self,
-        code: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn select_reader_mode(&mut self, code: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.toggle_code(code, cx);
         if !code {
             // Explicit Diff/side-by-side selection must leave the hidden code
@@ -2177,7 +2172,9 @@ impl Pokarak {
             .overflow_hidden()
             .child(tabs)
             .child(head)
-            .when(!code, |reader| reader.children(diff.and_then(|doc| self.diff_reading_controls(doc, false, cx))))
+            .when(!code, |reader| {
+                reader.children(diff.and_then(|doc| self.diff_reading_controls(doc, false, cx)))
+            })
             .when(code, |d| d.child(self.code_edit_controls(path, cx)))
             .children(self.code_draft_notice(path, cx))
             .when(deleted && code && !dirty, |d| {

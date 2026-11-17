@@ -49,6 +49,10 @@ impl Focusable for TerminalDock {
 }
 impl EventEmitter<DockAction> for TerminalDock {}
 impl TerminalDock {
+    pub(crate) fn has_running_shell(&self) -> bool {
+        self.shell.as_ref().is_some_and(|shell| !shell.exited())
+    }
+
     pub fn new(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut dock = Self {
             root,

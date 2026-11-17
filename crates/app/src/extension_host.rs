@@ -549,6 +549,7 @@ impl ExtensionHost {
             })
     }
     /// Call on a background executor. No activation before an explicit trusted capability use.
+    #[allow(clippy::too_many_arguments)] // Preserve the shared extension invocation contract.
     pub fn invoke(
         &self,
         extension: &InstalledExtension,

@@ -1816,12 +1816,11 @@ impl Pokarak {
             .collect();
         self.result_title = title.clone();
         self.prepare_result_rows(cx);
-        if self.result_surface == result_presentation::Surface::Files {
-            if let Some(root) = &self.current
-                && let Some(session) = self.sessions.get_mut(root)
-            {
-                session.saved.hide_files = false;
-            }
+        if self.result_surface == result_presentation::Surface::Files
+            && let Some(root) = &self.current
+            && let Some(session) = self.sessions.get_mut(root)
+        {
+            session.saved.hide_files = false;
         }
         self.result_semantic = result.semantic;
         self.result_title = title;
@@ -1951,10 +1950,10 @@ impl Pokarak {
         }
         self.show_code_view(window, cx);
         self.text_search = text;
-        if let Some(root) = &self.current {
-            if let Some(session) = self.sessions.get_mut(root) {
-                session.saved.hide_files = false;
-            }
+        if let Some(root) = &self.current
+            && let Some(session) = self.sessions.get_mut(root)
+        {
+            session.saved.hide_files = false;
         }
         if !text && let Some(root) = &self.current {
             self.sessions.get_mut(root).unwrap().saved.all_files = true;

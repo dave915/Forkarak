@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise packaging and installation against signed disposable app fixtures."""
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,9 @@ import unittest
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
+spec = importlib.util.spec_from_file_location("language_fixtures", ROOT / "scripts/language-resource-fixtures.py")
+language_fixtures = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(language_fixtures)
 
 
 class DistributionTests(unittest.TestCase):
@@ -43,9 +47,14 @@ class DistributionTests(unittest.TestCase):
         )
         cls.binary = cls.base / "stub"
         subprocess.run(["/usr/bin/cc", "-arch", "arm64", "-mmacosx-version-min=13.0", str(cfile), "-o", str(cls.binary)], check=True, capture_output=True)
+        runtime_c = cls.base / "runtime.c"
+        runtime_c.write_text('#include <stdio.h>\nint main(void){puts("authored-java-runtime");return 0;}\n')
+        runtime = cls.base / "authored-java"
+        subprocess.run(["/usr/bin/cc", "-arch", "arm64", "-mmacosx-version-min=13.0", str(runtime_c), "-o", str(runtime)], check=True, capture_output=True)
+        cls.language_resources = language_fixtures.create_fixture(cls.base / "authored-language-tools", runtime)
         result = subprocess.run(
             ["/bin/bash", str(cls.source / "scripts/release-macos.sh"), "--version", "v0.1.0", "--binary", str(cls.binary)],
-            capture_output=True, text=True, env={**os.environ, "SIGNING_IDENTITY": "", "NOTARY_KEYCHAIN_PROFILE": ""},
+            capture_output=True, text=True, env={**os.environ, "SIGNING_IDENTITY": "", "NOTARY_KEYCHAIN_PROFILE": "", "FORKARAK_LANGUAGE_RESOURCES": str(cls.language_resources)},
         )
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -99,7 +108,7 @@ else:
         self.log = self.case / "curl.log"
         self.release = self.case / "release"
         shutil.copytree(self.good_release, self.release)
-        self.env = {**os.environ, "HOME": str(self.home), "PATH": str(self.mockbin) + ":" + os.environ["PATH"], "FORKARAK_FIXTURE_RELEASE": str(self.release), "FORKARAK_CURL_LOG": str(self.log)}
+        self.env = {**os.environ, "HOME": str(self.home), "PATH": str(self.mockbin) + ":" + os.environ["PATH"], "FORKARAK_FIXTURE_RELEASE": str(self.release), "FORKARAK_CURL_LOG": str(self.log), "FORKARAK_LANGUAGE_RESOURCES": str(self.language_resources)}
 
     def install(self, *args, expected=0):
         result = subprocess.run(["/bin/bash", str(self.source / "scripts/install.sh"), *args], capture_output=True, text=True, env=self.env)
@@ -525,6 +534,64 @@ else:
             tar.add(app, arcname="Forkarak.app")
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (self.release / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n")
+
+    def test_installed_then_relocated_runtime_uses_manifest_with_finder_path(self):
+        self.env["PATH"] = str(self.mockbin) + ":/usr/bin:/bin:/usr/sbin:/sbin"
+        self.env["DEVELOPER_DIR"] = str(self.case / "no-developer-tools")
+        self.install()
+        relocated = self.case / "Relocated 한글 Apps/Local Forkarak.app"
+        relocated.parent.mkdir()
+        self.app.rename(relocated)
+        resources = relocated / "Contents/Resources"
+        root = resources / "language-tools"
+        manifest = language_fixtures.preparation_module().validate(root)
+        command = manifest["packages"][0]["servers"][0]
+        args = [arg.replace("{resources}", str(resources)) for arg in command["args"]]
+        result = subprocess.run([command["program"], *args], env={"PATH": "/usr/bin:/bin", "DEVELOPER_DIR": self.env["DEVELOPER_DIR"]}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "authored-java-runtime")
+        for file in ("legal/NOTICE.md", "legal/SOURCE-ACCESS.md", "sources/authored-source.txt"):
+            self.assertIn(file, (root / "SHA256SUMS").read_text())
+        subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(relocated)], check=True, capture_output=True)
+
+    def test_invalid_language_resources_preserve_existing_app_and_runtime(self):
+        self.install()
+        previous_app = (self.app / "Contents/MacOS/forkarak").read_bytes()
+        previous_cli = self.cli.read_bytes()
+        previous_runtime = (self.app / "Contents/Resources/language-tools/java/runtime/Contents/Home/bin/java").read_bytes()
+        for kind in ("corrupt", "missing", "unsafe-manifest", "missing-tree"):
+            with self.subTest(kind=kind):
+                app = self.case / kind / "Forkarak.app"
+                shutil.copytree(self.source / "dist/Forkarak.app", app)
+                root = app / "Contents/Resources/language-tools"
+                if kind == "corrupt":
+                    (root / "legal/NOTICE.md").write_text("corrupt notice")
+                elif kind == "missing":
+                    (root / "sources/authored-source.txt").unlink()
+                elif kind == "missing-tree":
+                    shutil.rmtree(root)
+                else:
+                    path = root / "manifest.json"
+                    j = json.loads(path.read_text())
+                    j["packages"][0]["servers"][0]["args"][3] = "{resources}/language-tools/../../MacOS/forkarak"
+                    path.write_text(json.dumps(j))
+                    language_fixtures.preparation_module().inventory(root)
+                self.repack(app)
+                result = self.install(expected=1)
+                self.assertIn("anguage resource", result.stderr)
+                self.assertEqual((self.app / "Contents/MacOS/forkarak").read_bytes(), previous_app)
+                self.assertEqual(self.cli.read_bytes(), previous_cli)
+                self.assertEqual((self.app / "Contents/Resources/language-tools/java/runtime/Contents/Home/bin/java").read_bytes(), previous_runtime)
+
+    def test_packaging_rejects_corrupt_prepared_resources_without_replacing_bundle(self):
+        bad = self.case / "bad-prepared"
+        shutil.copytree(self.language_resources, bad)
+        (bad / "legal/NOTICE.md").unlink()
+        app = self.source / "dist/Forkarak.app"
+        before = (app / "Contents/_CodeSignature/CodeResources").read_bytes()
+        result = subprocess.run(["/bin/bash", str(self.source / "scripts/package-macos.sh"), "--binary", str(self.binary)], env={**self.env, "FORKARAK_LANGUAGE_RESOURCES": str(bad)}, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((app / "Contents/_CodeSignature/CodeResources").read_bytes(), before)
 
     def test_invalid_bundle_and_version_rejected(self):
         for key, value in (("CFBundleIdentifier", "invalid.app"), ("CFBundleShortVersionString", "9.9.9")):

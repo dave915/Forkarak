@@ -24,6 +24,10 @@ Usage: ./scripts/package-macos.sh [--debug] [--run] [--binary PATH]
 Output: dist/Forkarak.app (dev.pokarak.app, version from Cargo.toml)
 Honors CARGO_TARGET_DIR. Ad-hoc signing by default. Set SIGNING_IDENTITY to a
 Developer ID Application identity for hardened-runtime signing with timestamp.
+Java support and complete source/notice resources are prepared by default using
+verified pinned artifacts. Build-side Python 3 and curl are required. Cache:
+~/Library/Caches/Forkarak/language-resources. FORKARAK_LANGUAGE_RESOURCES may name
+an already prepared language-tools directory (also used by authored tests).
 USAGE
 }
 
@@ -92,6 +96,9 @@ cleanup() {
             return 1
         }
     fi
+    # Vendor legal/source files may intentionally be read-only. This is our
+    # mktemp staging tree; never prompt in a watched terminal during cleanup.
+    /bin/chmod -R u+w "$WORK_DIR"
     /bin/rm -r "$WORK_DIR"
 }
 trap cleanup EXIT
@@ -114,7 +121,20 @@ mkdir -p "$CONTENTS/Resources/vscode-icons"
 /usr/bin/ditto "$ROOT_DIR/assets/fonts" "$CONTENTS/Resources/fonts"
 /bin/cp "$ROOT_DIR/scripts/install.sh" "$ROOT_DIR/scripts/update-handoff.sh" "$CONTENTS/Resources/"
 /bin/cp "$ROOT_DIR/scripts/forkarak-cli.sh" "$CONTENTS/Resources/forkarak-cli.sh"
+/bin/cp "$ROOT_DIR/scripts/verify-language-resources.sh" "$CONTENTS/Resources/"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
+
+command -v python3 >/dev/null 2>&1 || fail 'Python 3 is required on the build machine to prepare language resources'
+if [[ -n "${FORKARAK_LANGUAGE_RESOURCES:-}" ]]; then
+    python3 "$ROOT_DIR/scripts/prepare-language-resources.py" --verify "$FORKARAK_LANGUAGE_RESOURCES"
+    /usr/bin/ditto "$FORKARAK_LANGUAGE_RESOURCES" "$CONTENTS/Resources/language-tools"
+else
+    python3 "$ROOT_DIR/scripts/prepare-language-resources.py" --resources "$CONTENTS/Resources"
+fi
+python3 "$ROOT_DIR/scripts/sign-language-resources.py" "$CONTENTS/Resources/language-tools"
+# Nested signing changes code bytes; compute the shipping inventory afterwards.
+python3 "$ROOT_DIR/scripts/prepare-language-resources.py" --inventory "$CONTENTS/Resources/language-tools"
+/bin/bash "$ROOT_DIR/scripts/verify-language-resources.sh" "$CONTENTS/Resources/language-tools"
 
 if [[ -n "${SIGNING_IDENTITY:-}" ]]; then
     /usr/bin/codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$STAGED_APP"
@@ -122,7 +142,7 @@ else
     echo 'Signing ad hoc: this is not Apple Developer ID signing or notarization.'
     /usr/bin/codesign --force --sign - "$STAGED_APP"
 fi
-/usr/bin/codesign --verify --strict "$STAGED_APP"
+/usr/bin/codesign --verify --strict --deep "$STAGED_APP"
 if [[ -e "$APP_PATH" ]]; then /bin/mv "$APP_PATH" "$WORK_DIR/previous.app"; fi
 /bin/mv "$STAGED_APP" "$APP_PATH"
 echo "Packaged: $APP_PATH"

@@ -103,7 +103,7 @@ rm -f "$installer"
 
 ## 새 버전 게시 절차 (유지보수용)
 
-현재 작업에서는 아래 절차를 실행하지 않는다.
+현재 작업에서는 아래 절차를 실행하지 않는다. 아래 `v0.4.0`은 현재 workspace 버전에 맞춘 예시이며, 실제 게시 버전은 `Cargo.toml`의 workspace 버전과 반드시 일치해야 한다. 릴리스 스크립트는 불일치하면 거부한다.
 
 `.github/workflows/release.yml`은 `vX.Y.Z` 태그를 push하면 macOS arm64 환경에서 설치 테스트, 앱 테스트, release 빌드와 패키징을 수행한다. 성공한 산출물만 새 릴리스로 게시한다. 같은 태그의 기존 릴리스 파일은 자동으로 덮어쓰지 않는다. GitHub 문서의 [최신 릴리스 다운로드 URL](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)을 사용하므로 설치 명령은 버전마다 바뀌지 않는다.
 
@@ -112,8 +112,8 @@ rm -f "$installer"
 3. 해당 커밋에 같은 버전의 태그를 붙이고 원격으로 보낸다.
 
 ```sh
-git tag v0.2.0
-git push origin HEAD v0.2.0
+git tag v0.4.0
+git push origin HEAD v0.4.0
 ```
 
 워크플로 수동 실행은 이미 존재하는 태그를 받는다. 실패한 빌드를 고친 경우 새 버전을 사용하고, 기존 릴리스가 없는 단순 일시 오류는 같은 태그의 워크플로를 재실행한다.
@@ -131,8 +131,8 @@ git push origin HEAD v0.2.0
 로컬 패키징은 다음과 같다. `--binary`는 기존 arm64 실행 파일을 사용하며 다시 빌드하지 않는다.
 
 ```sh
-./scripts/release-macos.sh --version v0.2.7
-./scripts/release-macos.sh --version v0.2.7 --binary /absolute/path/to/pokarak
+./scripts/release-macos.sh --version v0.4.0
+./scripts/release-macos.sh --version v0.4.0 --binary /absolute/path/to/pokarak
 python3 scripts/test-distribution.py
 ```
 
@@ -145,7 +145,7 @@ python3 scripts/test-distribution.py
 ```sh
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 NOTARY_KEYCHAIN_PROFILE='forkarak-notary' \
-./scripts/release-macos.sh --version v0.2.7
+./scripts/release-macos.sh --version v0.4.0
 ```
 
 이 경로는 hardened runtime과 timestamp로 서명하고, `notarytool submit --wait` 성공 후 ticket을 staple한 번들을 배포한다. 실제 계정이 없어 공증 경로의 Apple 서비스 연동은 검증되지 않았다. 기본 GitHub 워크플로는 인증서와 공증 자격 증명을 구성하지 않으며 ad-hoc 빌드를 게시한다. 공증에는 [Apple이 요구하는 Developer ID 서명](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)이 필요하다. 공증한 앱에도 일반적인 첫 실행 확인창은 남을 수 있다.

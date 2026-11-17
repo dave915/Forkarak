@@ -524,6 +524,7 @@ impl Pokarak {
         ) else {
             return;
         };
+        let _symbol_start = target.symbol_start;
         let position = LspPosition {
             line: target.position.line,
             character: target.position.character,

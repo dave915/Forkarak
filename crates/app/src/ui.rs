@@ -21,6 +21,7 @@ mod patch;
 mod reader_navigation;
 mod result_presentation;
 mod reviewed_files;
+mod search_options;
 mod settings;
 mod split_diff;
 mod syntax;
@@ -1763,13 +1764,8 @@ impl Pokarak {
         let expected_query = query.clone();
         let search_root = root.clone();
         let exclusions =
-            self.prefs
-                .option_string(self.current_project.as_deref(), "search.exclude", "");
-        let patterns: Vec<String> = exclusions
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(str::to_owned)
-            .collect();
+            search_options::Exclusions::read(&self.prefs, self.current_project.as_deref());
+        let patterns = exclusions.patterns();
         let task = cx.background_spawn(async move {
             let locations =
                 pokarak_core::search_with_exclusions(&search_root, &query, 300, &patterns)?;
@@ -1782,11 +1778,7 @@ impl Pokarak {
                 if this.navigation_request != token
                     || this.current.as_ref() != Some(&root)
                     || this.filter.trim() != expected_query
-                    || this.prefs.option_string(
-                        this.current_project.as_deref(),
-                        "search.exclude",
-                        "",
-                    ) != exclusions
+                    || !exclusions.is_current(&this.prefs, this.current_project.as_deref())
                 {
                     return;
                 }

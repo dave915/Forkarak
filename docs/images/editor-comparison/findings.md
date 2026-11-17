@@ -1,5 +1,11 @@
 # Actual editor comparison
 
+기본 Code 화면은 VS Code·Zed Classic보다 아직 복잡해 보입니다. Forkarak·VS Code는 실제 1440×900, Zed는 1536×1096이며 기본 테마·글꼴을 유지했습니다. Git 사이드바 숨김은 별도의 사용자 배치이고 기본 비교를 대체하지 않습니다.
+
+[전체 비교 PNG](comparison.png) · [상단 확대 PNG](toolbar-comparison.png) · [사이드바 숨김 선택 배치](forkarak-sidebar-hidden-labeled.png) · [촬영 조건 JSON](capture-conditions.json)
+
+![실제 세 앱의 상단 구성 확대. Forkarak Code 기본 패널, VS Code Chat 닫음, Zed Classic과 각각의 실제 창 크기를 표시합니다.](toolbar-comparison.png)
+
 Forkarak's default Code view still looks busier than VS Code standard editor and Zed Classic. Its compact reader commands do stay on one row, but four horizontal bands remain: app titlebar, worktree/comparison context, file tabs, and reader commands. The other two use titlebar/tabs/file-path bands with less command density.
 
 Forkarak also keeps two left columns: Git worktree/ref navigation plus the file tree. VS Code has one Explorer beside its activity bar; Zed Classic has one project panel. Forkarak repeats project/worktree and comparison context in the title/context row, sidebar and footer. This benefits immediate Git access but costs visual simplicity and code width. Its stable code colors and readable default font are strengths; they do not establish a cleaner overall layout.

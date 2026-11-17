@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 static SESSION_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -18,6 +18,10 @@ pub fn explicit_session_dir() -> Option<&'static std::path::Path> {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    /// Application defaults. Unknown keys are retained for forward compatibility.
+    pub options: HashMap<String, serde_json::Value>,
+    /// Project overrides, stored outside inspected repositories.
+    pub project_options: HashMap<PathBuf, HashMap<String, serde_json::Value>>,
     pub theme: crate::theme::ThemeChoice,
     #[serde(flatten)]
     pub display: crate::theme::DisplaySettings,
@@ -122,6 +126,37 @@ pub fn config_path() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/pokarak/session.json")
 }
 impl Preferences {
+    pub fn option_bool(&self, root: Option<&Path>, key: &str, fallback: bool) -> bool {
+        self.option(root, key).and_then(serde_json::Value::as_bool).unwrap_or(fallback)
+    }
+
+    pub fn option_usize(&self, root: Option<&Path>, key: &str, fallback: usize) -> usize {
+        self.option(root, key).and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok()).unwrap_or(fallback)
+    }
+
+    pub fn option_string(&self, root: Option<&Path>, key: &str, fallback: &str) -> String {
+        self.option(root, key).and_then(serde_json::Value::as_str).unwrap_or(fallback).to_owned()
+    }
+
+    pub fn option(&self, root: Option<&Path>, key: &str) -> Option<&serde_json::Value> {
+        root.and_then(|root| self.project_options.get(root)).and_then(|options| options.get(key))
+            .or_else(|| self.options.get(key))
+    }
+
+    pub fn set_option(&mut self, root: Option<&Path>, key: &str, value: serde_json::Value) {
+        match root {
+            Some(root) => self.project_options.entry(root.to_path_buf()).or_default(),
+            None => &mut self.options,
+        }.insert(key.to_owned(), value);
+    }
+
+    pub fn remove_option(&mut self, root: Option<&Path>, key: &str) {
+        if let Some(options) = root.map(|root| self.project_options.get_mut(root)).unwrap_or(Some(&mut self.options)) {
+            options.remove(key);
+        }
+    }
+
     pub fn load() -> Self {
         std::fs::read(config_path())
             .ok()

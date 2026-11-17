@@ -22,6 +22,7 @@ pub(super) struct CommitUi {
     preview: Option<Entity<EditorState>>,
     side: Option<Side>,
     partial: Option<Arc<PartialPreview>>,
+    split: Option<Entity<split_diff::SplitDiff>>,
     marked: std::collections::BTreeSet<usize>,
     messages: HashMap<PathBuf, Entity<EditorState>>,
     error: Option<String>,
@@ -47,6 +48,7 @@ impl Pokarak {
         self.commit_ui.selected = None;
         self.commit_ui.preview = None;
         self.commit_ui.partial = None;
+        self.commit_ui.split = None;
         self.commit_ui.marked.clear();
         self.commit_ui.side = None;
         self.read_commit_index(window, cx);
@@ -101,6 +103,7 @@ impl Pokarak {
                         app.commit_ui.side=None;
                         app.commit_ui.preview=None;
                         app.commit_ui.partial=None;
+                        app.commit_ui.split=None;
                         app.commit_ui.marked.clear();
                         if let Some((path,side))=selected {app.select_index_preview(path,side,window,cx);}
                     }
@@ -126,6 +129,7 @@ impl Pokarak {
         self.commit_ui.selected = Some(path.clone());
         self.commit_ui.side=Some(side);
         self.commit_ui.partial=None;
+        self.commit_ui.split=None;
         self.commit_ui.marked.clear();
         self.commit_ui.preview = None;
         let root = snapshot.root.clone();
@@ -361,9 +365,12 @@ impl Pokarak {
             let mut preview = div().v_flex().flex_1().min_w_0().gap_1()
                 .child(div().flex().items_center().justify_between()
                     .child(div().text_size(px(12.)).child(if app.commit_ui.side == Some(Side::Unstaged) {"Index → 작업 파일"} else {"HEAD → Index"}))
+                    .child(commit_button(&weak,"index-split",if app.commit_ui.split.is_some() {"줄 선택"} else {"좌우"},disabled || app.commit_ui.partial.is_none(),|app,_,cx|app.toggle_partial_split(cx)))
                     .child(commit_button(&weak,"apply-selected-lines",format!("선택 {}줄 {}",app.commit_ui.marked.len(),if app.commit_ui.side==Some(Side::Unstaged) {"Stage"} else {"Unstage"}),disabled || app.commit_ui.marked.is_empty() || app.commit_ui.partial.is_none(),|app,w,cx|app.apply_line_selection(w,cx)))
                     .child(commit_button(&weak,"index-refresh","새로고침",app.git_is_busy() || app.commit_ui.reading,|app,w,cx|app.read_commit_index(w,cx))));
-            preview = if let Some(partial)=&app.commit_ui.partial {
+            preview = if let Some(split)=&app.commit_ui.split {
+                preview.child(div().h(px(204.)).min_w_0().child(split.clone()))
+            } else if let Some(partial)=&app.commit_ui.partial {
                 preview.child(app.partial_rows(partial.clone(),weak.clone(),Palette::new(cx)))
             } else if let Some(editor)=&app.commit_ui.preview {
                 preview.child(Editor::new(editor).aria_label("실제 Git index diff 미리보기").readonly(true).h(px(204.)).font_family("JetBrains Mono").text_size(px(12.)))

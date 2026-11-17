@@ -53,6 +53,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           path: |
+            dist/release/Pokarak-macos-arm64.zip
             dist/release/pokarak-macos-arm64.tar.gz
             dist/release/SHA256SUMS
             dist/release/install.sh
@@ -87,13 +88,13 @@ jobs:
           ```sh
           /bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh | /bin/bash'
           ```
-          설치 후 앱은 `~/Applications/포카락.app`, 명령은 `~/.local/bin/pokarak`에 있습니다.
+          설치 후 앱은 `~/Applications/Pokarak.app`, 명령은 `~/.local/bin/pokarak`에 있습니다.
           업데이트: `~/.local/bin/pokarak update`
 
           이번 빌드는 ad-hoc 서명이며 Apple Developer ID 공증은 없습니다.
           NOTES
           gh release create "$RELEASE_TAG" \
-            release/pokarak-macos-arm64.tar.gz release/SHA256SUMS \
+            release/Pokarak-macos-arm64.zip release/pokarak-macos-arm64.tar.gz release/SHA256SUMS \
             release/install.sh release/source-revision.txt \
             --verify-tag --latest --title "Pokarak $RELEASE_TAG" \
             --notes-file release/notes.md

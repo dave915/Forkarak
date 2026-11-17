@@ -94,10 +94,10 @@ actions!(
 pub fn bind_keys(cx: &mut App) {
     cx.on_action(git_actions::request_app_quit);
     cx.set_menus([
-        Menu::new("포카락").items([
+        Menu::new("Pokarak").items([
             MenuItem::action("설정…", OpenSettings),
             MenuItem::separator(),
-            MenuItem::action("포카락 종료", Quit),
+            MenuItem::action("Pokarak 종료", Quit),
         ]),
         Menu::new("파일").items([
             MenuItem::action("저장소 열기…", OpenRepository),

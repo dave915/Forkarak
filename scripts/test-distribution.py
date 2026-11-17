@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -78,7 +79,7 @@ else:
         self.home.mkdir()
         self.appdir = self.home / "Applications"
         self.bindir = self.home / ".local/bin"
-        self.app = self.appdir / "포카락.app"
+        self.app = self.appdir / "Pokarak.app"
         self.cli = self.bindir / "pokarak"
         self.log = self.case / "curl.log"
         self.release = self.case / "release"
@@ -103,16 +104,63 @@ else:
         self.assertTrue(all("/releases/download/v0.1.0/" in u for u in urls[1:]))
         self.assertFalse((self.appdir / ".pokarak-install.lock").exists())
 
+    def test_finder_download_has_english_bundle_and_display_names(self):
+        with zipfile.ZipFile(self.release / "Pokarak-macos-arm64.zip") as archive:
+            plist = plistlib.loads(archive.read("Pokarak.app/Contents/Info.plist"))
+            self.assertFalse(any("포카락.app/" in entry for entry in archive.namelist()))
+        self.assertEqual(plist["CFBundleDisplayName"], "Pokarak")
+        self.assertEqual(plist["CFBundleName"], "Pokarak")
+        self.assertEqual(plist["CFBundleIdentifier"], "dev.pokarak.app")
+
+    def test_migrate_korean_bundle_after_successful_download(self):
+        self.install()
+        legacy = self.appdir / "포카락.app"
+        self.app.rename(legacy)
+        old_cli = self.cli.read_bytes()
+        self.env["POKARAK_FAIL_DOWNLOAD"] = "1"
+        self.install(expected=22)
+        self.assertTrue(legacy.is_dir())
+        self.assertFalse(self.app.exists())
+        self.assertEqual(self.cli.read_bytes(), old_cli)
+        del self.env["POKARAK_FAIL_DOWNLOAD"]
+        self.install()
+        self.assertFalse(legacy.exists())
+        self.assertTrue(self.app.is_dir())
+        self.assertEqual(subprocess.check_output([str(self.cli), "--version"], text=True).strip(), "0.1.0")
+
+    def test_running_korean_bundle_is_preserved(self):
+        self.install()
+        legacy = self.appdir / "포카락.app"
+        self.app.rename(legacy)
+        process = subprocess.Popen([str(legacy / "Contents/MacOS/pokarak"), "--hold"])
+        try:
+            time.sleep(0.1)
+            self.assertIn("Quit Pokarak", self.install(expected=1).stderr)
+            self.assertTrue(legacy.is_dir())
+            self.assertFalse(self.app.exists())
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+
+    def test_unrelated_korean_bundle_is_preserved(self):
+        legacy = self.appdir / "포카락.app"
+        legacy.mkdir(parents=True)
+        marker = legacy / "user file"
+        marker.write_text("keep")
+        self.install()
+        self.assertTrue(self.app.is_dir())
+        self.assertEqual(marker.read_text(), "keep")
+
     def test_update_preserves_custom_directories(self):
         self.appdir = self.case / "custom apps"
         self.bindir = self.case / "custom commands"
-        self.app = self.appdir / "포카락.app"
+        self.app = self.appdir / "Pokarak.app"
         self.cli = self.bindir / "pokarak"
         self.install("--app-dir", str(self.appdir), "--bin-dir", str(self.bindir))
         marker = self.app / "old-installation-marker"
         marker.write_text("old")
-        new_app = self.case / "new release/포카락.app"
-        shutil.copytree(self.source / "dist/포카락.app", new_app)
+        new_app = self.case / "new release/Pokarak.app"
+        shutil.copytree(self.source / "dist/Pokarak.app", new_app)
         plist = new_app / "Contents/Info.plist"
         data = plistlib.loads(plist.read_bytes())
         data.update(CFBundleShortVersionString="0.1.1", CFBundleVersion="0.1.1")
@@ -124,7 +172,7 @@ else:
         self.assertFalse(marker.exists())
         self.assertTrue(self.cli.exists())
         self.assertEqual(subprocess.check_output([str(self.cli), "--version"], env=self.env, text=True).strip(), "0.1.1")
-        self.assertFalse((self.home / "Applications/포카락.app").exists())
+        self.assertFalse((self.home / "Applications/Pokarak.app").exists())
 
     def test_checksum_failure_preserves_app_and_launcher(self):
         self.install()
@@ -155,8 +203,8 @@ else:
     def test_invalid_bundle_and_version_rejected(self):
         for key, value in (("CFBundleIdentifier", "invalid.app"), ("CFBundleShortVersionString", "9.9.9")):
             with self.subTest(key=key):
-                app = self.case / key / "포카락.app"
-                shutil.copytree(self.source / "dist/포카락.app", app)
+                app = self.case / key / "Pokarak.app"
+                shutil.copytree(self.source / "dist/Pokarak.app", app)
                 plist = app / "Contents/Info.plist"
                 data = plistlib.loads(plist.read_bytes())
                 data[key] = value
@@ -188,7 +236,7 @@ else:
     def test_unsafe_archive_rejected_before_extraction(self):
         archive = self.release / "pokarak-macos-arm64.tar.gz"
         with tarfile.open(archive, "w:gz") as tar:
-            info = tarfile.TarInfo("포카락.app/Contents/escape")
+            info = tarfile.TarInfo("Pokarak.app/Contents/escape")
             info.type = tarfile.SYMTYPE
             info.linkname = "/tmp"
             tar.addfile(info)
@@ -248,8 +296,8 @@ else:
         invalid.chmod(0o755)
         for name, binary in (("intel", intel), ("invalid", invalid)):
             with self.subTest(executable=name):
-                app = self.case / name / "포카락.app"
-                shutil.copytree(self.source / "dist/포카락.app", app)
+                app = self.case / name / "Pokarak.app"
+                shutil.copytree(self.source / "dist/Pokarak.app", app)
                 shutil.copy2(binary, app / "Contents/MacOS/pokarak")
                 self.repack(app, sign=False)
                 self.assertIn("not an arm64 Mach-O executable", self.install(expected=1).stderr)

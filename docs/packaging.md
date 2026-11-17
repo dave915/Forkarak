@@ -15,7 +15,7 @@
 `--run`은 `--debug` 또는 `--binary`와 함께 쓸 수 있다. `--debug`와 `--binary`는 함께 쓰지 않는다. `--binary`의 상대 경로는 명령을 실행한 디렉터리를 기준으로 한다.
 
 ```text
-dist/포카락.app/
+dist/Pokarak.app/
   Contents/
     Info.plist
     PkgInfo
@@ -28,7 +28,7 @@ dist/포카락.app/
     _CodeSignature/          로컬 ad-hoc 서명
 ```
 
-메타데이터 원본은 `assets/macos/Info.plist`다. 이름 `포카락`, 식별자 `dev.pokarak.app`, 최소 OS `13.0`, 선호 아키텍처 `arm64`를 선언한다. 버전은 패키징할 때 `Cargo.toml`의 `workspace.package.version`으로 갱신한다. 실행 파일은 `pokarak`이다. 앱의 창 제목은 별도로 앱 코드에서 지정한다. CLI 설치·업데이트 스크립트도 `Contents/Resources/`에 포함된다.
+메타데이터 원본은 `assets/macos/Info.plist`다. 이름 `Pokarak`, 식별자 `dev.pokarak.app`, 최소 OS `13.0`, 선호 아키텍처 `arm64`를 선언한다. 버전은 패키징할 때 `Cargo.toml`의 `workspace.package.version`으로 갱신한다. 실행 파일은 `pokarak`이다. 앱의 창 제목은 별도로 앱 코드에서 지정한다. CLI 설치·업데이트 스크립트도 `Contents/Resources/`에 포함된다.
 
 ## 빌드와 교체 과정
 
@@ -57,10 +57,10 @@ dist/포카락.app/
 
 ```sh
 ./scripts/package-macos.sh --binary /absolute/path/to/pokarak
-plutil -lint "dist/포카락.app/Contents/Info.plist"
-lipo -archs "dist/포카락.app/Contents/MacOS/pokarak"
-codesign --verify --strict --verbose=2 "dist/포카락.app"
-open "dist/포카락.app"
+plutil -lint "dist/Pokarak.app/Contents/Info.plist"
+lipo -archs "dist/Pokarak.app/Contents/MacOS/pokarak"
+codesign --verify --strict --verbose=2 "dist/Pokarak.app"
+open "dist/Pokarak.app"
 ```
 
 Dock/Finder의 이름·아이콘, 한글 표시, 폰트 굵기와 코드 서체, 실제 저장소 열기를 별도로 확인한다. 화면 검증 항목은 DESIGN.md를 따른다. 기본 생성 결과는 ad-hoc 서명이며 Apple 공증이 없다. GitHub 릴리스용 압축, CLI 설치·업데이트, 선택적 Developer ID 서명·공증 경로는 [배포 문서](distribution.md)를 참고한다. DMG 생성과 앱 내부 자동 업데이트는 지원하지 않는다.

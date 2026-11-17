@@ -1,7 +1,7 @@
 #!/bin/bash
 # Installed with a small preamble containing its app and command locations.
 set -euo pipefail
-APP_PATH="${POKARAK_APP_PATH:-${HOME}/Applications/포카락.app}"
+APP_PATH="${POKARAK_APP_PATH:-${HOME}/Applications/Pokarak.app}"
 BIN_DIR="${POKARAK_BIN_DIR:-${HOME}/.local/bin}"
 fail() { echo "Error: $*" >&2; exit 1; }
 

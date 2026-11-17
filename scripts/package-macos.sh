@@ -17,11 +17,11 @@ Usage: ./scripts/package-macos.sh [--debug] [--run] [--binary PATH]
 
   (default)      cargo build --release for aarch64-apple-darwin, then package
   --debug        Build the debug profile instead
-  --run          Open dist/포카락.app after packaging
+  --run          Open dist/Pokarak.app after packaging
   --binary PATH  Package an existing arm64 executable; skip all Cargo commands
   -h, --help     Show this help
 
-Output: dist/포카락.app (dev.pokarak.app, version from Cargo.toml)
+Output: dist/Pokarak.app (dev.pokarak.app, version from Cargo.toml)
 Honors CARGO_TARGET_DIR. Ad-hoc signing by default. Set SIGNING_IDENTITY to a
 Developer ID Application identity for hardened-runtime signing with timestamp.
 USAGE
@@ -74,7 +74,7 @@ ARCHS="$(/usr/bin/lipo -archs "$BINARY")"
 [[ "$ARCHS" == arm64 ]] || fail "Expected an arm64-only executable, found: $ARCHS"
 
 DIST_DIR="$ROOT_DIR/dist"
-APP_PATH="$DIST_DIR/포카락.app"
+APP_PATH="$DIST_DIR/Pokarak.app"
 mkdir -p "$DIST_DIR"
 [[ ! -L "$APP_PATH" ]] || fail "Refusing to replace a symlink: $APP_PATH"
 if [[ -e "$APP_PATH" ]]; then
@@ -96,7 +96,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-STAGED_APP="$WORK_DIR/포카락.app"
+STAGED_APP="$WORK_DIR/Pokarak.app"
 CONTENTS="$STAGED_APP/Contents"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 /bin/cp "$BINARY" "$CONTENTS/MacOS/pokarak"

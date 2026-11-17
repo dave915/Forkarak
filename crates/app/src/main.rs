@@ -16,7 +16,7 @@ fn main() {
             .ok_or_else(|| anyhow::anyhow!("터미널 세션이 없습니다"))
             .and_then(|socket| terminal::exec_shell(&socket));
         if let Err(error) = result {
-            eprintln!("포카락: {error:#}");
+            eprintln!("Pokarak: {error:#}");
             std::process::exit(1);
         }
         return;
@@ -84,11 +84,11 @@ fn main() {
                 },
                 cx,
                 move |window, cx| {
-                    window.set_window_title("포카락");
+                    window.set_window_title("Pokarak");
                     cx.new(|cx| ui::Pokarak::new(initial.clone(), window, cx))
                 },
             )
-            .expect("포카락 창을 열 수 없습니다");
+            .expect("Pokarak 창을 열 수 없습니다");
             cx.activate(true);
         });
 }

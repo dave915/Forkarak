@@ -2,7 +2,7 @@
 
 <p align="center">여러 워크트리의 변경 사항을 커밋 그래프에서 살펴보고, 원하는 줄만 골라 커밋하는 macOS용 Git 클라이언트입니다.</p>
 
-<p align="center"><a href="#설치"><strong>macOS 설치 방법</strong></a> · <a href="https://github.com/dave915/pokarak/releases/latest">최신 릴리스</a></p>
+<p align="center"><a href="#설치"><strong>macOS 설치 방법</strong></a> · <a href="https://github.com/dave915/pokarak/releases/latest/download/Pokarak-macos-arm64.zip">Pokarak.app 다운로드</a> · <a href="https://github.com/dave915/pokarak/releases/latest">최신 릴리스</a></p>
 
 ![포카락 전체 화면. 상단에 Git 작업 아이콘과 터미널 버튼이 있고, 커밋 그래프 아래에는 선택한 배송비 변경 커밋의 좌우 diff가 열려 있습니다.](docs/images/graph-toolbar.png)
 
@@ -16,7 +16,9 @@ Apple Silicon Mac(M1 이상), macOS 13 이상에서 터미널에 다음 명령�
 /bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh | /bin/bash'
 ```
 
-`~/Applications/포카락.app`을 열고 **⌘O**로 저장소를 선택하세요. 터미널에서는 저장소 폴더에서 `~/.local/bin/pokarak .`으로 열 수 있습니다. 업데이트할 때는 앱을 종료한 뒤 `~/.local/bin/pokarak update`를 실행하세요.
+기존에 `포카락.app`으로 설치했다면 앱을 종료하고 위 설치 명령을 한 번 실행하세요. 같은 위치의 앱 이름이 `Pokarak.app`으로 바뀝니다.
+
+`~/Applications/Pokarak.app`을 열고 **⌘O**로 저장소를 선택하세요. 터미널에서는 저장소 폴더에서 `~/.local/bin/pokarak .`으로 열 수 있습니다. 업데이트할 때는 앱을 종료한 뒤 `~/.local/bin/pokarak update`를 실행하세요.
 
 ## 주요 기능
 

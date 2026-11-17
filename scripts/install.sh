@@ -3,9 +3,10 @@
 set -euo pipefail
 REPOSITORY="dave915/pokarak"
 ASSET="pokarak-macos-arm64.tar.gz"
-APP_NAME="포카락.app"
+APP_NAME="Pokarak.app"
+ARCHIVE_NAME="포카락.app"
 # APFS/HFS+ directory enumeration commonly returns decomposed Korean names.
-APP_NAME_NFD="포카락.app"
+ARCHIVE_NAME_NFD="포카락.app"
 APP_DIR="${HOME}/Applications"
 BIN_DIR="${HOME}/.local/bin"
 TAG=""
@@ -28,7 +29,7 @@ usage() {
 Usage: bash install.sh [--version vX.Y.Z] [--app-dir DIRECTORY] [--bin-dir DIRECTORY]
 
 Installs the latest public dave915/pokarak release for Apple Silicon macOS 13+.
-Defaults: ~/Applications/포카락.app and ~/.local/bin/pokarak.
+Defaults: ~/Applications/Pokarak.app and ~/.local/bin/pokarak.
 Use `pokarak update` to update the same installation. Quit the app first.
 No sudo, Rust, Xcode, Homebrew, or GitHub login is needed.
 USAGE
@@ -58,6 +59,7 @@ mkdir -p "$APP_DIR" "$BIN_DIR"
 APP_DIR="$(cd "$APP_DIR" && pwd -P)"
 BIN_DIR="$(cd "$BIN_DIR" && pwd -P)"
 APP_PATH="$APP_DIR/$APP_NAME"
+LEGACY_PATH="$APP_DIR/$ARCHIVE_NAME"
 CLI_PATH="$BIN_DIR/pokarak"
 LOCK_DIR="$APP_DIR/.pokarak-install.lock"
 mkdir "$LOCK_DIR" 2>/dev/null || fail "Another install is active, or a stale lock exists at $LOCK_DIR"
@@ -68,6 +70,9 @@ cleanup() {
         if "$APP_PUBLISHED" && [[ -e "$APP_PATH" ]]; then /bin/rm -rf "$APP_PATH"; fi
         if [[ -d "$WORK_DIR/previous.app" ]]; then
             /bin/mv "$WORK_DIR/previous.app" "$APP_PATH" || { echo "Previous app preserved at $WORK_DIR/previous.app" >&2; return 1; }
+        fi
+        if [[ -d "$WORK_DIR/legacy.app" ]]; then
+            /bin/mv "$WORK_DIR/legacy.app" "$LEGACY_PATH" || { echo "Previous app preserved at $WORK_DIR/legacy.app" >&2; return 1; }
         fi
         if [[ -n "$CLI_BACKUP" && -e "$CLI_BACKUP" ]]; then
             /bin/mv -f "$CLI_BACKUP" "$CLI_PATH" || { echo "Previous CLI preserved at $CLI_BACKUP" >&2; return 1; }
@@ -94,13 +99,18 @@ fi
 if [[ -e "$CLI_PATH" ]]; then
     [[ -f "$CLI_PATH" ]] && /usr/bin/grep -Fq '# Pokarak managed launcher' "$CLI_PATH" || fail "Refusing to replace an unrelated command: $CLI_PATH"
 fi
-app_running() {
-    # Match the executable's inode rather than its spelling. ps can retain a
-    # /var alias while pwd returns /private/var, and macOS normalizes Unicode.
-    [[ -f "$APP_PATH/Contents/MacOS/pokarak" ]] &&
-        /usr/sbin/lsof -t -a -d txt "$APP_PATH/Contents/MacOS/pokarak" >/dev/null 2>&1
+managed_legacy_app() {
+    [[ -d "$LEGACY_PATH" && ! -L "$LEGACY_PATH" ]] &&
+        [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$LEGACY_PATH/Contents/Info.plist" 2>/dev/null)" == dev.pokarak.app ]]
 }
-app_running && fail "Quit Pokarak at $APP_PATH, then retry the update"
+require_app_closed() {
+    # Match the executable's inode even when the caller used a normalized path.
+    if [[ -f "$1/Contents/MacOS/pokarak" ]] && /usr/sbin/lsof -t -a -d txt "$1/Contents/MacOS/pokarak" >/dev/null 2>&1; then
+        fail "Quit Pokarak at $1, then retry the update"
+    fi
+}
+require_app_closed "$APP_PATH"
+if managed_legacy_app; then require_app_closed "$LEGACY_PATH"; fi
 WORK_DIR="$(mktemp -d "$APP_DIR/.pokarak-install.XXXXXX")"
 download() { curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 600 --retry 2 "$1" --output "$2"; }
 if [[ -z "$TAG" ]]; then
@@ -123,14 +133,14 @@ ACTUAL="$(/usr/bin/shasum -a 256 "$WORK_DIR/$ASSET")"
 /usr/bin/awk 'substr($0,1,1) != "-" && substr($0,1,1) != "d" { exit 1 }' "$WORK_DIR/types" || fail "Archive contains links or special files"
 while IFS= read -r entry; do
     case "$entry" in
-        "$APP_NAME"|"$APP_NAME/"|"$APP_NAME/"*|"$APP_NAME_NFD"|"$APP_NAME_NFD/"|"$APP_NAME_NFD/"*) ;;
+        "$ARCHIVE_NAME"|"$ARCHIVE_NAME/"|"$ARCHIVE_NAME/"*|"$ARCHIVE_NAME_NFD"|"$ARCHIVE_NAME_NFD/"|"$ARCHIVE_NAME_NFD/"*) ;;
         *) fail "Unexpected archive entry: $entry" ;;
     esac
     case "/${entry%/}/" in *'/../'*|*'/./'*|*'//'*) fail "Unsafe archive entry: $entry" ;; esac
 done < "$WORK_DIR/entries"
 mkdir "$WORK_DIR/unpacked"
 /usr/bin/tar -xzf "$WORK_DIR/$ASSET" -C "$WORK_DIR/unpacked"
-STAGED_APP="$WORK_DIR/unpacked/$APP_NAME"
+STAGED_APP="$WORK_DIR/unpacked/$ARCHIVE_NAME"
 [[ -d "$STAGED_APP" && ! -L "$STAGED_APP" ]] || fail "Release does not contain an app bundle"
 # Our bundles have no symlinks. Refuse any before traversing signed resources.
 [[ -z "$(/usr/bin/find "$STAGED_APP" -type l -print -quit)" ]] || fail "Release bundle contains a symlink"
@@ -154,7 +164,11 @@ CLI_STAGE="$(mktemp "$BIN_DIR/.pokarak-cli.XXXXXX")"
     /bin/cat "$APP_STAGE/Contents/Resources/pokarak-cli.sh"
 } > "$CLI_STAGE"
 /bin/chmod 755 "$CLI_STAGE"
-app_running && fail "Quit Pokarak before updating; existing installation was preserved"
+require_app_closed "$APP_PATH"
+if managed_legacy_app; then
+    require_app_closed "$LEGACY_PATH"
+    /bin/mv "$LEGACY_PATH" "$WORK_DIR/legacy.app"
+fi
 if [[ -e "$APP_PATH" ]]; then /bin/mv "$APP_PATH" "$WORK_DIR/previous.app"; fi
 if [[ -e "$CLI_PATH" ]]; then
     CLI_BACKUP="$(mktemp "$BIN_DIR/.pokarak-previous.XXXXXX")"

@@ -12,7 +12,9 @@
 ~/.local/bin/pokarak /path/to/project
 ```
 
-기본 경로는 `~/Applications/포카락.app`과 `~/.local/bin/pokarak`이다. `sudo`나 Xcode, Rust, Homebrew, GitHub 계정이 필요하지 않다. 설치 프로그램은 앱을 자동으로 실행하거나 셸 설정을 수정하지 않는다. `~/.local/bin`을 PATH에 추가하면 `pokarak`으로 실행할 수 있다.
+기본 경로는 `~/Applications/Pokarak.app`과 `~/.local/bin/pokarak`이다. `sudo`나 Xcode, Rust, Homebrew, GitHub 계정이 필요하지 않다. 설치 프로그램은 앱을 자동으로 실행하거나 셸 설정을 수정하지 않는다. `~/.local/bin`을 PATH에 추가하면 `pokarak`으로 실행할 수 있다.
+
+v0.2.0까지의 `포카락.app`은 앱을 종료한 뒤 위 설치 명령을 한 번 실행하면 `Pokarak.app`으로 이동한다. 사용자 지정 경로는 기존과 같은 `--app-dir`, `--bin-dir`을 지정한다.
 
 앱을 종료하고 업데이트한다. 설치 때 지정한 앱·명령 경로를 다시 사용한다.
 
@@ -25,7 +27,7 @@
 ```sh
 installer="$(mktemp)"
 curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh -o "$installer" && \
-  /bin/bash "$installer" --version v0.2.0 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
+  /bin/bash "$installer" --version v0.2.1 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
 rm -f "$installer"
 ```
 
@@ -56,7 +58,8 @@ git push origin HEAD v0.2.0
 
 | 파일 | 내용 |
 | --- | --- |
-| `pokarak-macos-arm64.tar.gz` | `포카락.app`, 번들 리소스, 설치·업데이트 CLI |
+| `Pokarak-macos-arm64.zip` | Finder에서 압축을 풀어 사용하는 `Pokarak.app` |
+| `pokarak-macos-arm64.tar.gz` | 기존 CLI와 호환되는 설치용 아카이브 |
 | `SHA256SUMS` | 다운로드 무결성 검사 |
 | `install.sh` | Mac 기본 도구만 사용하는 설치 프로그램 |
 | `source-revision.txt` | 빌드한 Git 커밋 |
@@ -64,8 +67,8 @@ git push origin HEAD v0.2.0
 로컬 패키징은 다음과 같다. `--binary`는 기존 arm64 실행 파일을 사용하며 다시 빌드하지 않는다.
 
 ```sh
-./scripts/release-macos.sh --version v0.2.0
-./scripts/release-macos.sh --version v0.2.0 --binary /absolute/path/to/pokarak
+./scripts/release-macos.sh --version v0.2.1
+./scripts/release-macos.sh --version v0.2.1 --binary /absolute/path/to/pokarak
 python3 scripts/test-distribution.py
 ```
 
@@ -78,7 +81,7 @@ python3 scripts/test-distribution.py
 ```sh
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 NOTARY_KEYCHAIN_PROFILE='pokarak-notary' \
-./scripts/release-macos.sh --version v0.2.0
+./scripts/release-macos.sh --version v0.2.1
 ```
 
 이 경로는 hardened runtime과 timestamp로 서명하고, `notarytool submit --wait` 성공 후 ticket을 staple한 번들을 배포한다. 실제 계정이 없어 공증 경로의 Apple 서비스 연동은 검증되지 않았다. 기본 GitHub 워크플로는 인증서와 공증 자격 증명을 구성하지 않으며 ad-hoc 빌드를 게시한다. 공증에는 [Apple이 요구하는 Developer ID 서명](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)이 필요하다. 공증한 앱에도 일반적인 첫 실행 확인창은 남을 수 있다.

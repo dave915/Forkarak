@@ -3,10 +3,12 @@ mod activity;
 mod branch_forms;
 mod contextual;
 mod history;
+mod ignore;
 mod network;
 mod recovery;
 mod review;
 mod source;
+mod tags;
 mod worktree_manager;
 use super::*;
 pub(in crate::ui) use contextual::branch_context_menu;
@@ -91,6 +93,9 @@ pub(super) enum Page {
     CompareRefs,
     Reflog,
     Undo,
+    Ignore,
+    CreateTag,
+    PushTag,
 }
 
 impl Pokarak {
@@ -439,8 +444,17 @@ impl Pokarak {
                     ],
                 ),
                 ("진단", vec![("Git 작업 기록…", Page::Log)]),
-
-
+                (
+                    "제외 규칙",
+                    vec![("미추적 파일에서 .gitignore 편집…", Page::Ignore)],
+                ),
+                (
+                    "태그",
+                    vec![
+                        ("태그 만들기…", Page::CreateTag),
+                        ("태그 하나 Push…", Page::PushTag),
+                    ],
+                ),
 
                 (
                     "저장소 Git 설정",
@@ -505,6 +519,9 @@ impl Pokarak {
             Page::CompareRefs => self.show_ref_comparison(state.root.clone(), window, cx),
             Page::Reflog => self.open_reflog(state.root.clone(), window, cx),
             Page::Undo => self.open_undo_last_commit(state.root.clone(), window, cx),
+            Page::Ignore => self.open_ignore_picker(state.root.clone(), window, cx),
+            Page::CreateTag => self.show_tag_create(state.root.clone(), window, cx),
+            Page::PushTag => self.open_tag_push(state, window, cx),
         }
     }
 

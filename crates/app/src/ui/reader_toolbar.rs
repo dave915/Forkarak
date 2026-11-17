@@ -151,14 +151,7 @@ impl Pokarak {
             Review => self.toggle_reviewed_file(window, cx),
             PreviousChange => self.jump_diff_hunk(false, window, cx),
             NextChange => self.jump_diff_hunk(true, window, cx),
-            Whitespace => {
-                if let Some(session) = self.current.as_ref().and_then(|r| self.sessions.get_mut(r))
-                {
-                    session.saved.diff_hide_whitespace = !session.saved.diff_hide_whitespace;
-                    self.persist(cx);
-                    cx.notify();
-                }
-            }
+            Whitespace => self.toggle_diff_whitespace(cx),
             History | Blame => {
                 if let Some(target) = self.reader_inspection_target() {
                     self.inspect_file(
@@ -548,7 +541,12 @@ impl Pokarak {
         }
         bar.child(
             toolbar::toolbar_icon("reader-more", IconName::Ellipsis, "파일 명령 더 보기")
-                .tooltip("파일 명령 더 보기 · 보기, 이력, 코드 지원, 편집, 파일 관리")
+                .tooltip(if !view.code && self.hides_diff_whitespace() {
+                    "파일 명령 더 보기 · 공백 변경 숨김 적용 중"
+                } else {
+                    "파일 명령 더 보기 · 보기, 이력, 코드 지원, 편집, 파일 관리"
+                })
+                .selected(!view.code && self.hides_diff_whitespace())
                 .disabled(!menu_available)
                 .on_click(cx.listener(move |app, _, w, cx| open_more(app, w, cx))),
         )

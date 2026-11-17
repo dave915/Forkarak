@@ -353,7 +353,8 @@ impl Pokarak {
         if diff.binary || diff.truncated {
             return None;
         }
-        let empty = diff.view(self.hides_diff_whitespace()).hunks.is_empty();
+        let hidden = self.hides_diff_whitespace();
+        let empty = diff.view(hidden).hunks.is_empty();
         Some(
             div()
                 .id(if history {
@@ -388,8 +389,32 @@ impl Pokarak {
                         cx.listener(|app, _, window, cx| app.jump_diff_hunk(true, window, cx)),
                     ),
                 )
+                .when(hidden, |bar| {
+                    bar.child(
+                        toolbar::toolbar_icon(
+                            "hide-whitespace-diff",
+                            IconName::EyeOff,
+                            "공백 변경 숨김 적용 중",
+                        )
+                        .selected(true)
+                        .tooltip("공백 변경 숨김 적용 중 · 클릭하여 모든 변경 표시")
+                        .on_click(cx.listener(|app, _, _, cx| app.toggle_diff_whitespace(cx))),
+                    )
+                })
                 .into_any_element(),
         )
+    }
+
+    pub(super) fn toggle_diff_whitespace(&mut self, cx: &mut Context<Self>) {
+        if let Some(session) = self
+            .current
+            .as_ref()
+            .and_then(|root| self.sessions.get_mut(root))
+        {
+            session.saved.diff_hide_whitespace = !session.saved.diff_hide_whitespace;
+            self.persist(cx);
+            cx.notify();
+        }
     }
 
     pub(super) fn jump_diff_hunk(

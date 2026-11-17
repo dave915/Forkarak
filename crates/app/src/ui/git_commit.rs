@@ -39,6 +39,7 @@ pub(super) struct CommitUi {
     messages: HashMap<PathBuf, Entity<EditorState>>,
     error: Option<String>,
     submitted_message: Option<(PathBuf, String)>,
+    progress: Option<pokarak_core::operations::workflow::ProgressKind>,
 }
 
 fn commit_message_editor(
@@ -224,7 +225,13 @@ impl Pokarak {
         let token = self.commit_ui.request;
         let navigation = self.request;
         let target = root.clone();
-        let task = cx.background_spawn(async move { index::snapshot(&target) });
+        let task = cx.background_spawn(async move {
+            let snapshot = index::snapshot(&target)?;
+            let progress = pokarak_core::operations::GitOperations::open(&target)?
+                .in_progress()?
+                .map(|p| p.kind);
+            anyhow::Ok((snapshot, progress))
+        });
         cx.spawn_in(window, async move |view, cx| {
             let result = task.await;
             let _ = view.update_in(cx, |app, window, cx| {
@@ -246,7 +253,8 @@ impl Pokarak {
                     return;
                 }
                 match result {
-                    Ok(snapshot) => {
+                    Ok((snapshot, progress)) => {
+                        app.commit_ui.progress = progress;
                         let selected = app
                             .commit_ui
                             .next_selection(&snapshot.staged, &snapshot.unstaged);
@@ -462,6 +470,11 @@ impl Pokarak {
         if self.commit_disabled() {
             return;
         }
+        if self.commit_ui.progress.is_some() {
+            self.commit_ui.error = Some("진행 중인 Git 작업은 작업 상태의 ‘계속’ 또는 ‘중단’을 사용하세요. 일반 커밋과 이전 커밋 수정은 사용할 수 없습니다.".into());
+            cx.notify();
+            return;
+        }
         let Some(snapshot) = self.commit_ui.snapshot.clone() else {
             return;
         };
@@ -498,6 +511,11 @@ impl Pokarak {
 
     fn confirm_index_amend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.commit_disabled() {
+            return;
+        }
+        if self.commit_ui.progress.is_some() {
+            self.commit_ui.error = Some("진행 중인 Git 작업은 작업 상태의 ‘계속’ 또는 ‘중단’을 사용하세요. 일반 커밋과 이전 커밋 수정은 사용할 수 없습니다.".into());
+            cx.notify();
             return;
         }
         let Some(snapshot) = self.commit_ui.snapshot.clone() else {
@@ -570,7 +588,7 @@ fn preview_is_current(ui: &CommitUi, root: &Path, token: u64, generation: u64) -
         && ui.preview_request == token
         && ui.request == generation
 }
-fn display_path(path: &Path) -> String {
+pub(in crate::ui) fn display_path(path: &Path) -> String {
     match path
         .to_str()
         .filter(|text| !text.chars().any(char::is_control))

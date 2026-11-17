@@ -1,8 +1,10 @@
 //! Explicit Git actions; sidebar selection navigates without mutating Git.
+mod activity;
 mod branch_forms;
 mod contextual;
 mod history;
 mod network;
+mod source;
 mod worktree_manager;
 use super::*;
 pub(in crate::ui) use contextual::branch_context_menu;
@@ -29,6 +31,8 @@ pub(super) struct GitUi {
     history: HashMap<PathBuf, VecDeque<history::GitRecord>>,
     job_id: u64,
     started: Option<std::time::Instant>,
+    progress: Option<pokarak_core::operations::OperationProgress>,
+    live_editor: Option<(PathBuf, u64, Entity<EditorState>)>,
     sync: HashMap<PathBuf, network::SyncRead>,
     sync_request: u64,
 }
@@ -153,7 +157,14 @@ impl Pokarak {
             return;
         }
         self.persist(cx);
-        self.stop_analysis(cx);
+        // Invalidate in-flight navigation, retaining an explicitly enabled
+        // server until actual working-source identities have been compared.
+        self.navigation_request += 1;
+        if let Some(cancel) = self.cancellation.take() {
+            let _ = cancel.cancel();
+        }
+        self.navigating = false;
+        let had_analysis = self.navigation.is_some();
         self.request += 1;
         self.checking_changes = false;
         self.count_pending = false;
@@ -177,30 +188,42 @@ impl Pokarak {
         self.tick_git_elapsed(job_id, window, cx);
         let cancellation = OperationCancellation::default();
         self.git_ui.cancellation = Some(cancellation.clone());
+        let progress = pokarak_core::operations::OperationProgress::default();
+        self.git_ui.progress = Some(progress.clone());
         let job_root = root.clone();
         let mode = compare.clone();
         let task = cx.background_spawn(async move {
+            let before = had_analysis.then(|| source::stamp(&job_root)).transpose();
             let result = GitOperations::open(&job_root)
-                .map(|git| git.with_cancellation(cancellation.clone()))
+                .map(|git| {
+                    git.with_cancellation(cancellation.clone())
+                        .with_progress(progress)
+                })
                 .and_then(job);
             // Refresh even on failure: a fetch, hook, or timed-out operation may
             // have completed part of its work. Always inspect the original root.
-            let snapshot = if cancellation.is_cancelled() {
-                Err(anyhow::anyhow!(
-                    "Git 작업이 취소되었습니다. 저장소를 다시 열어 상태를 확인하세요."
-                ))
-            } else {
-                pokarak_core::snapshot(&job_root, &mode)
-            };
-            (result, snapshot)
+            // A cancelled command's handle cannot perform inspection. These
+            // independent reads always run, including partial failures.
+            let snapshot = pokarak_core::snapshot_current(&job_root, &mode);
+            let unchanged = !had_analysis || source::unchanged(before, source::stamp(&job_root));
+            (result, snapshot, unchanged)
         });
         cx.spawn_in(window, async move |view, cx| {
-            let (result, snapshot) = task.await;
+            let (result, snapshot, unchanged) = task.await;
             let _ = view.update_in(cx, |this, window, cx| {
+                if !activity::job_matches(&this.git_ui, &root, job_id) { return; }
+                this.drain_git_progress(window, cx);
+                this.git_ui.progress = None;
                 this.git_ui.busy = None;
                 this.git_ui.started = None;
                 history::finish(&mut this.git_ui.history, &root, job_id, &result);
                 this.git_ui.cancellation = None;
+                if !unchanged && this.current.as_ref() == Some(&root) {
+                    this.stop_analysis(cx);
+                    this.results = Arc::from([]);
+                    this.result_revisions.clear();
+                    this.results_open = false;
+                }
                 let succeeded = result.is_ok();
                 let sync_needs_refresh = snapshot.is_err() || this.request != token;
                 let mut completion = match result {
@@ -218,7 +241,7 @@ impl Pokarak {
                     },
                     Err(error) => GitCompletion {
                         status: format!("{label} 실패 — {}", root.display()),
-                        error: Some(format!("{label}\n워크트리: {}\n{error:#}\n\n{}\nGit 작업 기록에서 전체 출력을 확인하세요.", root.display(), history::error_help(&format!("{error:#}")).message)),
+                        error: Some(format!("{label}\n워크트리: {}\n{error:#}\n\n{}\nGit 작업 기록에서 전체 출력을 확인하세요.", root.display(), history::classified_help(pokarak_core::operations::errors::classify(&error)).message)),
                     },
                 };
                 if let Err(error) = &snapshot {
@@ -271,6 +294,8 @@ impl Pokarak {
                 }
                 this.finish_resolution_save(succeeded);
                 this.commit_job_finished(&root, succeeded, window, cx);
+                this.refresh_workflow_status(window, cx);
+                this.update_git_live_editor(window, cx);
                 cx.notify();
             });
         })
@@ -781,7 +806,7 @@ fn field(label: &'static str, input: &Entity<InputState>) -> Div {
         .v_flex()
         .gap_2()
         .child(div().font_weight(FontWeight::MEDIUM).child(label))
-        .child(Input::new(input).id(label))
+        .child(Input::new(input).id(label).aria_label(label))
 }
 
 fn select_field(label: &'static str, input: &Choice) -> Div {

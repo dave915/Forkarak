@@ -46,7 +46,11 @@ impl Pokarak {
         }
     }
 
-    pub(in crate::ui) fn render_git_graph(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(in crate::ui) fn render_git_graph(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let palette = Palette::new(cx);
         let ui = &self.git_history;
         let busy = history_disabled(self);
@@ -292,7 +296,7 @@ impl Pokarak {
         v_resizable("graph-detail-panes")
             .child(
                 resizable_panel()
-                    .size(px(310.))
+                    .size((window.viewport_size().height * 0.38).clamp(px(185.), px(330.)))
                     .size_range(px(150.)..px(1200.))
                     .child(graph),
             )
@@ -393,7 +397,11 @@ impl Pokarak {
                     .child(format!("변경 파일  {}", detail.files.len())),
             )
             .child(files);
-        let preview = if let Some(doc) = ui.document.as_ref().filter(|doc| !ui.code && self.prefs.split_diff && !doc.binary) {
+        let preview = if let Some(doc) = ui
+            .document
+            .as_ref()
+            .filter(|doc| !ui.code && self.prefs.split_diff && !doc.binary)
+        {
             doc.split(cx)
         } else if let Some(editor) = &ui.editor {
             Editor::new(editor)
@@ -442,11 +450,19 @@ impl Pokarak {
                         .selected(!ui.code && !self.prefs.split_diff),
                     )
                     .child(
-                        history_button(&weak, "history-split", "좌우", busy || binary, |app, _, cx| {
-                            app.set_split_diff(true);
-                            app.git_history.code = false;
-                            cx.notify();
-                        }).ghost().selected(!ui.code && self.prefs.split_diff),
+                        history_button(
+                            &weak,
+                            "history-split",
+                            "좌우",
+                            busy || binary,
+                            |app, _, cx| {
+                                app.set_split_diff(true);
+                                app.git_history.code = false;
+                                cx.notify();
+                            },
+                        )
+                        .ghost()
+                        .selected(!ui.code && self.prefs.split_diff),
                     )
                     .child(
                         history_button(

@@ -19,6 +19,7 @@ mod language_manager;
 mod language_tools;
 mod pane_visibility;
 mod patch;
+mod project_tabs;
 mod reader_navigation;
 mod reader_toolbar;
 mod result_presentation;
@@ -305,6 +306,7 @@ pub struct Pokarak {
     graph_fingerprint: Option<String>,
     count_pending: bool,
     projects: Vec<SavedProject>,
+    project_tabs: project_tabs::ProjectTabs,
     pending_history: Option<ReadingPoint>,
     pending_projects: VecDeque<PathBuf>,
     update_view: Option<(PathBuf, crate::prefs::UpdateView)>,
@@ -423,6 +425,9 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.cancel_project_drag(event, window, cx) {
+            return;
+        }
         let key = event.keystroke.key.as_str();
         if self.search_input.focus_handle(cx).is_focused(window) && !self.text_search {
             let rows = self.file_rows();
@@ -659,6 +664,7 @@ impl Pokarak {
             graph_fingerprint: None,
             count_pending: false,
             projects,
+            project_tabs: project_tabs::ProjectTabs::new(cx),
             pending_history: None,
             pending_projects,
             sessions: HashMap::new(),

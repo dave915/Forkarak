@@ -1,10 +1,7 @@
 use super::*;
 use git_actions::Page;
+use gpui_kit::component::TitleBar;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{
-    TitleBar,
-    tab::{Tab, TabBar},
-};
 
 impl Pokarak {
     pub(super) fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -347,80 +344,6 @@ impl Pokarak {
                         )
                     }),
             )
-    }
-
-    fn project_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> TabBar {
-        let palette = Palette::new(cx);
-        let active = self.active_project_index();
-        let state = window.use_keyed_state("project-tab-reveal", cx, |_, _| {
-            (None::<usize>, ScrollHandle::new())
-        });
-        let scroll = state.read(cx).1.clone();
-        if state.read(cx).0 != active {
-            state.update(cx, |state, _| state.0 = active);
-            if let Some(index) = active {
-                scroll.scroll_to_item(index);
-            }
-        }
-
-        TabBar::new("project-tabs")
-            .segmented()
-            .bg(palette.rgb(SIDE))
-            .small()
-            .min_w_0()
-            .flex_initial()
-            .menu(self.projects.len() > 1)
-            .max_width(ui_px(if window.viewport_size().width < ui_px(1180.) {
-                160.
-            } else {
-                200.
-            }))
-            .track_scroll(&scroll)
-            .when_some(active, |bar, index| bar.selected_index(index))
-            .children(self.projects.iter().enumerate().map(|(index, project)| {
-                let target = project.last_worktree.clone();
-                let close = project.root.clone();
-                let path = project.root.to_string_lossy().into_owned();
-                let label = project
-                    .root
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.clone());
-                // Tab::icon renders an icon-only tab. The prefix lets the label
-                // determine the width while keeping both actions visible.
-                Tab::new()
-                    .prefix(
-                        Icon::new(IconName::FolderGit2).size(ui_px(14.)).text_color(
-                            palette.rgb(if active == Some(index) { BLUE } else { MUTED }),
-                        ),
-                    )
-                    .label(label.clone())
-                    .aria_label(format!("프로젝트 {path}"))
-                    .tooltip(move |w, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(path.clone()).build(w, cx)
-                    })
-                    .suffix(
-                        Button::new(("close-project", index))
-                            .icon(
-                                Icon::new(IconName::X)
-                                    .size(ui_px(13.))
-                                    .text_color(palette.rgb(MUTED)),
-                            )
-                            .ghost()
-                            .xsmall()
-                            .accessibility_label(format!("{label} 프로젝트 닫기"))
-                            .tooltip(format!("{label} 프로젝트 닫기"))
-                            .on_click(cx.listener(move |app, _, w, cx| {
-                                cx.stop_propagation();
-                                app.close_project(close.clone(), w, cx);
-                            })),
-                    )
-                    .on_click(cx.listener(move |app, _, w, cx| {
-                        if app.opening_path.as_ref().or(app.current.as_ref()) != Some(&target) {
-                            app.open_repository(target.clone(), w, cx);
-                        }
-                    }))
-            }))
     }
 
     fn workspace_modes(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {

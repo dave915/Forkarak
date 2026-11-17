@@ -20,8 +20,10 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap().join("앱 언어 도구");
         let tools = ManagedTools::new(root.clone(), None).unwrap();
-        let mut manager = LanguageManager::default();
-        manager.tools = Ok(tools);
+        let mut manager = LanguageManager {
+            tools: Ok(tools),
+            ..LanguageManager::default()
+        };
         manager.refresh();
         Self {
             _temp: temp,
@@ -245,4 +247,55 @@ fn progress_uses_only_actual_bytes_and_handles_missing_http_totals() {
     p.total_bytes = Some(0);
     assert!(!bytes_label(&p).contains('%'));
     assert!(absolute_directory("relative".into()).is_err());
+}
+
+#[test]
+fn bundled_java_and_first_use_kotlin_status_remain_distinct_and_invalid_manifest_is_visible() {
+    let mut f = Fixture::new();
+    let resources = f._temp.path().join("Resources");
+    fs::create_dir_all(resources.join("language-tools")).unwrap();
+    let bin = resources.join("language-tools/java-fixture");
+    fs::write(&bin, "#!/bin/sh\nexit 99\n").unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut java = f.install_fixture();
+    // This authored package verifies app-side manifest discovery; it is never
+    // used to claim a real JDT/Kotlin install or runtime semantic capability.
+    java.servers[0].program = "{resources}/language-tools/java-fixture".into();
+    java.distribution = ToolDistribution::Bundled;
+    fs::remove_file(f.root.join("managed-tools.json")).unwrap();
+    let manifest = resources.join("language-tools/manifest.json");
+    fs::write(
+        &manifest,
+        serde_json::to_vec(&json!({"schemaVersion":1,"packages":[java]})).unwrap(),
+    )
+    .unwrap();
+    f.manager.tools = Ok(ManagedTools::new(f.root.clone(), Some(resources)).unwrap());
+    f.manager.refresh();
+    assert!(f.manager.ready("java"));
+    assert_eq!(
+        f.manager.statuses["java"]
+            .installed
+            .as_ref()
+            .unwrap()
+            .distribution,
+        ToolDistribution::Bundled
+    );
+    assert!(!f.manager.ready("kotlin"));
+    assert_eq!(
+        f.manager
+            .packages
+            .iter()
+            .find(|p| p.id == "kotlin")
+            .unwrap()
+            .distribution,
+        ToolDistribution::FirstUseDownload
+    );
+    fs::write(&manifest, "invalid bundled manifest").unwrap();
+    f.manager.refresh();
+    assert!(f.manager.error.as_ref().unwrap().contains("bundled"));
+    assert!(
+        !f.manager.ready("java"),
+        "cached bundle status must not enable continuation after a read failure"
+    );
+    assert!(!f.root.join("started").exists());
 }

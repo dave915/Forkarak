@@ -109,6 +109,7 @@ impl Pokarak {
                     " · 준비됨"
                 }
             ),
+            None if manager.error.is_some() => format!("{distribution} · 상태 확인 필요"),
             None => format!("{distribution} · 미설치"),
         };
         let (details_view, id) = (view.clone(), package.id.clone());

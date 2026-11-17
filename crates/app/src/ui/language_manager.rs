@@ -82,6 +82,12 @@ impl LanguageManager {
             Ok::<_, String>(())
         })();
         self.error = result.err();
+        if self.error.is_some() {
+            // A corrupt/unreadable manifest cannot leave a cached version marked
+            // ready or enable Continue. Failed updates with a valid old manifest
+            // still refresh normally and retain that active version.
+            self.statuses.clear();
+        }
     }
     fn progress(&self, package: &str) -> Option<InstallProgress> {
         self.running

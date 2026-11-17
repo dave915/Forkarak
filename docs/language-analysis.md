@@ -63,7 +63,7 @@ For Kotlin and JDT, the selected source's ancestor directories are checked insid
 - The selected import root supplies process cwd, LSP `rootUri`/`rootPath`, and workspace folders. For a monorepo it can be `worktree/backend` while `Navigator::root()` remains the canonical **worktree**. The public `{root}` argv token still means the canonical worktree; `{workspace}` remains the isolated temporary server state directory. Result filtering, stale-response guards, and instance isolation still use the worktree.
 - Independent nested builds have distinct clients. An external dependency source returned by a client remembers that client/configuration/import root, including when its language differs. If multiple clients return the same dependency path, the most recent result establishes its navigation origin. Another checkout of the same Git repository is still rejected.
 
-Kotlin cannot start without `allow_project_imports=true` (or the existing explicit `allowProjectImports` configuration). JDT's Maven/Gradle import settings remain disabled until that option is true, and automatic builds remain disabled. A supported build marker alone never grants trust. Gradle settings discovery is covered deterministically; real Gradle importing has not been verified.
+Kotlin cannot start without `allow_project_imports=true` (or the existing explicit `allowProjectImports` configuration). JDT's Maven/Gradle import settings remain disabled until that option is true, and automatic builds remain disabled. A supported build marker alone never grants trust. The Gradle fixture below verifies discovery of an enclosing settings project and cross-module navigation after an authorized import.
 
 ## Error and Output presentation
 
@@ -101,7 +101,13 @@ All fixtures were authored in temporary Git repositories, with source/JVM target
 
 JDT reference results explicitly include `JDT LS Java scope: Kotlin callers may be missing`. Kotlin-symbol references including Java callers were verified from a Kotlin source position; this does not establish Kotlin caller coverage when starting from a Java symbol through JDT. The optional Java-source probes in the mixed test print the real returned locations and do not turn empty responses into positive support assertions.
 
-Gradle importing has not been validated here. Kotlin Maven import actually ran Maven, installed its importer plugin, resolved dependencies, and invoked `generate-sources` in the temporary fixtures. In trusted real projects these actions can use the Maven cache and execute project plugins; this is why the UI's import warning and explicit opt-in matter. Large projects, source sets beyond the tested backend layout, archive-source navigation, and all JVM implementation requests remain outside this validation.
+Kotlin Maven import actually ran Maven, installed its importer plugin, resolved dependencies, and invoked `generate-sources` in the temporary fixtures. In trusted real projects these actions can use the Maven cache and execute project plugins; this is why the UI's import warning and explicit opt-in matter. Large projects, source sets beyond the tested backend layout, archive-source navigation, and all JVM implementation requests remain outside this validation.
+
+### Gradle 멀티모듈
+
+프로젝트를 열거나 워크트리를 전환하면 Git 그래프를 먼저 표시한다. Kotlin 정의·사용처 탐색을 요청하고 분석을 허용하면 언어 서버가 소스 상위의 `settings.gradle` 또는 `settings.gradle.kts` 프로젝트를 가져온다. 첫 탐색에는 Gradle 배포본·플러그인 다운로드와 동기화 시간이 포함될 수 있다.
+
+Gradle 9.3.0 Wrapper, Kotlin JVM 플러그인 2.3.21, JetBrains Kotlin LSP 271.2085.0으로 `settings.gradle.kts`의 두 모듈을 검증했다. 앱 모듈의 호출에서 라이브러리 모듈의 사용자 지정 소스 폴더로 이동했고, 사용처 검색으로 원래 호출을 찾았다. 신뢰를 허용하기 전에는 Gradle 설정을 평가하지 않았다.
 
 ## Reproduce checks
 

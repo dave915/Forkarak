@@ -16,7 +16,7 @@
 
 이전 `Pokarak.app` 사용자도 같은 명령으로 Forkarak을 새로 설치할 수 있다. 기본 경로를 변경하려면 `--app-dir`와 `--bin-dir`을 사용한다.
 
-v0.2.6부터 설치된 앱은 실행 중 새 정식 릴리스를 확인한다. 새 버전 알림이나 설정에서 **업데이트 다운로드**를 누르면 현재 앱을 계속 사용하는 동안 패키지를 받아 검증한다. **업데이트하고 재시작**을 누르면 실행 중인 앱과 같은 위치에 설치하고 이전 워크트리를 다시 연다.
+v0.2.7부터 설치된 앱은 실행 중 새 정식 릴리스를 확인한다. 새 버전 알림이나 설정에서 **업데이트 다운로드**를 누르면 현재 앱을 계속 사용하는 동안 패키지를 받아 검증한다. **업데이트하고 재시작**을 누르면 실행 중인 앱과 같은 위치에 설치하고 이전 워크트리를 다시 연다.
 
 터미널에서 업데이트하려면 앱을 종료하고 다음 명령을 실행한다. 설치 때 지정한 앱·명령 경로를 다시 사용한다.
 
@@ -31,7 +31,7 @@ v0.2.6부터 설치된 앱은 실행 중 새 정식 릴리스를 확인한다. �
 ```sh
 installer="$(mktemp)"
 curl -fsSL https://github.com/dave915/Forkarak/releases/latest/download/install.sh -o "$installer" && \
-  /bin/bash "$installer" --version v0.2.6 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
+  /bin/bash "$installer" --version v0.2.7 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
 rm -f "$installer"
 ```
 
@@ -71,8 +71,8 @@ git push origin HEAD v0.2.0
 로컬 패키징은 다음과 같다. `--binary`는 기존 arm64 실행 파일을 사용하며 다시 빌드하지 않는다.
 
 ```sh
-./scripts/release-macos.sh --version v0.2.6
-./scripts/release-macos.sh --version v0.2.6 --binary /absolute/path/to/pokarak
+./scripts/release-macos.sh --version v0.2.7
+./scripts/release-macos.sh --version v0.2.7 --binary /absolute/path/to/pokarak
 python3 scripts/test-distribution.py
 ```
 
@@ -85,7 +85,7 @@ python3 scripts/test-distribution.py
 ```sh
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 NOTARY_KEYCHAIN_PROFILE='forkarak-notary' \
-./scripts/release-macos.sh --version v0.2.6
+./scripts/release-macos.sh --version v0.2.7
 ```
 
 이 경로는 hardened runtime과 timestamp로 서명하고, `notarytool submit --wait` 성공 후 ticket을 staple한 번들을 배포한다. 실제 계정이 없어 공증 경로의 Apple 서비스 연동은 검증되지 않았다. 기본 GitHub 워크플로는 인증서와 공증 자격 증명을 구성하지 않으며 ad-hoc 빌드를 게시한다. 공증에는 [Apple이 요구하는 Developer ID 서명](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)이 필요하다. 공증한 앱에도 일반적인 첫 실행 확인창은 남을 수 있다.

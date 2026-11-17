@@ -270,7 +270,7 @@ fn history_real_fixture_enforces_page_and_total_limits() {
 
 #[test]
 fn file_history_follows_renames_with_literal_paths_and_a_fixed_start() {
-    use crate::file_history::{file_blame, file_history};
+    use crate::file_history::{file_blame, file_history, revision_diff};
     let f = Fixture::new();
     let original = ":(glob)*\told\nfile";
     let renamed = "--new path";
@@ -297,6 +297,18 @@ fn file_history_follows_renames_with_literal_paths_and_a_fixed_start() {
             (&base, Path::new(original))
         ]
     );
+    let renamed_revision = &working.entries[1];
+    assert_eq!(renamed_revision.parent.as_ref(), Some(&base));
+    let pure = revision_diff(&f.root, renamed_revision).unwrap();
+    assert_eq!(pure.old_path.as_deref(), Some(Path::new(original)));
+    assert_eq!(pure.old_text, pure.new_text);
+    assert!(pure.patch.contains("rename from"));
+    assert!(!pure.patch.contains("@@"));
+    let initial = &working.entries[2];
+    assert!(initial.parent.is_none());
+    let first = revision_diff(&f.root, initial).unwrap();
+    assert_eq!(first.old_text, "");
+    assert_eq!(first.new_text, "base\nsecond\n");
     let current_blame = file_blame(&f.root, Path::new("staged name"), None).unwrap();
     assert_eq!(
         current_blame
@@ -319,6 +331,9 @@ fn file_history_follows_renames_with_literal_paths_and_a_fixed_start() {
     let removed = file_history(&f.root, Path::new("staged name"), None).unwrap();
     assert!(removed.entries[0].deleted);
     assert_eq!(removed.entries.len(), 5);
+    let deletion = revision_diff(&f.root, &removed.entries[0]).unwrap();
+    assert_eq!(deletion.old_text, "base\nedited\n");
+    assert_eq!(deletion.new_text, "");
 }
 
 #[test]
@@ -432,4 +447,40 @@ fn file_blame_keeps_git_line_boundaries_with_embedded_cr() {
     assert_eq!(lines[0].text, "first\rcontinued");
     assert_eq!(lines[1].oid, None);
     assert_eq!(lines[2].oid.as_ref(), Some(&base));
+}
+
+#[test]
+fn file_revision_uses_both_rename_paths_and_the_actual_parent_for_mode_changes() {
+    use crate::file_history::{file_history, revision_diff};
+    use std::os::unix::fs::PermissionsExt;
+
+    let f = Fixture::new();
+    let old = "script\told";
+    let new = "source/:(literal)script-new";
+    let before = "one retained line\nanother retained line\nold ending\n";
+    let after = "one retained line\nanother retained line\nnew ending\n";
+    f.commit(old, before);
+    let parent = f.commit("unrelated", "intervening commit");
+    fs::create_dir(f.root.join("source")).unwrap();
+    f.git(&["mv", "--", old, new]);
+    f.commit(new, after);
+    fs::set_permissions(f.root.join(new), fs::Permissions::from_mode(0o755)).unwrap();
+    f.git(&["add", "--", new]);
+    f.git(&["commit", "-m", "executable"]);
+    fs::write(f.root.join(new), "other worktree contents").unwrap();
+    let list = file_history(&f.root, Path::new(new), None).unwrap();
+    let mode = revision_diff(&f.root, &list.entries[0]).unwrap();
+    assert!(mode.patch.contains("100644 → 100755"));
+    assert_eq!(mode.lines[0].text, mode.patch.trim_end());
+    let renamed = &list.entries[1];
+    assert_eq!(renamed.parent.as_ref(), Some(&parent));
+    let change = revision_diff(&f.root, renamed).unwrap();
+    assert_eq!(change.old_path.as_deref(), Some(Path::new(old)));
+    assert_eq!(
+        (change.old_text.as_str(), change.new_text.as_str()),
+        (before, after)
+    );
+    assert!(change.patch.contains("-old ending\n+new ending"));
+    let different = Fixture::new();
+    assert!(revision_diff(&different.root, renamed).is_err());
 }

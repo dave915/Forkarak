@@ -325,8 +325,22 @@ pub fn historical_diff(root: &Path, detail: &CommitDetail, path: &Path) -> Resul
         detail.files.iter().any(|f| f.path == path),
         "Select a changed path in this commit"
     );
-    let old_entry = detail.old_tree.get(path);
-    let new_entry = detail.new_tree.get(path);
+    diff_entries(
+        root,
+        path,
+        None,
+        detail.old_tree.get(path),
+        detail.new_tree.get(path),
+    )
+}
+
+pub(crate) fn diff_entries(
+    root: &Path,
+    path: &Path,
+    old_path: Option<&Path>,
+    old_entry: Option<&git::Entry>,
+    new_entry: Option<&git::Entry>,
+) -> Result<DiffDocument> {
     let bytes = |entry: Option<&git::Entry>| -> Result<_> {
         entry
             .map(|e| git::blob(root, e))
@@ -334,15 +348,32 @@ pub fn historical_diff(root: &Path, detail: &CommitDetail, path: &Path) -> Resul
     };
     let mut document = DiffDocument {
         path: path.into(),
+        old_path: old_path.map(Path::to_owned),
         ..Default::default()
     };
     text::render(&mut document, bytes(old_entry)?, bytes(new_entry)?);
-    if document.patch.is_empty() && old_entry.map(|e| &e.mode) != new_entry.map(|e| &e.mode) {
+    let same_blob = old_entry
+        .zip(new_entry)
+        .is_some_and(|(a, b)| a.oid == b.oid);
+    if same_blob && (document.binary || document.truncated) {
+        // Content did not change, even when rendering it as text is impossible.
+        document.patch = old_path
+            .map(|from| format!("rename from {from:?}\nrename to {path:?}\n"))
+            .unwrap_or_default();
+        document.lines = text::parse_patch(&document.patch);
+    }
+    let old_mode = old_entry.map(|entry| entry.mode.as_str());
+    let new_mode = new_entry.map(|entry| entry.mode.as_str());
+    if old_mode != new_mode
+        && (document.patch.is_empty() || old_mode.is_some() && new_mode.is_some())
+    {
         document.patch = format!(
-            "File mode: {} → {}\n",
-            old_entry.map(|e| e.mode.as_str()).unwrap_or("absent"),
-            new_entry.map(|e| e.mode.as_str()).unwrap_or("absent")
+            "File mode: {} → {}\n{}",
+            old_mode.unwrap_or("absent"),
+            new_mode.unwrap_or("absent"),
+            document.patch
         );
+        document.lines = text::parse_patch(&document.patch);
     }
     Ok(document)
 }

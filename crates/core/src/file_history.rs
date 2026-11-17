@@ -1,5 +1,9 @@
 //! File history and line attribution pinned to one revision and literal path.
-use crate::{filesystem, git, history::validate_oid, text};
+use crate::{
+    DiffDocument, filesystem, git,
+    history::{diff_entries, validate_oid},
+    text,
+};
 use anyhow::{Context, Result, ensure};
 use similar::{ChangeTag, TextDiff};
 use std::{
@@ -14,12 +18,17 @@ const BLAME_LIMIT: usize = 50_000;
 
 #[derive(Debug, Clone)]
 pub struct FileRevision {
+    root: PathBuf,
+    /// First parent used by the file history comparison; absent for a root commit.
+    pub parent: Option<String>,
     pub oid: String,
     pub author: String,
     pub date: String,
     pub subject: String,
     /// Path in this commit (in its parent for a deletion).
     pub path: PathBuf,
+    /// Path in the parent when Git follows a rename or copy.
+    pub old_path: Option<PathBuf>,
     pub deleted: bool,
 }
 
@@ -68,7 +77,7 @@ pub fn file_history(root: &Path, path: &Path, revision: Option<&str>) -> Result<
         "--find-renames",
         "--name-status",
         "-z",
-        "--format=%H%x00%an%x00%aI%x00%s",
+        "--format=%H%x00%P%x00%an%x00%aI%x00%s",
         &limit,
         &tip,
         "--",
@@ -79,13 +88,21 @@ pub fn file_history(root: &Path, path: &Path, revision: Option<&str>) -> Result<
     while let Some(oid) = fields.next() {
         let oid = std::str::from_utf8(oid)?.to_owned();
         validate_oid(&oid)?;
+        let parents = field_text(&mut fields)?;
+        let parent = parents.split_ascii_whitespace().next().map(str::to_owned);
+        if let Some(parent) = &parent {
+            validate_oid(parent)?;
+        }
         let author = field_text(&mut fields)?;
         let date = field_text(&mut fields)?;
         let subject = field_text(&mut fields)?;
         let status = fields.next().context("Missing file history status")?;
         let status = status.strip_prefix(b"\n").unwrap_or(status);
-        let (_, path) = status_paths(&mut fields, status)?;
+        let (old_path, path) = status_paths(&mut fields, status)?;
         entries.push(FileRevision {
+            root: root.clone(),
+            parent,
+            old_path,
             oid,
             author,
             date,
@@ -97,6 +114,78 @@ pub fn file_history(root: &Path, path: &Path, revision: Option<&str>) -> Result<
     let truncated = entries.len() > HISTORY_LIMIT;
     entries.truncate(HISTORY_LIMIT);
     Ok(FileHistory { entries, truncated })
+}
+
+/// Compare this file against the first parent shown by the history list.
+pub fn revision_diff(root: &Path, revision: &FileRevision) -> Result<DiffDocument> {
+    let root = git::repository_root(root)?;
+    ensure!(
+        root == revision.root,
+        "File revision belongs to a different worktree"
+    );
+    validate_oid(&revision.oid)?;
+    let path = filesystem::relative(&root, &revision.path)?;
+    let old_path = revision
+        .old_path
+        .as_deref()
+        .map(|path| filesystem::relative(&root, path))
+        .transpose()?;
+    let before = if let Some(parent) = &revision.parent {
+        validate_oid(parent)?;
+        tree_file(&root, parent, old_path.as_deref().unwrap_or(&path))?
+    } else {
+        None
+    };
+    let after = tree_file(&root, &revision.oid, &path)?;
+    ensure!(
+        before.is_some() || after.is_some(),
+        "This file is absent from both revisions"
+    );
+    diff_entries(
+        &root,
+        &path,
+        old_path.as_deref(),
+        before.as_ref(),
+        after.as_ref(),
+    )
+}
+
+// Without -r this requests only the exact literal file or directory entry.
+// A directory can replace a file at a commit boundary.
+fn tree_file(root: &Path, oid: &str, path: &Path) -> Result<Option<git::Entry>> {
+    let record = with_path(root, &["ls-tree", "-z", "--full-tree", oid, "--"], path)?;
+    if record.is_empty() {
+        return Ok(None);
+    }
+    let (header, name) = record.split_at(
+        record
+            .iter()
+            .position(|b| *b == b'\t')
+            .context("Missing tree path")?,
+    );
+    let name = name[1..]
+        .strip_suffix(b"\0")
+        .context("Missing tree record terminator")?;
+    ensure!(
+        git::path(name) == path,
+        "Unexpected path in the selected tree"
+    );
+    let mut fields = std::str::from_utf8(header)?.split_ascii_whitespace();
+    let mode = fields.next().context("Missing Git file mode")?;
+    let kind = fields.next().context("Missing Git object type")?;
+    let object = fields.next().context("Missing Git object ID")?;
+    if kind == "tree" {
+        return Ok(None);
+    }
+    ensure!(
+        kind == "blob" || (kind == "commit" && mode == "160000"),
+        "Unsupported tree object"
+    );
+    validate_oid(object)?;
+    Ok(Some(git::Entry {
+        mode: mode.into(),
+        oid: object.into(),
+    }))
 }
 
 fn field_text<'a>(fields: &mut impl Iterator<Item = &'a [u8]>) -> Result<String> {
@@ -198,27 +287,8 @@ pub fn file_blame(root: &Path, path: &Path, revision: Option<&str>) -> Result<Ve
         } else {
             path
         };
-        let record = with_path(
-            &root,
-            &["ls-tree", "-z", "--full-tree", &oid, "--"],
-            &source,
-        )?;
-        if !record.is_empty() {
-            let tab = record
-                .iter()
-                .position(|b| *b == b'\t')
-                .context("Missing tree path")?;
-            let header = std::str::from_utf8(&record[..tab])?
-                .split_whitespace()
-                .collect::<Vec<_>>();
-            ensure!(
-                header.len() == 3 && header[1] == "blob",
-                "Blame requires a text file"
-            );
-            let entry = git::Entry {
-                mode: header[0].into(),
-                oid: header[2].into(),
-            };
+        if let Some(entry) = tree_file(&root, &oid, &source)? {
+            ensure!(entry.mode != "160000", "Blame requires a text file");
             let (bytes, truncated) = git::blob(&root, &entry)?;
             ensure!(!truncated, "Blame exceeds the 2 MiB text preview limit");
             old = text::decode(bytes, false).context("Blame is unavailable for binary files")?;

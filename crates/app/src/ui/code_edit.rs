@@ -7,8 +7,8 @@ use std::{io, path::Component};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(super) struct FileKey {
-    root: PathBuf,
-    path: PathBuf,
+    pub(super) root: PathBuf,
+    pub(super) path: PathBuf,
 }
 
 #[cfg(test)]
@@ -497,10 +497,54 @@ mod tests {
         assert!(git(&root, &["ls-files", "--stage", "--", "hello.rs"]).is_empty());
         assert!(!root.join(".git/refs/heads/main").exists());
     }
+    #[test]
+    fn folder_move_guard_keeps_dirty_descendants_and_isolates_worktree() {
+        let (_temp, mut state, root) = comparison_fixture();
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("src/dirty.rs"), "disk\n").unwrap();
+        std::fs::write(root.join("src/clean.rs"), "clean\n").unwrap();
+        state.loaded(
+            &root,
+            Path::new("src/dirty.rs"),
+            "disk\n".into(),
+            true,
+            true,
+        );
+        state.loaded(
+            &root,
+            Path::new("src/clean.rs"),
+            "clean\n".into(),
+            true,
+            true,
+        );
+        edit(
+            &mut state,
+            &root,
+            Path::new("src/dirty.rs"),
+            "retained draft\n",
+        );
+        assert!(state.has_draft_under(&root, Path::new("src")));
+        assert!(!state.has_draft_under(&root.join("other"), Path::new("src")));
+        assert!(!state.has_draft_under(&root, Path::new("src/clean.rs")));
+        state.forget_clean_under(&root, Path::new("src"));
+        assert_eq!(
+            state
+                .buffer(&root, Path::new("src/dirty.rs"))
+                .unwrap()
+                .draft
+                .text,
+            "retained draft\n"
+        );
+        assert!(state.buffer(&root, Path::new("src/clean.rs")).is_none());
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/dirty.rs")).unwrap(),
+            "disk\n"
+        );
+    }
 }
 
 impl FileKey {
-    fn new(root: &Path, path: &Path) -> Option<Self> {
+    pub(super) fn new(root: &Path, path: &Path) -> Option<Self> {
         let path = if path.is_absolute() {
             path.strip_prefix(root).ok()?
         } else {
@@ -605,6 +649,7 @@ impl Buffer {
 }
 
 pub(super) struct CodeEdits {
+    pub(super) tools: editor_tools::Tools,
     buffers: HashMap<FileKey, Buffer>,
     bindings: HashMap<FileKey, (EntityId, Subscription)>,
     storage: Arc<DraftStorage>,
@@ -622,6 +667,7 @@ impl CodeEdits {
 
     fn load_from(storage: PathBuf) -> Self {
         let mut state = Self {
+            tools: editor_tools::Tools::default(),
             buffers: HashMap::new(),
             bindings: HashMap::new(),
             storage: Arc::new(DraftStorage {
@@ -712,6 +758,30 @@ impl CodeEdits {
         });
         buffer.loaded(&disk, available);
         buffer.draft.text.clone()
+    }
+
+    pub(super) fn expected_text(&self, root: &Path, path: &Path) -> Option<String> {
+        self.buffer(root, path)
+            .map(|buffer| buffer.draft.expected.clone())
+    }
+
+    pub(super) fn can_edit(&self, root: &Path, path: &Path) -> bool {
+        !self.unreadable_storage && self.buffer(root, path).is_some_and(|buffer| !buffer.saving)
+    }
+
+    pub(super) fn has_draft_under(&self, root: &Path, path: &Path) -> bool {
+        self.unreadable_storage
+            || self.buffers.iter().any(|(key, buffer)| {
+                key.root == root && key.path.starts_with(path) && (buffer.dirty() || buffer.saving)
+            })
+    }
+
+    pub(super) fn forget_clean_under(&mut self, root: &Path, path: &Path) {
+        self.bindings
+            .retain(|key, _| !(key.root == root && key.path.starts_with(path)));
+        self.buffers.retain(|key, buffer| {
+            !(key.root == root && key.path.starts_with(path) && !buffer.dirty() && !buffer.saving)
+        });
     }
 
     pub(super) fn dirty(&self, root: &Path, path: &Path) -> bool {
@@ -806,7 +876,7 @@ impl Pokarak {
         self.code_edits.persist().is_ok()
     }
 
-    fn checkpoint_code_drafts(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn checkpoint_code_drafts(&mut self, cx: &mut Context<Self>) {
         if self.code_edits.unreadable_storage {
             return;
         }
@@ -904,7 +974,44 @@ impl Pokarak {
         available: bool,
         live: bool,
     ) -> String {
-        self.code_edits.loaded(root, path, disk, available, live)
+        let text = self.code_edits.loaded(root, path, disk, available, live);
+        if live
+            && available
+            && !self.code_edits.unreadable_storage
+            && self
+                .prefs
+                .option_bool(self.current_project.as_deref(), "editor.direct_edit", false)
+            && let Some(key) = FileKey::new(root, path)
+            && let Some(buffer) = self.code_edits.buffers.get_mut(&key)
+            && !buffer.saving
+        {
+            buffer.editing = true;
+        }
+        text
+    }
+
+    pub(super) fn enable_direct_code_edit(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        editor: &Entity<EditorState>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.code_edits.unreadable_storage
+            || !self
+                .prefs
+                .option_bool(self.current_project.as_deref(), "editor.direct_edit", false)
+        {
+            return;
+        }
+        if let Some(key) = FileKey::new(root, path)
+            && let Some(buffer) = self.code_edits.buffers.get_mut(&key)
+            && !buffer.stale
+            && !buffer.saving
+        {
+            buffer.editing = true;
+            editor.update(cx, |state, cx| state.set_readonly(false, cx));
+        }
     }
 
     pub(super) fn bind_code_editor(
@@ -949,6 +1056,8 @@ impl Pokarak {
             }
             buffer.draft.text = editor.read(cx).value().to_string();
             buffer.error = None;
+            app.pin_preview(&changed_key.root, &changed_key.path);
+            app.refresh_inline_tools(&changed_key.root, &changed_key.path, &editor, cx);
             app.checkpoint_code_drafts(cx);
             cx.notify();
         });
@@ -957,7 +1066,7 @@ impl Pokarak {
             .insert(key, (editor.entity_id(), subscription));
     }
 
-    fn start_code_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn start_code_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.code_edits.unreadable_storage
             || self.file_loading
             || self.git_is_busy()
@@ -981,6 +1090,7 @@ impl Pokarak {
             return;
         }
         buffer.editing = true;
+        self.pin_preview(&root, &path);
         editor.update(cx, |state, cx| state.set_readonly(false, cx));
         editor.read(cx).focus_handle(cx).focus(window, cx);
         self.status = "편집 중 — ⌘S 저장 · 초안은 파일 저장 전까지 별도로 보관됩니다.".into();
@@ -988,6 +1098,28 @@ impl Pokarak {
     }
 
     pub(super) fn save_code_file(
+        &mut self,
+        commit: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.prefs.option_bool(
+            self.current_project.as_deref(),
+            "editor.format_on_save",
+            false,
+        ) && self
+            .current
+            .as_ref()
+            .zip(self.selected().as_ref())
+            .is_some_and(|(root, path)| self.code_edits.dirty(root, path))
+        {
+            self.format_code_file(true, commit, window, cx);
+        } else {
+            self.save_code_file_after_format(commit, window, cx);
+        }
+    }
+
+    pub(super) fn save_code_file_after_format(
         &mut self,
         commit: bool,
         window: &mut Window,
@@ -1191,6 +1323,7 @@ impl Pokarak {
             .ok_or("워크트리가 닫혔습니다.")?;
         session.documents.insert(selected.clone(), editor.clone());
         self.bind_code_editor(&comparison.root, &selected, &editor, cx);
+        self.configure_code_tools(&comparison.root, &selected, &editor, window, cx);
         self.file_request += 1;
         self.status = "조정 결과를 초안에 반영했습니다. ⌘S로 파일을 저장하세요.".into();
         cx.notify();
@@ -1252,6 +1385,7 @@ impl Pokarak {
             .border_color(Palette::new(cx).rgb(LINE))
             .items_center()
             .gap_2()
+            .child(self.editor_tool_buttons(path, cx))
             .child(
                 Button::new("edit-file")
                     .label(if buffer.editing {

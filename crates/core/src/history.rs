@@ -1,5 +1,7 @@
 //! Immutable commit inspection. Never checks out files, invokes filters, starts
 //! analysis, refreshes the index, or fetches missing objects.
+pub mod navigation;
+
 use crate::{ChangedFile, DiffDocument, FileStatus, git, text};
 use anyhow::{Context, Result, ensure};
 use std::{
@@ -44,6 +46,7 @@ pub struct HistoryCursor {
     tips: Vec<String>,
     refs: BTreeMap<String, Vec<String>>,
     lanes: Vec<String>,
+    start: usize,
     offset: usize,
     shallow: bool,
 }
@@ -67,6 +70,10 @@ pub struct CommitDetail {
 }
 
 pub fn first_page(root: &Path, size: usize) -> Result<HistoryPage> {
+    Ok(navigation::open(root, size)?.0)
+}
+
+fn initial_cursor(root: &Path) -> Result<(HistoryCursor, Vec<navigation::GraphRef>)> {
     let root = git::repository_root(root)?;
     let mut refs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let data = git::words(
@@ -103,15 +110,28 @@ pub fn first_page(root: &Path, size: usize) -> Result<HistoryPage> {
         &root,
         &["rev-parse", "--is-shallow-repository"],
     )?)? == "true";
+    let stashes = navigation::stashes(&root)?;
+    for stash in &stashes {
+        refs.entry(stash.oid.clone())
+            .or_default()
+            .push(stash.name.clone());
+    }
+    let mut tips: BTreeSet<_> = refs.keys().cloned().collect();
+    for tree in git::worktrees(&root)? {
+        if tree.is_detached && !tree.head.is_empty() {
+            tips.insert(tree.head);
+        }
+    }
     let cursor = HistoryCursor {
         root,
-        tips: refs.keys().cloned().collect(),
+        tips: tips.into_iter().collect(),
         refs,
         lanes: vec![],
+        start: 0,
         offset: 0,
         shallow,
     };
-    next_page(&cursor.root.clone(), &cursor, size)
+    Ok((cursor, stashes))
 }
 
 pub fn next_page(root: &Path, cursor: &HistoryCursor, size: usize) -> Result<HistoryPage> {
@@ -126,7 +146,7 @@ pub fn next_page(root: &Path, cursor: &HistoryCursor, size: usize) -> Result<His
     let mut commits = if cursor.tips.is_empty() || count == 0 {
         vec![]
     } else {
-        let skip = format!("--skip={}", cursor.offset);
+        let skip = format!("--skip={}", cursor.start + cursor.offset);
         let max = format!("--max-count={}", count + 1);
         let mut args = vec![
             "log",

@@ -4,10 +4,10 @@ use anyhow::{Context, Result, bail, ensure};
 use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
-    io::Read,
+    io::{BufRead, BufReader, Read},
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     thread,
 };
 
@@ -22,7 +22,7 @@ pub(crate) struct Output {
     pub truncated: bool,
 }
 
-pub(crate) fn run(root: &Path, args: &[&OsStr], limit: usize) -> Result<Output> {
+fn spawn_read(root: &Path, args: &[&OsStr]) -> Result<(Child, thread::JoinHandle<Vec<u8>>)> {
     let mut command = Command::new("git");
     // An inherited GIT_DIR/INDEX_FILE/WORK_TREE must not redirect a worktree read.
     for (key, _) in std::env::vars_os() {
@@ -72,6 +72,48 @@ pub(crate) fn run(root: &Path, args: &[&OsStr], limit: usize) -> Result<Output> 
         }
         kept
     });
+    Ok((child, errors))
+}
+
+/// Visit fixed-size rev-list OIDs without retaining the full repository graph.
+pub(crate) fn visit_oids(
+    root: &Path,
+    args: &[&str],
+    mut visit: impl FnMut(&str) -> bool,
+) -> Result<()> {
+    let args: Vec<_> = args.iter().map(OsStr::new).collect();
+    let (mut child, errors) = spawn_read(root, &args)?;
+    let mut stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
+    let mut line = String::new();
+    let consumed = (|| -> Result<bool> {
+        loop {
+            line.clear();
+            if stdout.read_line(&mut line)? == 0 {
+                return Ok(true);
+            }
+            let oid = line.trim_end();
+            crate::history::validate_oid(oid)?;
+            if !visit(oid) {
+                return Ok(false);
+            }
+        }
+    })();
+    if !matches!(consumed, Ok(true)) {
+        let _ = child.kill();
+    }
+    drop(stdout);
+    let status = child.wait()?;
+    let error = errors.join().unwrap_or_default();
+    ensure!(
+        !consumed? || status.success(),
+        "Cannot read graph: {}",
+        String::from_utf8_lossy(&error)
+    );
+    Ok(())
+}
+
+pub(crate) fn run(root: &Path, args: &[&OsStr], limit: usize) -> Result<Output> {
+    let (mut child, errors) = spawn_read(root, args)?;
     let mut bytes = Vec::new();
     let result = child
         .stdout

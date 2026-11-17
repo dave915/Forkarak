@@ -70,6 +70,7 @@ actions!(
         OpenGitCommit,
         OpenGitWorkflow,
         OpenGitHistory,
+        SearchGitGraph,
         CloseFile,
         CloseProject,
         CloseAllProjects,
@@ -109,6 +110,7 @@ pub fn bind_keys(cx: &mut App) {
         Menu::new("Git").items([
             MenuItem::action("Stage / 커밋…", OpenGitCommit),
             MenuItem::action("Git 그래프", OpenGitHistory),
+            MenuItem::action("커밋 검색…", SearchGitGraph),
             MenuItem::action("Git 작업 및 저장소 설정…", OpenGitActions),
         ]),
         Menu::new("탐색").items([
@@ -129,6 +131,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-enter", git_commit::SubmitCommit, Some("CommitDialog")),
         KeyBinding::new("cmd-shift-g", OpenGitWorkflow, None),
         KeyBinding::new("cmd-alt-h", OpenGitHistory, None),
+        KeyBinding::new("cmd-f", SearchGitGraph, Some("GitGraph")),
         KeyBinding::new("cmd-w", CloseFile, None),
         KeyBinding::new("cmd-shift-w", CloseProject, None),
         KeyBinding::new("cmd-alt-down", NextWorktree, None),
@@ -2013,6 +2016,7 @@ impl Pokarak {
     }
 
     fn render_worktrees(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.git_history.active { return self.render_graph_sidebar(cx); }
         if self.prefs.show_branches {
             return self.render_branches(cx);
         }
@@ -2991,8 +2995,9 @@ impl Render for Pokarak {
             .as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
-        div().id("pokarak").key_context("Pokarak").track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
+        div().id("pokarak").key_context(if self.git_history.active { "Pokarak GitGraph" } else { "Pokarak" }).track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
+            .on_action(cx.listener(|this,_:&SearchGitGraph,w,cx|this.open_graph_search(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitHistory,w,cx|this.open_git_history(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitWorkflow,w,cx|this.open_git_workflow(w,cx)))
             .on_action(cx.listener(|this,_:&OpenSettings,w,cx|this.open_settings(w,cx)))

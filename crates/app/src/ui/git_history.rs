@@ -1,6 +1,7 @@
 //! Dedicated immutable history view. Its editors never enter working-tree
 //! documents/navigation, and writes use the existing Git job lifecycle.
 mod home;
+mod navigation;
 use super::*;
 use pokarak_core::history::{self, Commit, CommitDetail, GraphRow, HistoryCursor, HistoryEntry};
 use pokarak_core::operations::{
@@ -11,6 +12,7 @@ use pokarak_core::operations::{
 #[derive(Default)]
 pub(super) struct HistoryUi {
     pub(super) active: bool,
+    nav: navigation::NavigationUi,
     root: Option<PathBuf>,
     request: u64,
     loading: bool,
@@ -99,6 +101,7 @@ impl Pokarak {
         self.navigating = false;
         self.git_history.request += 1;
         self.git_history.root = Some(root);
+        self.git_history.nav.catalog = None;
         self.git_history.entries.clear();
         self.git_history.cursor = None;
         self.git_history.detail = None;
@@ -118,7 +121,7 @@ impl Pokarak {
         self.history_read(
             move |root| {
                 if first {
-                    history::first_page(root, 100)
+                    history::navigation::open(root, 100).map(|(page, catalog)| (page, Some(catalog)))
                 } else {
                     history::next_page(
                         root,
@@ -126,10 +129,13 @@ impl Pokarak {
                             .as_ref()
                             .ok_or_else(|| anyhow::anyhow!("No further page"))?,
                         100,
-                    )
+                    ).map(|page| (page, None))
                 }
             },
-            move |app, page, window, cx| {
+            move |app, (page, catalog), window, cx| {
+                if let Some(catalog) = catalog {
+                    app.git_history.nav.catalog = Some(Arc::new(catalog));
+                }
                 app.git_history.entries.extend(page.entries);
                 app.git_history.cursor = page.next;
                 app.git_history.limit_reached = page.limit_reached;

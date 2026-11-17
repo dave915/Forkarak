@@ -25,5 +25,9 @@ fn explicit_init_and_local_bare_clone_do_not_reuse_destinations() {
     let cancelled = f.temp.path().join("cancelled clone");
     assert!(clone_repository(remote.to_str().unwrap(), &cancelled, token, OperationProgress::default()).is_err());
     assert!(!cancelled.exists());
+    let init_token = OperationCancellation::default();
+    init_token.cancel();
+    assert!(init_repository_with_control(&cancelled, "main", init_token, OperationProgress::default()).is_err());
+    assert!(!cancelled.exists());
     assert!(init_repository(&f.root.join(".git/new"), "main").is_err());
 }

@@ -10,12 +10,26 @@ use std::{
 };
 
 pub fn init_repository(destination: &Path, branch: &str) -> Result<OperationOutput> {
-    let (parent, destination) = destination_path(destination)?;
-    let mut op = destination_runner(
-        &parent,
+    init_repository_with_control(
+        destination,
+        branch,
         OperationCancellation::default(),
         OperationProgress::default(),
+    )
+}
+
+pub fn init_repository_with_control(
+    destination: &Path,
+    branch: &str,
+    cancellation: OperationCancellation,
+    progress: OperationProgress,
+) -> Result<OperationOutput> {
+    ensure!(
+        !cancellation.is_cancelled(),
+        "Init cancelled before destination creation"
     );
+    let (parent, destination) = destination_path(destination)?;
+    let mut op = destination_runner(&parent, cancellation, progress);
     op.validate_branch(branch)?;
     let directory = reserve_destination(&parent, &destination)?;
     op.root = destination;

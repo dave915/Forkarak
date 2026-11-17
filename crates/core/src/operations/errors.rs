@@ -27,12 +27,6 @@ pub fn classify(error: &anyhow::Error) -> ErrorKind {
 
 pub(crate) fn classify_diagnostics(diagnostics: &str) -> ErrorKind {
     let text = diagnostics.to_ascii_lowercase();
-    if text.contains("cancelled") || text.contains("canceled") {
-        return ErrorKind::Cancelled;
-    }
-    if text.contains("timed out") || text.contains("timeout") {
-        return ErrorKind::Timeout;
-    }
     if [
         "authentication failed",
         "permission denied (publickey",
@@ -56,11 +50,8 @@ pub(crate) fn classify_diagnostics(diagnostics: &str) -> ErrorKind {
     {
         return ErrorKind::FilesystemPermission;
     }
-    if text.contains(".lock")
-        && (text.contains("file exists")
-            || text.contains("another git process")
-            || text.contains("unable to create"))
-        || text.contains("cannot lock ref")
+    if text.contains(".lock") && text.contains("file exists")
+        || text.contains("another git process")
     {
         return ErrorKind::RepositoryLock;
     }
@@ -76,6 +67,15 @@ pub(crate) fn classify_diagnostics(diagnostics: &str) -> ErrorKind {
         || text.contains("automatic merge failed")
     {
         return ErrorKind::Conflict;
+    }
+    if text.contains("cancelled") || text.contains("canceled") {
+        return ErrorKind::Cancelled;
+    }
+    if text.contains("timed out")
+        || text.contains("timeout was reached")
+        || text.contains("timeout exceeded")
+    {
+        return ErrorKind::Timeout;
     }
     ErrorKind::Other
 }
@@ -136,6 +136,19 @@ mod tests {
                 "fatal: cannot lock ref 'refs/heads/main': Permission denied",
                 ErrorKind::FilesystemPermission,
             ),
+            (
+                "fatal: Unable to create '.git/index.lock': No space left on device",
+                ErrorKind::Other,
+            ),
+            (
+                "fatal: cannot lock ref 'refs/heads/main': is at a but expected b",
+                ErrorKind::Other,
+            ),
+            (
+                "unable to unlink 'cancelled': Permission denied",
+                ErrorKind::FilesystemPermission,
+            ),
+            ("Git timed out after 120 seconds", ErrorKind::Timeout),
             (
                 "! [rejected] main -> main (non-fast-forward)",
                 ErrorKind::RejectedUpdate,

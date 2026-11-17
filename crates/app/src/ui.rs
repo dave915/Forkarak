@@ -2358,7 +2358,10 @@ impl Pokarak {
                     .label("프로젝트 열기")
                     .icon(IconName::FolderOpen)
                     .on_click(cx.listener(|this, _, w, cx| this.choose_repository(w, cx))),
-            );
+            )
+            .child(div().flex().gap_2()
+                .child(Button::new("welcome-clone").label("Clone…").on_click(cx.listener(|app,_,w,cx| app.open_repository_setup(true,w,cx))))
+                .child(Button::new("welcome-init").label("Init…").on_click(cx.listener(|app,_,w,cx| app.open_repository_setup(false,w,cx)))));
         let mut recent = div()
             .id("recent-projects")
             .w(ui_px(620.))
@@ -2522,6 +2525,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.select_reader_mode(code,w,cx)}}))
             .child(self.render_toolbar(window, cx))
             .children(self.render_git_activity(cx))
+            .children(self.render_repository_result(cx))
             .children(self.render_workflow_status(cx))
             .children(self.branch_review_controls(cx))
             .children(self.update_banner(cx))

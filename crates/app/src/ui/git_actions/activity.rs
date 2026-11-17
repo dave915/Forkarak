@@ -57,7 +57,7 @@ impl Pokarak {
 
     pub(in crate::ui) fn render_git_activity(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (root, label) = self.git_ui.busy.as_ref()?;
-        if self.current.as_ref() != Some(root) && self.current.is_some() {
+        if !self.git_ui.setup_job && self.current.as_ref() != Some(root) && self.current.is_some() {
             return None;
         }
         let root = root.clone();

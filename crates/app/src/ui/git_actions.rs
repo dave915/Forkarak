@@ -6,6 +6,7 @@ mod history;
 mod ignore;
 mod network;
 mod recovery;
+mod repository;
 mod review;
 mod source;
 mod tags;
@@ -37,6 +38,8 @@ pub(super) struct GitUi {
     started: Option<std::time::Instant>,
     progress: Option<pokarak_core::operations::OperationProgress>,
     live_editor: Option<(PathBuf, u64, Entity<EditorState>)>,
+    setup_job: bool,
+    setup_result: Option<repository::SetupResult>,
     sync: HashMap<PathBuf, network::SyncRead>,
     sync_request: u64,
 }
@@ -96,6 +99,8 @@ pub(super) enum Page {
     Ignore,
     CreateTag,
     PushTag,
+    Clone,
+    Init,
 }
 
 impl Pokarak {
@@ -455,7 +460,10 @@ impl Pokarak {
                         ("태그 하나 Push…", Page::PushTag),
                     ],
                 ),
-
+                (
+                    "저장소 시작",
+                    vec![("Clone…", Page::Clone), ("Init…", Page::Init)],
+                ),
                 (
                     "저장소 Git 설정",
                     vec![
@@ -522,6 +530,8 @@ impl Pokarak {
             Page::Ignore => self.open_ignore_picker(state.root.clone(), window, cx),
             Page::CreateTag => self.show_tag_create(state.root.clone(), window, cx),
             Page::PushTag => self.open_tag_push(state, window, cx),
+            Page::Clone => self.open_repository_setup(true, window, cx),
+            Page::Init => self.open_repository_setup(false, window, cx),
         }
     }
 

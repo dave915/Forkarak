@@ -173,6 +173,7 @@ impl Pokarak {
             }
         };
         let count = snapshot.as_deref().map_or(0, files);
+        let selected_count = self.commit_ui.files.count(side);
         let disabled = self.commit_disabled();
         let palette = Palette::new(cx);
         let mut group = div()
@@ -206,14 +207,54 @@ impl Pokarak {
                         disabled || count == 0,
                         move |app, w, cx| app.change_commit_index(unstaged, StageScope::All, w, cx),
                     )),
-            );
+            )
+            .when(count > 0, |group| {
+                group.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(ui_text(11.))
+                                .child(format!("{selected_count}개 선택")),
+                        )
+                        .child(commit_button(
+                            weak,
+                            if unstaged {
+                                "stage-clear-selection"
+                            } else {
+                                "unstage-clear-selection"
+                            },
+                            "해제",
+                            disabled || selected_count == 0,
+                            |app, _, cx| {
+                                app.commit_ui.files.clear();
+                                cx.notify();
+                            },
+                        ))
+                        .child(commit_button(
+                            weak,
+                            if unstaged {
+                                "stage-selected"
+                            } else {
+                                "unstage-selected"
+                            },
+                            if unstaged {
+                                "선택 Stage"
+                            } else {
+                                "선택 Unstage"
+                            },
+                            disabled || selected_count == 0,
+                            move |app, w, cx| app.change_selected_commit_files(side, w, cx),
+                        )),
+                )
+            });
         if let Some(snapshot) = snapshot.filter(|_| count > 0) {
             let target = weak.clone();
-            let selected = self
-                .commit_ui
-                .selected
-                .clone()
-                .filter(|_| self.commit_ui.side == Some(side));
+            let selected = self.commit_ui.files.clone();
             let rows = uniform_list(
                 if unstaged {
                     "unstaged-files"
@@ -245,12 +286,50 @@ impl Pokarak {
                                 .unwrap_or_else(|| name.clone());
                             let (status, _) = file_status(&file.status);
                             let select = target.clone();
+                            let toggle_target = target.clone();
+                            let toggle_path = path.clone();
+                            let click_snapshot = snapshot.clone();
+                            let toggle_snapshot = snapshot.clone();
+                            let write_snapshot = snapshot.clone();
+                            let marked = selected.contains(side, &path);
                             div()
                                 .flex()
                                 .w_full()
                                 .h(ui_px(24.))
                                 .items_center()
                                 .gap_1()
+                                .child(
+                                    theme::action_button(
+                                        (if unstaged { "work-mark" } else { "index-mark" }, index),
+                                        disabled,
+                                    )
+                                    .label(if marked { "✓" } else { "□" })
+                                    .small()
+                                    .accessibility_label(format!(
+                                        "{} {} 선택 전환",
+                                        if unstaged { "작업 파일" } else { "Staged" },
+                                        display_path(&path)
+                                    ))
+                                    .selected(marked)
+                                    .tooltip(
+                                        "파일 선택 전환 · Cmd 클릭: 추가/해제 · Shift 클릭: 범위",
+                                    )
+                                    .on_click(
+                                        move |_, w, cx| {
+                                            let _ = toggle_target.update(cx, |app, cx| {
+                                                app.select_commit_file(
+                                                    &toggle_snapshot,
+                                                    toggle_path.clone(),
+                                                    side,
+                                                    true,
+                                                    false,
+                                                    w,
+                                                    cx,
+                                                )
+                                            });
+                                        },
+                                    ),
+                                )
                                 .child(
                                     file_icons::changed_file_button(
                                         (if unstaged { "work-file" } else { "index-file" }, index),
@@ -266,15 +345,24 @@ impl Pokarak {
                                     } else {
                                         CursorStyle::PointingHand
                                     })
-                                    .selected(selected.as_ref() == Some(&path))
+                                    .selected(marked)
                                     .tooltip(tooltip)
                                     .flex_1()
                                     .min_w_0()
                                     .overflow_hidden()
                                     .on_click(
-                                        move |_, w, cx| {
+                                        move |event, w, cx| {
                                             let _ = select.update(cx, |app, cx| {
-                                                app.select_index_preview(path.clone(), side, w, cx)
+                                                let modifiers = event.modifiers();
+                                                app.select_commit_file(
+                                                    &click_snapshot,
+                                                    path.clone(),
+                                                    side,
+                                                    modifiers.platform,
+                                                    modifiers.shift,
+                                                    w,
+                                                    cx,
+                                                )
                                             });
                                         },
                                     ),
@@ -292,6 +380,9 @@ impl Pokarak {
                                     if unstaged { "Stage" } else { "Unstage" },
                                     disabled,
                                     move |app, w, cx| {
+                                        if !app.commit_snapshot_current(&write_snapshot) {
+                                            return;
+                                        }
                                         app.change_commit_index(
                                             unstaged,
                                             StageScope::Files(paths.clone()),

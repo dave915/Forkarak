@@ -2,6 +2,7 @@
 //! Every write is owned by the existing git_actions runner and cancellation.
 mod panel;
 mod partial;
+mod selection;
 use super::*;
 use pokarak_core::index::partial::{self as partial_index, PartialPreview, Side};
 use pokarak_core::{
@@ -34,6 +35,7 @@ pub(super) struct CommitUi {
     partial: Option<partial::PartialDiff>,
     split: Option<Entity<split_diff::SplitDiff>>,
     marked: std::collections::BTreeSet<usize>,
+    files: selection::FileSelection,
     messages: HashMap<PathBuf, Entity<EditorState>>,
     error: Option<String>,
     submitted_message: Option<(PathBuf, String)>,
@@ -119,6 +121,7 @@ impl CommitUi {
         self.snapshot = None;
         self.selected = None;
         self.side = None;
+        self.files.clear();
         self.error = None;
         self.clear_preview();
     }
@@ -128,6 +131,7 @@ impl Pokarak {
     pub(super) fn commit_defers_auto_refresh(&self, window: &Window, cx: &App) -> bool {
         self.commit_ui.reading
             || !self.commit_ui.marked.is_empty()
+            || !self.commit_ui.files.is_empty()
             || (self.inline_commit_active()
                 && self
                     .current
@@ -214,6 +218,7 @@ impl Pokarak {
         self.commit_ui.request += 1;
         self.commit_ui.preview_request += 1;
         self.commit_ui.reading = true;
+        self.commit_ui.files.clear();
         self.commit_ui.navigation = self.request;
         self.commit_ui.error = None;
         let token = self.commit_ui.request;
@@ -363,6 +368,7 @@ impl Pokarak {
         };
         self.commit_ui.request += 1;
         self.commit_ui.preview_request += 1;
+        self.commit_ui.files.clear();
         self.run_git_job(
             snapshot.root.clone(),
             if stage { "Stage" } else { "Unstage" }.into(),
@@ -376,6 +382,60 @@ impl Pokarak {
             window,
             cx,
         );
+    }
+
+    fn select_commit_file(
+        &mut self,
+        snapshot: &Arc<IndexSnapshot>,
+        path: PathBuf,
+        side: Side,
+        toggle: bool,
+        range: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.commit_snapshot_current(snapshot) {
+            return;
+        }
+        self.commit_ui.files.select(
+            &snapshot.root,
+            self.commit_ui.request,
+            side,
+            selection::side_files(snapshot, side),
+            &path,
+            toggle,
+            range,
+        );
+        self.select_index_preview(path, side, window, cx);
+    }
+
+    fn commit_snapshot_current(&self, snapshot: &Arc<IndexSnapshot>) -> bool {
+        !self.commit_disabled()
+            && self
+                .commit_ui
+                .snapshot
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, snapshot))
+            && self.current.as_ref() == Some(&snapshot.root)
+    }
+
+    fn change_selected_commit_files(
+        &mut self,
+        side: Side,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(snapshot) = self.commit_ui.snapshot.as_ref() else {
+            return;
+        };
+        let paths = self
+            .commit_ui
+            .files
+            .paths(snapshot, self.commit_ui.request, side);
+        if paths.is_empty() {
+            return;
+        }
+        self.change_commit_index(side == Side::Unstaged, StageScope::Files(paths), window, cx);
     }
 
     fn close_commit_view(&mut self, cx: &mut Context<Self>) {

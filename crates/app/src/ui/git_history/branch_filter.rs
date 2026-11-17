@@ -31,7 +31,7 @@ impl Pokarak {
         Button::new("graph-branch-filter")
             .ghost()
             .small()
-            .max_w(px(205.))
+            .max_w(ui_px(205.))
             .min_w_0()
             .selected(self.graph_branch().is_some())
             .accessibility_label(format!("커밋 그래프 브랜치 필터 · {name}"))
@@ -43,9 +43,9 @@ impl Pokarak {
                     .min_w_0()
                     .items_center()
                     .gap_1()
-                    .child(Icon::new(IconName::GitBranch).size(px(14.)))
+                    .child(Icon::new(IconName::GitBranch).size(ui_px(14.)))
                     .child(div().min_w_0().text_ellipsis().child(name.to_owned()))
-                    .child(Icon::new(IconName::ChevronDown).size(px(12.))),
+                    .child(Icon::new(IconName::ChevronDown).size(ui_px(12.))),
             )
             .on_click(cx.listener(|app, _, w, cx| app.open_branch_filter(w, cx)))
     }
@@ -105,7 +105,7 @@ impl Pokarak {
             dialog
                 .title("그래프 브랜치 필터")
                 .on_ok(|_, _, _| false)
-                .width(px(470.))
+                .width(ui_px(470.))
                 .child(picker.clone())
         });
         input.update(cx, |input, cx| input.focus(window, cx));
@@ -202,7 +202,7 @@ impl Render for BranchPicker {
                         .small()
                         .ghost()
                         .w_full()
-                        .h(px(29.))
+                        .h(ui_px(29.))
                         .selected(i == cursor)
                         .accessibility_label(format!(
                             "{} {label}{}",
@@ -226,14 +226,14 @@ impl Render for BranchPicker {
                                     r.child(
                                         div()
                                             .text_color(palette.rgb(MUTED))
-                                            .text_size(px(11.))
+                                            .text_size(ui_text(11.))
                                             .child(g),
                                     )
                                 })
                                 .when(current, |r| {
                                     r.child(
                                         Icon::new(IconName::Check)
-                                            .size(px(13.))
+                                            .size(ui_px(13.))
                                             .text_color(palette.rgb(BLUE)),
                                     )
                                 }),
@@ -246,7 +246,7 @@ impl Render for BranchPicker {
                 .collect::<Vec<_>>()
         })
         .track_scroll(&self.scroll)
-        .h(px((count.min(9) * 29) as f32));
+        .h(ui_px((count.min(9) * 29) as f32));
         div()
             .v_flex()
             .gap_2()

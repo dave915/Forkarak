@@ -143,7 +143,7 @@ impl Pokarak {
                         .find(|r| r.starts_with("refs/heads/"))
                         .or_else(|| refs.first());
                     let refs_cell = div()
-                        .w(px(columns.width(GraphColumn::Refs)))
+                        .w(ui_px(columns.width(GraphColumn::Refs)))
                         .min_w_0()
                         .flex_none()
                         .flex()
@@ -157,10 +157,10 @@ impl Pokarak {
                                     .id(("graph-ref", index))
                                     .min_w_0()
                                     .px_1()
-                                    .rounded(px(3.))
+                                    .rounded(ui_px(3.))
                                     .bg(color.opacity(0.15))
                                     .text_color(color)
-                                    .text_size(px(11.))
+                                    .text_size(ui_text(11.))
                                     .text_ellipsis()
                                     .child(visible(reference_name(reference)))
                                     .on_hover(move |hovered, _, cx| {
@@ -174,7 +174,7 @@ impl Pokarak {
                                     div()
                                         .flex_none()
                                         .text_color(palette.rgb(MUTED))
-                                        .text_size(px(10.))
+                                        .text_size(ui_text(10.))
                                         .child(format!("+{}", refs.len() - 1)),
                                 )
                             })
@@ -185,7 +185,7 @@ impl Pokarak {
                         .ghost()
                         .small()
                         .w_full()
-                        .h(px(30.))
+                        .h(ui_px(30.))
                         .px_0()
                         .selected(selected.as_ref() == Some(&oid))
                         .disabled(busy)
@@ -207,7 +207,7 @@ impl Pokarak {
                                 ))
                                 .child(
                                     div()
-                                        .w(px(columns.width(GraphColumn::Message)))
+                                        .w(ui_px(columns.width(GraphColumn::Message)))
                                         .flex_none()
                                         .min_w_0()
                                         .text_ellipsis()
@@ -270,9 +270,9 @@ impl Pokarak {
 
 fn metadata_cell(width: f32, text: String, palette: Palette) -> Div {
     div()
-        .w(px(width))
+        .w(ui_px(width))
         .flex_none()
-        .text_size(px(11.))
+        .text_size(ui_text(11.))
         .text_color(palette.rgb(MUTED))
         .text_ellipsis()
         .child(text)

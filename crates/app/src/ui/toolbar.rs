@@ -10,8 +10,10 @@ impl Pokarak {
     pub(super) fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::new(cx);
         let width = window.viewport_size().width;
-        let compact = width < px(1180.);
+        let compact = width < ui_px(1180.);
         let has_projects = !self.projects.is_empty();
+        // Keep the native window controls and settings reachable at high zoom.
+        let two_rows = self.current.is_some() && width < ui_px(860.);
         let content = div()
             .absolute()
             .inset_0()
@@ -19,17 +21,17 @@ impl Pokarak {
             .px_2()
             .flex()
             .items_center()
-            .gap(px(4.))
+            .gap(ui_px(4.))
             .child(
                 Icon::new(IconName::Utensils)
                     .data(include_bytes!("../../../../assets/icons/spork.svg").as_slice())
-                    .size(px(18.))
+                    .size(ui_px(18.))
                     .text_color(palette.rgb(BLUE)),
             )
             .when(!has_projects, |bar| {
                 bar.child(
                     div()
-                        .text_size(px(16.))
+                        .text_size(ui_text(16.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("Pokarak"),
                 )
@@ -45,7 +47,7 @@ impl Pokarak {
                         .on_click(cx.listener(|app, _, w, cx| app.choose_repository(w, cx))),
                 )
             })
-            .when(self.current.is_some(), |bar| {
+            .when(self.current.is_some() && !two_rows, |bar| {
                 bar.child(self.git_toolbar(cx))
             })
             .child(div().flex_1())
@@ -80,8 +82,8 @@ impl Pokarak {
                     .on_click(cx.listener(|app, _, w, cx| app.open_settings(w, cx))),
             );
 
-        TitleBar::new()
-            .h(px(36.))
+        let title = TitleBar::new()
+            .h(ui_px(36.))
             .pl(if window.is_fullscreen() {
                 px(0.)
             } else {
@@ -89,7 +91,22 @@ impl Pokarak {
             })
             .bg(palette.rgb(SIDE))
             .border_b_0()
-            .child(div().relative().size_full().child(content))
+            .child(div().relative().size_full().child(content));
+        div()
+            .v_flex()
+            .flex_none()
+            .child(title)
+            .when(two_rows, |bar| {
+                bar.child(
+                    div()
+                        .h(ui_px(34.))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .bg(palette.rgb(SIDE))
+                        .child(self.git_toolbar(cx)),
+                )
+            })
             .into_any_element()
     }
 
@@ -125,10 +142,10 @@ impl Pokarak {
             .flex_none()
             .flex()
             .items_center()
-            .h(px(28.))
-            .px(px(3.))
-            .gap(px(2.))
-            .rounded(px(6.))
+            .h(ui_px(28.))
+            .px(ui_px(3.))
+            .gap(ui_px(2.))
+            .rounded(ui_px(6.))
             .bg(palette.rgb(PANEL))
             .child(
                 toolbar_icon(
@@ -196,7 +213,7 @@ impl Pokarak {
                 .enumerate()
                 .map(|(index, (page, name, icon, tooltip))| {
                     toolbar_icon(name, icon, name)
-                        .when(index == 0, |button| button.ml(px(6.)))
+                        .when(index == 0, |button| button.ml(ui_px(6.)))
                         .tooltip(tooltip)
                         .disabled(busy)
                         .on_click(
@@ -233,7 +250,7 @@ impl Pokarak {
             .min_w_0()
             .flex_initial()
             .menu(self.projects.len() > 1)
-            .max_width(px(200.))
+            .max_width(ui_px(200.))
             .track_scroll(&scroll)
             .when_some(active, |bar, index| bar.selected_index(index))
             .children(self.projects.iter().enumerate().map(|(index, project)| {
@@ -249,7 +266,7 @@ impl Pokarak {
                 // determine the width while keeping both actions visible.
                 Tab::new()
                     .prefix(
-                        Icon::new(IconName::FolderGit2).size(px(14.)).text_color(
+                        Icon::new(IconName::FolderGit2).size(ui_px(14.)).text_color(
                             palette.rgb(if active == Some(index) { BLUE } else { MUTED }),
                         ),
                     )
@@ -262,7 +279,7 @@ impl Pokarak {
                         Button::new(("close-project", index))
                             .icon(
                                 Icon::new(IconName::X)
-                                    .size(px(13.))
+                                    .size(ui_px(13.))
                                     .text_color(palette.rgb(MUTED)),
                             )
                             .ghost()
@@ -290,9 +307,9 @@ impl Pokarak {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(2.))
-            .p(px(2.))
-            .rounded(px(5.))
+            .gap(ui_px(2.))
+            .p(ui_px(2.))
+            .rounded(ui_px(5.))
             .bg(palette.rgb(BG))
             .child(
                 Button::new("view-graph")
@@ -364,6 +381,6 @@ fn toolbar_icon(id: &'static str, icon: IconName, name: &'static str) -> Button 
         .accessibility_label(name)
         .ghost()
         .small()
-        .w(px(28.))
-        .h(px(26.))
+        .w(ui_px(28.))
+        .h(ui_px(26.))
 }

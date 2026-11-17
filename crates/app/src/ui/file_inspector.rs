@@ -70,8 +70,8 @@ impl Pokarak {
                         window.open_dialog(cx, move |dialog, _, _| {
                             dialog
                                 .title("파일 이력")
-                                .width(px(850.))
-                                .margin_top(px(14.))
+                                .width(ui_px(850.))
+                                .margin_top(ui_px(14.))
                                 .child(reader.clone())
                         });
                     })),
@@ -291,7 +291,7 @@ impl Render for Inspector {
                 .v_flex()
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_text(11.))
                         .text_ellipsis()
                         .child(label.clone()),
                 )
@@ -301,12 +301,12 @@ impl Render for Inspector {
         div()
             .v_flex()
             .gap_2()
-            .child(div().text_size(px(12.)).text_ellipsis().child(format!(
+            .child(div().text_size(ui_text(12.)).text_ellipsis().child(format!(
                 "{}   ·   {}",
                 self.target.path.display(),
                 revision.as_deref().map(|s| &s[..8]).unwrap_or("작업 트리")
             )))
             .child(bar)
-            .child(div().h(px(280.)).min_w_0().overflow_hidden().child(body))
+            .child(div().h(ui_px(280.)).min_w_0().overflow_hidden().child(body))
     }
 }

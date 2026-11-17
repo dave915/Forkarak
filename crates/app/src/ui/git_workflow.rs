@@ -171,7 +171,7 @@ impl Pokarak {
                     .child(div().flex_1().child("Stash · 이 저장소의 모든 워크트리가 공유"))
                     .child(wf_action(&weak, "stash-new", "변경사항 보관…", busy, move |app,w,cx| app.show_stash_save(save_root.clone(),w,cx)))
                     .child(wf_action(&weak, "workflow-refresh", "새로고침", busy, |app,w,cx| app.open_git_workflow(w,cx))));
-            let mut stashes = div().id("workflow-stashes").h(px(116.)).overflow_y_scroll().v_flex().gap_1();
+            let mut stashes = div().id("workflow-stashes").h(ui_px(116.)).overflow_y_scroll().v_flex().gap_1();
             if state.stashes.is_empty() { stashes = stashes.child(workflow_note("보관된 stash가 없습니다.")); }
             for (index, entry) in state.stashes.iter().enumerate() {
                 let label = format!("{}  {}  {}", entry.selector, short_oid(&entry.oid), entry.message);
@@ -193,14 +193,14 @@ impl Pokarak {
             } else if !state.conflicts.is_empty() {
                 body = body.child(workflow_note("진행 중인 merge/rebase가 없습니다. Stash 적용 충돌은 파일만 해결하세요. 보관된 stash는 유지됩니다."));
             }
-            let mut conflicts = div().id("workflow-conflicts").h(px(112.)).overflow_y_scroll().v_flex().gap_1();
+            let mut conflicts = div().id("workflow-conflicts").h(ui_px(112.)).overflow_y_scroll().v_flex().gap_1();
             if state.conflicts.is_empty() { conflicts = conflicts.child(workflow_note("미해결 index stage가 없습니다.")); }
             for (index, file) in state.conflicts.iter().enumerate() {
                 let root = state.root.clone(); let file = file.clone();
                 let label = format!("{}  · stages {}", file.path.display(), file.stages.iter().map(|s|s.stage.to_string()).collect::<Vec<_>>().join("/"));
                 conflicts = conflicts.child(wf_action(&weak,("conflict-entry", index),label,busy,move |app,w,cx| app.open_conflict(root.clone(),file.clone(),w,cx)).w_full().justify_start());
             }
-            dialog.title("Stash / 충돌 해결").width(px(740.)).margin_top(px(24.)).on_ok(|_,_,_|false)
+            dialog.title("Stash / 충돌 해결").width(ui_px(740.)).margin_top(ui_px(24.)).on_ok(|_,_,_|false)
                 .child(body.child(conflicts)).footer(workflow_close())
         });
     }
@@ -212,7 +212,7 @@ impl Pokarak {
         window.open_dialog(cx, move |dialog,_,cx| {
             let selected = weak.upgrade().is_some_and(|view| view.read(cx).workflow.include_untracked); let input = message.clone();
             let target = root.clone();
-            dialog.title("변경사항을 stash에 보관").width(px(620.)).margin_top(px(36.)).on_ok(|_,_,_|false)
+            dialog.title("변경사항을 stash에 보관").width(ui_px(620.)).margin_top(ui_px(36.)).on_ok(|_,_,_|false)
                 .child(div().v_flex().gap_3().child(workflow_scope(&root))
                     .child(workflow_note("추적 중인 변경사항을 보관하고 작업 파일을 되돌립니다. 이 저장소의 모든 워크트리에 stash가 표시됩니다."))
                     .child(Input::new(&message))
@@ -286,7 +286,7 @@ impl Pokarak {
                     app.confirm_workflow(target.clone(),format!("Stash {label}"),detail,action.clone(),w,cx);
                 }));
             }
-            dialog.title(format!("{} · {}",entry.selector,short_oid(&entry.oid))).width(px(780.)).margin_top(px(24.)).on_ok(|_,_,_|false)
+            dialog.title(format!("{} · {}",entry.selector,short_oid(&entry.oid))).width(ui_px(780.)).margin_top(ui_px(24.)).on_ok(|_,_,_|false)
                 .child(div().v_flex().gap_2().child(workflow_scope(&root))
                     .child(div().text_ellipsis().child(entry.message.clone()))
                     .child(workflow_note(&format!("원본 브랜치 기록: {} · 저장소 전체 공유",entry.source_branch.as_deref().unwrap_or("확인 불가"))))
@@ -312,8 +312,8 @@ impl Pokarak {
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
                 .title(title.clone())
-                .width(px(740.))
-                .margin_top(px(36.))
+                .width(ui_px(740.))
+                .margin_top(ui_px(36.))
                 .on_ok(|_, _, _| false)
                 .child(editor_view(&editor, true, 300.))
                 .footer(workflow_close())
@@ -335,14 +335,14 @@ impl Pokarak {
             let label = title.clone();
             dialog
                 .title(title.clone())
-                .width(px(640.))
-                .margin_top(px(36.))
+                .width(ui_px(640.))
+                .margin_top(ui_px(36.))
                 .overlay_closable(false)
                 .on_ok(|_, _, _| false)
                 .child(
                     div()
                         .id("workflow-confirm-detail")
-                        .max_h(px(290.))
+                        .max_h(ui_px(290.))
                         .overflow_y_scroll()
                         .v_flex()
                         .gap_3()
@@ -462,10 +462,10 @@ impl Pokarak {
             let save_label=if draft.side.is_some_and(|s|draft.side_content(s).is_none()){ "삭제하고 해결 표시" } else { "저장하고 해결 표시" };
             let disabled=busy||(!draft.can_edit&&draft.side.is_none());
             let title=format!("충돌 해결 · {}",draft.snapshot.file.path.display());
-            dialog.title(div().text_ellipsis().child(title)).width(px(820.)).margin_top(px(16.)).overlay_closable(false).on_ok(|_,_,_|false)
+            dialog.title(div().text_ellipsis().child(title)).width(ui_px(820.)).margin_top(ui_px(16.)).overlay_closable(false).on_ok(|_,_,_|false)
                 .child(div().v_flex().gap_1().child(workflow_scope(&root))
                     .child(workflow_note(&format!("{ours}\n{theirs}")))
-                    .child(tabs).child(div().text_size(px(11.)).text_ellipsis().child(stage_info))
+                    .child(tabs).child(div().text_size(ui_text(11.)).text_ellipsis().child(stage_info))
                     .child(editor_view(&draft.source,true,86.))
                     .child(choices).child(editor_view(&draft.result,readonly,130.))
                     .child(workflow_note("결과만 저장·stage 합니다. 커밋/푸시는 별도입니다. 외부 변경이 있으면 다시 열어 비교하세요.")))
@@ -557,12 +557,12 @@ fn workflow_close() -> Button {
 }
 fn workflow_scope(root: &Path) -> Div {
     div()
-        .text_size(px(12.))
+        .text_size(ui_text(12.))
         .text_ellipsis()
         .child(format!("작업 대상: {}", root.display()))
 }
 fn workflow_note(text: &str) -> Div {
-    div().text_size(px(12.)).child(text.to_owned())
+    div().text_size(ui_text(12.)).child(text.to_owned())
 }
 fn short_oid(oid: &str) -> &str {
     oid.get(..12).unwrap_or(oid)
@@ -600,5 +600,5 @@ fn editor_view(editor: &Entity<EditorState>, readonly: bool, height: f32) -> imp
     Editor::new(editor)
         .readonly(readonly)
         .bordered(true)
-        .h(px(height))
+        .h(ui_px(height))
 }

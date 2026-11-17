@@ -48,10 +48,10 @@ impl Columns {
 
     pub(super) fn row() -> Div {
         div()
-            .px(px(Self::GAP))
+            .px(ui_px(Self::GAP))
             .flex()
             .items_center()
-            .gap(px(Self::GAP))
+            .gap(ui_px(Self::GAP))
     }
 
     fn new(viewport: f32, lanes: usize, saved: Option<&SavedView>) -> Self {
@@ -105,8 +105,12 @@ impl Pokarak {
             .unwrap_or(1);
         let viewport = ui
             .table_width
-            .unwrap_or(window.viewport_size().width - px(230.));
-        let columns = Columns::new(viewport.into(), lanes, self.session().map(|s| &s.saved));
+            .unwrap_or(window.viewport_size().width - ui_px(230.));
+        let columns = Columns::new(
+            theme::logical_px(viewport),
+            lanes,
+            self.session().map(|s| &s.saved),
+        );
         let header = self.commit_header(columns, palette, cx);
         let rows = if ui.entries.is_empty() {
             div()
@@ -164,7 +168,7 @@ impl Pokarak {
                             .h_full()
                             .flex_none()
                             .min_w_full()
-                            .w(px(columns.content_width()))
+                            .w(ui_px(columns.content_width()))
                             .child(header)
                             .child(rows),
                     ),
@@ -174,10 +178,10 @@ impl Pokarak {
     }
     fn commit_header(&self, columns: Columns, palette: Palette, cx: &mut Context<Self>) -> Div {
         let mut header = Columns::row()
-            .h(px(26.))
+            .h(ui_px(26.))
             .flex_none()
             .bg(palette.rgb(SIDE))
-            .text_size(px(11.))
+            .text_size(ui_text(11.))
             .text_color(palette.rgb(MUTED));
         for column in GraphColumn::ALL {
             let width = columns.width(column);
@@ -185,7 +189,7 @@ impl Pokarak {
                 div()
                     .relative()
                     .h_full()
-                    .w(px(width))
+                    .w(ui_px(width))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -193,7 +197,7 @@ impl Pokarak {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .pr(px(6.))
+                            .pr(ui_px(6.))
                             .text_ellipsis()
                             .child(column.label()),
                     )
@@ -235,8 +239,9 @@ impl Pokarak {
                     if drag.column != column {
                         return;
                     }
-                    let width =
-                        column.clamp(drag.width + f32::from(event.event.position.x - drag.start_x));
+                    let width = column.clamp(
+                        drag.width + theme::logical_px(event.event.position.x - drag.start_x),
+                    );
                     if let Some(session) = app
                         .current
                         .as_ref()

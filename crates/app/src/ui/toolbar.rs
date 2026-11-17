@@ -213,10 +213,7 @@ impl Pokarak {
 
     fn project_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> TabBar {
         let palette = Palette::new(cx);
-        let active = self
-            .projects
-            .iter()
-            .position(|p| self.current_project.as_ref() == Some(&p.root));
+        let active = self.active_project_index();
         let state = window.use_keyed_state("project-tab-reveal", cx, |_, _| {
             (None::<usize>, ScrollHandle::new())
         });
@@ -277,7 +274,7 @@ impl Pokarak {
                             })),
                     )
                     .on_click(cx.listener(move |app, _, w, cx| {
-                        if app.current.as_ref() != Some(&target) {
+                        if app.opening_path.as_ref().or(app.current.as_ref()) != Some(&target) {
                             app.open_repository(target.clone(), w, cx);
                         }
                     }))
@@ -305,7 +302,11 @@ impl Pokarak {
                     .small()
                     .selected(graph)
                     .toggled(graph)
-                    .disabled(self.loading || self.git_is_busy())
+                    .disabled(
+                        self.opening_path.is_some()
+                            || self.git_is_busy()
+                            || (self.loading && graph),
+                    )
                     .tooltip_with_action("Git 그래프", &OpenGitHistory, None)
                     .on_click(cx.listener(|app, _, w, cx| {
                         if !app.git_history.active {

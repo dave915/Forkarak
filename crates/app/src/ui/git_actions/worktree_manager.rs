@@ -16,11 +16,70 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(snapshot) = self.snapshot() else {
+        let root = state.root.clone();
+        if self.current.as_ref() != Some(&root) || self.opening_path.is_some() {
             return;
-        };
-        let trees = snapshot.worktrees.clone();
-        let head = snapshot.worktree.head.clone();
+        }
+        let scope = self.request;
+        self.git_ui.load_request += 1;
+        let token = self.git_ui.load_request;
+        self.git_ui.loading = true;
+        self.status = "워크트리 상태 확인 중…".into();
+        let target = root.clone();
+        let task = cx.background_spawn(async move {
+            let trees = pokarak_core::worktree_inventory(&target)?;
+            let counts: HashMap<_, _> = trees
+                .iter()
+                .filter(|tree| {
+                    tree.path != target && !tree.is_main && !tree.is_locked && !tree.is_prunable
+                })
+                .filter_map(|tree| {
+                    pokarak_core::worktree_change_count(&tree.path)
+                        .ok()
+                        .map(|count| (tree.path.clone(), count))
+                })
+                .collect();
+            anyhow::Ok((trees, counts))
+        });
+        cx.spawn_in(window, async move |view, cx| {
+            let result = task.await;
+            let _ = view.update_in(cx, |app, window, cx| {
+                if app.git_ui.load_request != token {
+                    return;
+                }
+                app.git_ui.loading = false;
+                if app.current.as_ref() == Some(&root) && app.request == scope {
+                    match result {
+                        Ok((trees, counts)) => {
+                            app.status = "준비됨".into();
+                            app.render_worktree_manager(state, trees, counts, window, cx);
+                        }
+                        Err(error) => {
+                            app.status = "워크트리 목록을 읽을 수 없습니다".into();
+                            app.error = Some(format!("{error:#}"));
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn render_worktree_manager(
+        &self,
+        state: Arc<RepositoryState>,
+        trees: Vec<Worktree>,
+        counts: HashMap<PathBuf, usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let head = trees
+            .iter()
+            .find(|tree| tree.path == state.root)
+            .map(|tree| tree.head.clone())
+            .unwrap_or_default();
         let available: Vec<String> = state
             .local_branches
             .iter()
@@ -52,6 +111,7 @@ impl Pokarak {
                 } else {
                     ""
                 };
+                let count = counts.get(&tree.path).copied();
                 let button = Button::new(("remove-worktree", index))
                     .label(if tree.is_prunable {
                         "등록 정리…"
@@ -60,16 +120,17 @@ impl Pokarak {
                     })
                     .small()
                     .ghost()
-                    .disabled(
-                        tree.is_main
-                            || tree.is_locked
-                            || tree.path == state.root
-                            || tree.changed_files > 0,
-                    )
-                    .tooltip(if tree.changed_files > 0 {
-                        "변경사항을 먼저 정리하세요"
-                    } else {
-                        "연결된 워크트리 제거"
+                    .disabled(!can_remove(tree, &state.root, count))
+                    .tooltip(match count {
+                        Some(1..) => "변경사항을 먼저 정리하세요",
+                        None if !tree.is_main
+                            && !tree.is_locked
+                            && !tree.is_prunable
+                            && tree.path != state.root =>
+                        {
+                            "변경 상태를 확인할 수 없습니다"
+                        }
+                        _ => "연결된 워크트리 제거",
                     });
                 let target = tree.clone();
                 let weak = weak.clone();
@@ -298,4 +359,38 @@ impl Pokarak {
 
 fn short_head(oid: &str) -> &str {
     oid.get(..8).unwrap_or(oid)
+}
+
+fn can_remove(tree: &Worktree, current: &Path, count: Option<usize>) -> bool {
+    !tree.is_main
+        && !tree.is_locked
+        && tree.path != current
+        && (tree.is_prunable || count == Some(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Worktree, can_remove};
+    use std::path::Path;
+
+    #[test]
+    fn removal_requires_a_verified_clean_worktree_or_missing_registration() {
+        let current = Path::new("/project");
+        let mut linked = Worktree {
+            path: "/linked".into(),
+            ..Worktree::default()
+        };
+        assert!(!can_remove(&linked, current, None));
+        assert!(!can_remove(&linked, current, Some(1)));
+        assert!(can_remove(&linked, current, Some(0)));
+        linked.is_prunable = true;
+        assert!(can_remove(&linked, current, None));
+        linked.is_locked = true;
+        assert!(!can_remove(&linked, current, None));
+        linked.is_locked = false;
+        linked.is_main = true;
+        assert!(!can_remove(&linked, current, Some(0)));
+        linked.is_main = false;
+        assert!(!can_remove(&linked, &linked.path, Some(0)));
+    }
 }

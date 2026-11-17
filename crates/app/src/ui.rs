@@ -27,6 +27,7 @@ use gpui_kit::*;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use pokarak_core::{
     ChangedFile, CompareMode, DiffDocument, DiffKind, FileStatus, Snapshot, SourceLocation,
+    Worktree,
 };
 use pokarak_navigation::{NavigationKind, NavigationResult, Navigator};
 use std::{
@@ -211,6 +212,10 @@ pub struct Pokarak {
     current: Option<PathBuf>,
     current_project: Option<PathBuf>,
     opening_path: Option<PathBuf>,
+    inventory: Vec<Worktree>,
+    change_count: Option<usize>,
+    graph_fingerprint: Option<String>,
+    count_pending: bool,
     projects: Vec<SavedProject>,
     pending_history: Option<ReadingPoint>,
     pending_projects: VecDeque<PathBuf>,
@@ -371,21 +376,17 @@ impl Pokarak {
 
     fn cycle_worktree(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         let trees: Vec<_> = self
-            .snapshot()
-            .map(|s| {
-                s.worktrees
-                    .iter()
-                    .filter(|t| !t.is_prunable)
-                    .map(|t| t.path.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+            .inventory
+            .iter()
+            .filter(|t| !t.is_prunable)
+            .map(|t| t.path.clone())
+            .collect();
         if trees.is_empty() {
             return;
         }
         let index = trees
             .iter()
-            .position(|p| Some(p) == self.current.as_ref())
+            .position(|p| Some(p) == self.opening_path.as_ref().or(self.current.as_ref()))
             .unwrap_or(0);
         let index = if forward {
             (index + 1) % trees.len()
@@ -395,15 +396,20 @@ impl Pokarak {
         self.open_repository(trees[index].clone(), window, cx);
     }
 
+    fn active_project_index(&self) -> Option<usize> {
+        if let Some(path) = &self.opening_path {
+            return project_index_for_path(&self.projects, path);
+        }
+        self.projects
+            .iter()
+            .position(|p| Some(&p.root) == self.current_project.as_ref())
+    }
+
     fn cycle_project(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.projects.is_empty() {
             return;
         }
-        let index = self
-            .projects
-            .iter()
-            .position(|p| Some(&p.root) == self.current_project.as_ref())
-            .unwrap_or(0);
+        let index = self.active_project_index().unwrap_or(0);
         let index = if forward {
             (index + 1) % self.projects.len()
         } else {
@@ -510,12 +516,12 @@ impl Pokarak {
         let Some(index) = self.projects.iter().position(|p| p.root == project_root) else {
             return;
         };
-        let project = self.projects.remove(index);
-        if self
+        let closing_pending = self
             .opening_path
             .as_ref()
-            .is_some_and(|path| project.worktrees.iter().any(|root| path.starts_with(root)))
-        {
+            .is_some_and(|path| project_index_for_path(&self.projects, path) == Some(index));
+        let project = self.projects.remove(index);
+        if closing_pending {
             self.request += 1;
             self.loading = false;
             self.opening_path = None;
@@ -532,6 +538,9 @@ impl Pokarak {
             {
                 self.open_repository(project.last_worktree, window, cx);
             }
+        } else if closing_pending {
+            self.pending_projects.clear();
+            self.resume_current_reader(window, cx);
         }
         self.persist(cx);
         self.focus.focus(window, cx);
@@ -540,7 +549,13 @@ impl Pokarak {
 
     fn reset_active(&mut self, cx: &mut Context<Self>) {
         self.reset_git_history();
+        self.invalidate_git_page();
+        self.changed = Arc::new(AtomicBool::new(false));
         self.opening_path = None;
+        self.inventory.clear();
+        self.change_count = None;
+        self.graph_fingerprint = None;
+        self.count_pending = false;
         self.analysis_feedback = AnalysisFeedback::default();
         self.pending_projects.clear();
         self.stop_analysis(cx);
@@ -632,6 +647,10 @@ impl Pokarak {
             current: None,
             current_project: None,
             opening_path: None,
+            inventory: Vec::new(),
+            change_count: None,
+            graph_fingerprint: None,
+            count_pending: false,
             projects,
             pending_history: None,
             pending_projects,
@@ -690,12 +709,17 @@ impl Pokarak {
             std::future::ready(())
         })
         .detach();
+        let executor = cx.background_executor().clone();
         cx.spawn(async move |view, cx| {
             loop {
-                smol::Timer::after(Duration::from_millis(800)).await;
+                executor.timer(Duration::from_millis(800)).await;
                 if view
                     .update(cx, |this, cx| {
-                        if this.changed.swap(false, Ordering::Relaxed) && !this.loading {
+                        if !this.loading
+                            && !this.checking_changes
+                            && !this.count_pending
+                            && this.changed.swap(false, Ordering::Relaxed)
+                        {
                             this.check_changes(cx);
                         }
                     })
@@ -709,7 +733,7 @@ impl Pokarak {
         theme::apply(this.prefs.theme, this.prefs.code_font_size, window, cx);
         this.focus.focus(window, cx);
         if let Some(path) = initial {
-            this.open_repository(path, window, cx);
+            this.begin_open_repository(path, window, cx);
         }
         this
     }
@@ -719,6 +743,12 @@ impl Pokarak {
             .as_ref()
             .and_then(|root| self.sessions.get(root))
     }
+    fn active_worktree(&self) -> Option<&Worktree> {
+        self.inventory
+            .iter()
+            .find(|tree| Some(&tree.path) == self.current.as_ref())
+    }
+
     fn snapshot(&self) -> Option<&Snapshot> {
         self.session().and_then(|s| s.snapshot.as_ref())
     }
@@ -759,9 +789,13 @@ impl Pokarak {
     }
 
     fn capture_positions(&mut self, cx: &App) {
-        for session in self.sessions.values_mut() {
+        if let Some(session) = self
+            .current
+            .as_ref()
+            .and_then(|root| self.sessions.get_mut(root))
+        {
             if session.restoring {
-                continue;
+                return;
             }
             for (path, doc) in &session.documents {
                 let editor = doc.read(cx);
@@ -785,22 +819,24 @@ impl Pokarak {
         }
     }
 
-    fn persist(&mut self, cx: &App) {
+    fn remember_view(&mut self, cx: &App) {
         self.capture_positions(cx);
-        if let Some(session) = self
-            .current
-            .as_ref()
-            .and_then(|root| self.sessions.get_mut(root))
+        if let Some(root) = &self.current
+            && let Some(session) = self.sessions.get_mut(root)
         {
             session.saved.filter = self.filter.clone();
             session.saved.text_search = self.text_search;
-        }
-        for (root, session) in &self.sessions {
             self.prefs
                 .worktrees
                 .insert(root.clone(), session.saved.clone());
         }
-        self.prefs.last_root = self.current.clone();
+    }
+
+    fn persist(&mut self, cx: &App) {
+        self.remember_view(cx);
+        if self.current.is_some() || self.opening_path.is_none() {
+            self.prefs.last_root = self.current.clone();
+        }
         self.prefs.open_projects = self.projects.clone();
         self.prefs.save();
     }
@@ -817,7 +853,7 @@ impl Pokarak {
                 let _ = this.update_in(cx, |this, window, cx| {
                     this.pending_projects = paths.into_iter().collect();
                     if let Some(path) = this.pending_projects.pop_front() {
-                        this.open_repository(path, window, cx);
+                        this.begin_open_repository(path, window, cx);
                     }
                 });
             }
@@ -826,27 +862,39 @@ impl Pokarak {
     }
 
     fn open_repository(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.persist(cx);
-        self.reset_git_history();
+        self.pending_projects.clear();
+        self.begin_open_repository(path, window, cx);
+    }
+
+    fn begin_open_repository(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.current.is_some() {
+            self.remember_view(cx);
+        }
         self.stop_analysis(cx);
         self.analysis_feedback = AnalysisFeedback::default();
-        self.opening_path = Some(path.canonicalize().unwrap_or_else(|_| path.clone()));
+        self.invalidate_git_page();
+        self.opening_path = Some(path.clone());
         self.request += 1;
         self.file_request += 1;
         let token = self.request;
         self.loading = true;
+        self.file_loading = false;
+        self.checking_changes = false;
+        self.count_pending = false;
+        self.pending_location_revision = None;
+        self.pending_history = None;
         self.error = None;
-        self.status = "저장소를 읽는 중…".into();
+        self.status = "워크트리 목록을 읽는 중…".into();
         self.results_open = false;
-        let saved_views = self.prefs.worktrees.clone();
         let task = cx.background_spawn(async move {
             let root = pokarak_core::repository_root(&path)?;
-            let mode = saved_views
-                .get(&root)
-                .map(|s| s.comparison.clone())
-                .unwrap_or_default();
-            let snapshot = pokarak_core::snapshot(&root, &mode)?;
-            anyhow::Ok((root, snapshot))
+            let trees = pokarak_core::worktree_inventory(&root)?;
+            anyhow::Ok((root, trees))
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
@@ -855,12 +903,16 @@ impl Pokarak {
                     return;
                 }
                 this.loading = false;
-                this.opening_path = None;
+                let opening_path = this.opening_path.take();
                 match result {
-                    Ok((root, snapshot)) => {
+                    Ok((root, trees)) => {
+                        this.reset_git_history();
+                        this.inventory = trees;
+                        this.change_count = None;
+                        this.graph_fingerprint = None;
                         this.current = Some(root.clone());
-                        let project_root = snapshot
-                            .worktrees
+                        let project_root = this
+                            .inventory
                             .iter()
                             .find(|t| t.is_main)
                             .map(|t| t.path.clone())
@@ -869,7 +921,7 @@ impl Pokarak {
                         let project = SavedProject {
                             root: project_root.clone(),
                             last_worktree: root.clone(),
-                            worktrees: snapshot.worktrees.iter().map(|t| t.path.clone()).collect(),
+                            worktrees: this.inventory.iter().map(|t| t.path.clone()).collect(),
                         };
                         if let Some(existing) =
                             this.projects.iter_mut().find(|p| p.root == project_root)
@@ -882,10 +934,13 @@ impl Pokarak {
                         this.prefs.recent.insert(0, project_root);
                         this.prefs.recent.truncate(8);
                         let saved = this.prefs.worktrees.get(&root).cloned().unwrap_or_default();
-                        this.sessions
+                        let session = this
+                            .sessions
                             .entry(root.clone())
                             .or_insert_with(|| Session::new(saved));
-                        let saved = this.sessions.get(&root).unwrap().saved.clone();
+                        session.snapshot = None;
+                        session.restoring = session.saved.selected.is_some();
+                        let saved = session.saved.clone();
                         this.filter = saved.filter.clone();
                         this.text_search = saved.text_search;
                         this.search_input.update(cx, |input, cx| {
@@ -900,19 +955,28 @@ impl Pokarak {
                                 cx,
                             );
                         });
-                        this.install_snapshot(snapshot, window, cx);
-                        this.watch(root.clone());
+                        this.external_change = false;
+                        this.status = "준비됨".into();
+                        if this.pending_projects.is_empty() {
+                            this.watch(root.clone(), cx);
+                            this.open_git_history(window, cx);
+                            this.restore_git_completion(cx);
+                        }
                         this.prefs.last_root = Some(root);
                         this.prefs.open_projects = this.projects.clone();
                         this.prefs.save();
                     }
                     Err(error) => {
-                        this.error = Some(format!("{error:#}"));
+                        this.resume_current_reader(window, cx);
+                        this.error = Some(match opening_path {
+                            Some(path) => format!("{}\n{error:#}", path.display()),
+                            None => format!("{error:#}"),
+                        });
                         this.status = "저장소를 열 수 없습니다".into();
                     }
                 }
                 if let Some(path) = this.pending_projects.pop_front() {
-                    this.open_repository(path, window, cx);
+                    this.begin_open_repository(path, window, cx);
                 }
                 cx.notify();
             });
@@ -921,38 +985,101 @@ impl Pokarak {
         cx.notify();
     }
 
-    fn watch(&mut self, root: PathBuf) {
-        self.watcher = None;
-        let changed = self.changed.clone();
-        if let Ok(mut watcher) =
-            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if let Ok(event) = event
-                    && !event.kind.is_access()
-                    && event.paths.iter().any(|path| {
-                        !path.components().any(|c| {
-                            matches!(
-                                c.as_os_str().to_str(),
-                                Some("target" | "node_modules" | ".gradle" | "objects")
-                            )
-                        })
-                    })
-                {
-                    changed.store(true, Ordering::Relaxed);
-                }
-            })
-            && watcher.watch(&root, RecursiveMode::Recursive).is_ok()
-        {
-            self.watcher = Some(watcher);
+    fn resume_current_reader(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.current.clone() else {
+            self.status = "프로젝트를 열어 시작하세요".into();
+            return;
+        };
+        self.status = "준비됨".into();
+        self.watch(root, cx);
+        self.changed.store(true, Ordering::Relaxed);
+        if self.git_history.active {
+            self.open_git_history(window, cx);
+        } else if self.snapshot().is_none() {
+            self.refresh(window, cx);
+        } else if let Some(path) = self.selected() {
+            self.open_file(path, false, None, window, cx);
         }
-        self.changed.store(false, Ordering::Relaxed);
-        self.external_change = false;
+    }
+
+    fn watch(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        self.watcher = None;
+        self.changed = Arc::new(AtomicBool::new(false));
+        let scope = self.changed.clone();
+        let changed = scope.clone();
+        let task = cx.background_spawn(async move {
+            let objects = root.join(".git/objects");
+            let mut watcher =
+                notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                    if let Ok(event) = event
+                        && !event.kind.is_access()
+                        && (event.need_rescan()
+                            || event.paths.iter().any(|path| !path.starts_with(&objects)))
+                    {
+                        changed.store(true, Ordering::Relaxed);
+                    }
+                })
+                .ok()?;
+            watcher.watch(&root, RecursiveMode::Recursive).ok()?;
+            Some(watcher)
+        });
+        cx.spawn(async move |view, cx| {
+            let watcher = task.await;
+            let _ = view.update(cx, |app, _| {
+                if Arc::ptr_eq(&app.changed, &scope) {
+                    app.watcher = watcher;
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn check_graph_changes(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.current.clone() else {
+            return;
+        };
+        if self.count_pending {
+            return;
+        }
+        let generation = self.request;
+        self.count_pending = true;
+        let target = root.clone();
+        let task =
+            cx.background_spawn(async move { pokarak_core::worktree_change_summary(&target) });
+        cx.spawn(async move |view, cx| {
+            let result = task.await;
+            let _ = view.update(cx, |app, cx| {
+                if app.request == generation && app.current.as_ref() == Some(&root) {
+                    app.count_pending = false;
+                    if let Ok((count, fingerprint)) = result {
+                        if let Some(previous) = &app.graph_fingerprint {
+                            app.external_change |= previous != &fingerprint;
+                        } else {
+                            app.graph_fingerprint = Some(fingerprint);
+                            app.change_count = Some(count);
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn check_changes(&mut self, cx: &mut Context<Self>) {
         if self.checking_changes || self.external_change {
             return;
         }
-        let (Some(root), Some(snapshot)) = (self.current.clone(), self.snapshot()) else {
+        let Some(root) = self.current.clone() else {
+            return;
+        };
+        if self.git_history.active {
+            if self.graph_page_loaded() {
+                self.check_graph_changes(cx);
+            }
+            return;
+        }
+        let Some(snapshot) = self.snapshot() else {
             return;
         };
         let mode = snapshot.compare.clone();
@@ -964,10 +1091,10 @@ impl Pokarak {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.checking_changes = false;
                 if this.request != generation || this.current.as_ref() != Some(&root) {
                     return;
                 }
+                this.checking_changes = false;
                 if let Ok(snapshot) = result
                     && snapshot.fingerprint != old_fingerprint
                 {
@@ -980,9 +1107,18 @@ impl Pokarak {
     }
 
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.opening_path.is_some() {
+            return;
+        }
         let Some(root) = self.current.clone() else {
             return;
         };
+        self.checking_changes = false;
+        self.count_pending = false;
+        if self.git_history.active {
+            self.refresh_graph_inventory(root, window, cx);
+            return;
+        }
         let mode = self
             .session()
             .map(|s| s.saved.comparison.clone())
@@ -1026,12 +1162,71 @@ impl Pokarak {
         cx.notify();
     }
 
+    fn refresh_graph_inventory(
+        &mut self,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request += 1;
+        let token = self.request;
+        self.loading = true;
+        self.error = None;
+        self.status = "워크트리 목록을 읽는 중…".into();
+        let task = cx.background_spawn(async move { pokarak_core::worktree_inventory(&root) });
+        cx.spawn_in(window, async move |view, cx| {
+            let result = task.await;
+            let _ = view.update_in(cx, |app, window, cx| {
+                if app.request != token {
+                    return;
+                }
+                app.loading = false;
+                match result {
+                    Ok(trees) => {
+                        if let Some(project) = app
+                            .projects
+                            .iter_mut()
+                            .find(|p| Some(&p.root) == app.current_project.as_ref())
+                        {
+                            project.worktrees =
+                                trees.iter().map(|tree| tree.path.clone()).collect();
+                        }
+                        app.inventory = trees;
+                        app.change_count = None;
+                        app.graph_fingerprint = None;
+                        if let Some(session) = app
+                            .current
+                            .as_ref()
+                            .and_then(|root| app.sessions.get_mut(root))
+                        {
+                            session.snapshot = None;
+                        }
+                        app.external_change = false;
+                        app.status = "준비됨".into();
+                        app.sync_git_history(window, cx);
+                    }
+                    Err(error) => {
+                        app.error = Some(format!("{error:#}"));
+                        app.status = "워크트리를 갱신할 수 없습니다".into();
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn install_snapshot(
         &mut self,
         snapshot: Snapshot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.inventory = snapshot.worktrees.clone();
+        self.change_count = Some(snapshot.worktree.changed_files);
+        self.graph_fingerprint = None;
+        self.count_pending = false;
         let root = self.current.clone().unwrap();
         let session = self.sessions.get_mut(&root).unwrap();
         let selection = session
@@ -1355,7 +1550,7 @@ impl Pokarak {
     }
 
     fn compare(&mut self, branch: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_code_view(window, cx);
+        self.leave_git_graph();
         let Some(root) = &self.current else {
             return;
         };
@@ -1688,6 +1883,9 @@ impl Pokarak {
     }
 
     fn focus_search(&mut self, text: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.opening_path.is_some() {
+            return;
+        }
         self.show_code_view(window, cx);
         self.text_search = text;
         if !text && let Some(root) = &self.current {
@@ -2968,7 +3166,43 @@ impl Render for Pokarak {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.observe_feedback();
         let palette = Palette::new(cx);
-        let body = if self.current.is_some() && self.git_history.active {
+        let pending = self
+            .opening_path
+            .as_deref()
+            .map(|p| (p, "워크트리 목록을 읽는 중…"))
+            .or_else(|| {
+                self.current
+                    .as_deref()
+                    .filter(|_| {
+                        self.loading && !self.git_history.active && self.snapshot().is_none()
+                    })
+                    .map(|p| (p, "파일 목록과 변경사항을 읽는 중…"))
+            });
+        let body = if let Some((path, phase)) = pending {
+            div()
+                .id("opening-project")
+                .size_full()
+                .v_flex()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .child(div().font_weight(FontWeight::MEDIUM).child(phase))
+                .child(
+                    div()
+                        .text_color(palette.rgb(MUTED))
+                        .child(path.display().to_string()),
+                )
+                .child(
+                    Button::new("switch-opening-project")
+                        .ghost()
+                        .small()
+                        .label("다른 프로젝트 열기…")
+                        .on_click(
+                            cx.listener(|app, _, window, cx| app.choose_repository(window, cx)),
+                        ),
+                )
+                .into_any_element()
+        } else if self.current.is_some() && self.git_history.active {
             h_resizable("graph-main-panes")
                 .child(
                     resizable_panel()
@@ -2998,8 +3232,9 @@ impl Render for Pokarak {
             self.render_welcome(cx)
         };
         let context = self
-            .current
+            .opening_path
             .as_ref()
+            .or(self.current.as_ref())
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
         let root = div().id("pokarak");
@@ -3032,8 +3267,8 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&FindDefinition,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::Definition,None,w,cx)}}))
             .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}}))
             .child(self.render_toolbar(window, cx))
-            .when(self.current.is_some() && !self.git_history.active,|d|d.child(self.render_comparison(cx)))
-            .when(self.external_change,|d|d.child(div().h(px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(px(12.))
+            .when(self.opening_path.is_none() && self.current.is_some() && !self.git_history.active,|d|d.child(self.render_comparison(cx)))
+            .when(self.opening_path.is_none() && self.external_change,|d|d.child(div().h(px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(px(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")
                 .child(Button::new("apply-refresh").label("갱신").ghost().small().on_click(cx.listener(|this,_,w,cx|this.refresh(w,cx))))))
             .when(self.trust_prompt,|d|d.child(div().p_3().v_flex().gap_2().bg(palette.rgb(0x293848)).border_b_1().border_color(palette.rgb(LINE))
@@ -3052,6 +3287,23 @@ impl Render for Pokarak {
                 .child(div().max_w(px(400.)).min_w_0().text_ellipsis().child(self.status.clone()))
                 .child(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의  /  ⌥F7 사용처" }))
     }
+}
+
+// A nested independent repository may also be inside another project's worktree.
+fn project_index_for_path(projects: &[SavedProject], path: &Path) -> Option<usize> {
+    projects
+        .iter()
+        .enumerate()
+        .flat_map(|(index, project)| {
+            project
+                .worktrees
+                .iter()
+                .chain(std::iter::once(&project.root))
+                .filter(|root| path.starts_with(root))
+                .map(move |root| (root.components().count(), index))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, index)| index)
 }
 
 fn language(path: &Path) -> &'static str {
@@ -3093,4 +3345,36 @@ fn file_status(status: &FileStatus) -> (&'static str, u32) {
 fn scroll_row(handle: &UniformListScrollHandle) -> usize {
     let y: f32 = handle.0.borrow().base_handle.offset().y.into();
     (-y / 22.).max(0.).floor() as usize
+}
+#[cfg(test)]
+mod project_selection_tests {
+    use super::{SavedProject, project_index_for_path};
+    use std::path::Path;
+
+    #[test]
+    fn pending_paths_select_their_nested_project_or_linked_worktree() {
+        let projects = [
+            SavedProject {
+                root: "/top".into(),
+                worktrees: vec!["/top".into(), "/linked".into()],
+                ..Default::default()
+            },
+            SavedProject {
+                root: "/top/nested".into(),
+                ..Default::default()
+            },
+        ];
+        assert_eq!(
+            project_index_for_path(&projects, Path::new("/top/nested/src")),
+            Some(1)
+        );
+        assert_eq!(
+            project_index_for_path(&projects, Path::new("/linked/src")),
+            Some(0)
+        );
+        assert_eq!(
+            project_index_for_path(&projects, Path::new("/outside")),
+            None
+        );
+    }
 }

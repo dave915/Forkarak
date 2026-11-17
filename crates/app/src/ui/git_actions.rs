@@ -100,6 +100,18 @@ impl Pokarak {
         }
     }
 
+    pub(super) fn invalidate_git_page(&mut self) {
+        self.git_ui.load_request += 1;
+        self.git_ui.loading = false;
+    }
+
+    pub(super) fn active_worktree_has_git_job(&self) -> bool {
+        self.git_ui
+            .busy
+            .as_ref()
+            .is_some_and(|(root, _)| self.current.as_ref() == Some(root))
+    }
+
     pub(super) fn git_is_busy(&self) -> bool {
         self.git_ui.busy.is_some() || self.git_ui.loading
     }
@@ -128,6 +140,8 @@ impl Pokarak {
         self.persist(cx);
         self.stop_analysis(cx);
         self.request += 1;
+        self.checking_changes = false;
+        self.count_pending = false;
         self.file_request += 1;
         self.file_loading = false;
         let token = self.request;
@@ -563,9 +577,8 @@ impl Pokarak {
             destructive,
         } = confirmation;
         let checkout_source = matches!(operation, Operation::CheckoutBranch { .. }).then(|| {
-            self.snapshot().and_then(|snapshot| {
-                (!snapshot.worktree.is_detached).then(|| snapshot.worktree.branch.clone())
-            })
+            self.active_worktree()
+                .and_then(|tree| (!tree.is_detached).then(|| tree.branch.clone()))
         });
         window.close_dialog(cx);
         let weak = cx.entity().downgrade();

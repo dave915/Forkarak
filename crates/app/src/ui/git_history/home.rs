@@ -25,9 +25,14 @@ impl Pokarak {
     }
 
     pub(in crate::ui) fn show_code_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.opening_path.is_some() {
+            return;
+        }
         if self.git_history.active {
             self.leave_git_graph();
-            if let Some(path) = self.selected() {
+            if self.snapshot().is_none() {
+                self.refresh(window, cx);
+            } else if let Some(path) = self.selected() {
                 self.open_file(path, false, None, window, cx);
             }
         }
@@ -64,10 +69,11 @@ impl Pokarak {
         let list = self.commit_rows(columns, cx);
         let saved = self.session().map(|session| &session.saved);
         let collapsed = saved.is_some_and(|view| view.graph_detail_collapsed);
-        let count = self
-            .snapshot()
-            .map(|snapshot| snapshot.worktree.changed_files)
-            .unwrap_or_default();
+        let count = match self.change_count {
+            Some(count) => format!("{count}개 파일"),
+            None if self.count_pending => "변경 수 확인 중…".into(),
+            None => "변경 수 미확인".into(),
+        };
         let status = if self.loading || ui.loading {
             "읽는 중…".into()
         } else if ui.limit_reached {
@@ -122,7 +128,7 @@ impl Pokarak {
                             "history-reload",
                             "새로고침",
                             busy,
-                            |app, window, cx| app.sync_git_history(window, cx),
+                            |app, window, cx| app.refresh(window, cx),
                         )
                         .ghost(),
                     )
@@ -145,7 +151,7 @@ impl Pokarak {
                     .w_full()
                     .selected(self.inline_commit_active())
                     .disabled(self.loading || self.git_is_busy())
-                    .accessibility_label(format!("미커밋 변경 {count}개 파일"))
+                    .accessibility_label(format!("미커밋 변경 {count}"))
                     .child(
                         div()
                             .w_full()
@@ -158,11 +164,7 @@ impl Pokarak {
                                     .text_color(palette.rgb(BLUE)),
                             )
                             .child("미커밋 변경")
-                            .child(
-                                div()
-                                    .text_color(palette.rgb(MUTED))
-                                    .child(format!("{count}개 파일")),
-                            ),
+                            .child(div().text_color(palette.rgb(MUTED)).child(count)),
                     )
                     .tooltip("변경 사항 검토 · 스테이징 · 커밋")
                     .on_click(cx.listener(|app, _, window, cx| {

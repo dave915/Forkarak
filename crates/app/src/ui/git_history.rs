@@ -51,6 +51,10 @@ impl HistoryUi {
     }
 }
 impl Pokarak {
+    pub(super) fn graph_page_loaded(&self) -> bool {
+        self.git_history.nav.catalog.is_some()
+    }
+
     fn history_read<T: Send + 'static>(
         &mut self,
         job: impl FnOnce(&Path) -> anyhow::Result<T> + Send + 'static,
@@ -61,7 +65,10 @@ impl Pokarak {
         let Some(root) = self.git_history.root.clone() else {
             return;
         };
-        if self.git_is_busy() || self.current.as_ref() != Some(&root) || self.loading {
+        if self.active_worktree_has_git_job()
+            || self.current.as_ref() != Some(&root)
+            || self.loading
+        {
             return;
         }
         self.git_history.request += 1;
@@ -81,7 +88,7 @@ impl Pokarak {
                 if !app.git_history.accepts_read(token, &root)
                     || app.current.as_ref() != Some(&root)
                     || app.request != navigation_generation
-                    || app.git_is_busy()
+                    || app.active_worktree_has_git_job()
                 {
                     cx.notify();
                     return;
@@ -97,8 +104,19 @@ impl Pokarak {
         cx.notify();
     }
     pub(super) fn open_git_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.git_is_busy() || self.loading {
+        if self.active_worktree_has_git_job() || self.opening_path.is_some() {
             return;
+        }
+        if self.loading {
+            if self.git_history.active {
+                return;
+            }
+            // Returning to the graph supersedes an in-flight code snapshot.
+            self.request += 1;
+            self.loading = false;
+            self.checking_changes = false;
+            self.count_pending = false;
+            self.status = "준비됨".into();
         }
         let Some(root) = self.current.clone() else {
             return;
@@ -151,8 +169,11 @@ impl Pokarak {
                 app.git_history.cursor = page.next;
                 app.git_history.limit_reached = page.limit_reached;
                 app.git_history.shallow = page.shallow;
+                if first && app.graph_fingerprint.is_none() {
+                    app.check_graph_changes(cx);
+                }
                 if first && !app.inline_commit_active() {
-                    let head = app.snapshot().map(|s| s.worktree.head.as_str());
+                    let head = app.active_worktree().map(|tree| tree.head.as_str());
                     let selected = app
                         .git_history
                         .entries

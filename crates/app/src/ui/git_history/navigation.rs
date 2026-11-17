@@ -140,14 +140,13 @@ impl Pokarak {
 
     pub(in crate::ui) fn render_graph_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::new(cx);
-        let Some(snapshot) = self.snapshot() else {
+        let Some(tree) = self.active_worktree() else {
             return div().size_full().bg(palette.rgb(SIDE)).into_any_element();
         };
         let catalog = self.git_history.nav.catalog.clone();
-        let trees = snapshot.worktrees.clone();
-        let root = snapshot.worktree.path.clone();
-        let current = (!snapshot.worktree.is_detached && !snapshot.worktree.head.is_empty())
-            .then(|| snapshot.worktree.branch.clone());
+        let trees = self.inventory.clone();
+        let root = tree.path.clone();
+        let current = (!tree.is_detached && !tree.head.is_empty()).then(|| tree.branch.clone());
         let occupied: HashSet<_> = trees
             .iter()
             .filter(|t| !t.is_detached)

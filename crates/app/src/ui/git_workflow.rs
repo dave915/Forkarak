@@ -165,6 +165,50 @@ impl Pokarak {
             cx,
         );
     }
+    /// Stashes are shared across worktrees: always pick an explicit identity.
+    pub(super) fn open_stash_pop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.current.clone() else {
+            return;
+        };
+        self.workflow_read(
+            root,
+            |ops| ops.workflow_state(),
+            Self::show_stash_pop_picker,
+            window,
+            cx,
+        );
+    }
+
+    fn show_stash_pop_picker(
+        &mut self,
+        state: WorkflowState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.entity().downgrade();
+        window.close_all_dialogs(cx);
+        window.open_dialog(cx, move |dialog,_,cx| {
+            let busy = workflow_disabled(&weak, &state.root, cx);
+            let mut entries = div().id("stash-pop-targets").max_h(ui_px(240.)).overflow_y_scroll().v_flex().gap_2();
+            if state.stashes.is_empty() { entries = entries.child(workflow_note("보관된 stash가 없습니다.")); }
+            for (index, entry) in state.stashes.iter().enumerate() {
+                let target = state.root.clone(); let selected = entry.clone();
+                let preview_root = state.root.clone(); let preview_entry = entry.clone();
+                entries = entries.child(div().v_flex().gap_1()
+                    .child(div().text_ellipsis().child(format!("{} · {} · {}", entry.selector, short_oid(&entry.oid), entry.message)))
+                    .child(div().flex().gap_2()
+                        .child(wf_action(&weak,("stash-pop-preview",index),"내용 보기…",busy,move |app,w,cx|app.open_stash(preview_root.clone(),preview_entry.clone(),w,cx)))
+                        .child(wf_action(&weak,("stash-pop-pick",index),"Pop · 적용 후 제거…",busy,move |app,w,cx| {
+                            let job = WorkflowWrite::Pop(selected.clone());
+                            app.confirm_workflow(target.clone(),"Stash Pop · 적용 후 제거".into(),stash_write_detail(&selected,&job),job,w,cx);
+                        }))));
+            }
+            dialog.title(format!("Pop 대상 선택 · Stash {}개", state.stashes.len())).width(ui_px(740.)).margin_top(ui_px(24.)).on_ok(|_,_,_|false)
+                .child(div().v_flex().gap_3().child(workflow_scope(&state.root))
+                    .child(workflow_note("Stash는 이 저장소의 모든 워크트리가 공유합니다. 현재 워크트리에 적용할 항목을 선택하고 확인하세요. 충돌이나 실패 시 stash는 보관됩니다."))
+                    .child(entries)).footer(workflow_close())
+        });
+    }
     fn workflow_write(
         &mut self,
         root: PathBuf,
@@ -189,7 +233,7 @@ impl Pokarak {
             let save_root = state.root.clone();
             let mut body = div().v_flex().gap_2().child(workflow_scope(&state.root))
                 .child(div().flex().gap_2().items_center()
-                    .child(div().flex_1().child("Stash · 이 저장소의 모든 워크트리가 공유"))
+                    .child(div().flex_1().child(format!("Stash {}개 · 모든 워크트리 공유",state.stashes.len())))
                     .child(wf_action(&weak, "stash-new", "변경사항 보관…", busy, move |app,w,cx| app.show_stash_save(save_root.clone(),w,cx)))
                     .child(wf_action(&weak, "workflow-refresh", "새로고침", busy, |app,w,cx| app.open_git_workflow(w,cx))));
             let mut stashes = div().id("workflow-stashes").h(ui_px(116.)).overflow_y_scroll().v_flex().gap_1();
@@ -283,34 +327,79 @@ impl Pokarak {
             cx.new(|cx| InputState::new(window, cx).placeholder("내용을 볼 저장소 상대 파일 경로"));
         let weak = cx.entity().downgrade();
         window.close_all_dialogs(cx);
-        window.open_dialog(cx,move |dialog,_,cx| {
-            let busy=workflow_disabled(&weak,&root,cx);
-            let mut inspect=div().flex().gap_2().child(Input::new(&path).flex_1());
-            for (untracked,label,id) in [(false,"파일 내용","stash-tracked-content"),(true,"미추적 내용","stash-untracked-content")] {
-                let input=path.clone();let target=root.clone();let selected=entry.clone();
-                inspect=inspect.child(wf_action(&weak,id,label,busy,move |app,w,cx| {
-                    let path=PathBuf::from(input.read(cx).value().as_ref());let filename=path.display().to_string();
-                    app.workflow_read(target.clone(),{let entry=selected.clone();move |ops|ops.stash_content(&entry,&path,untracked)},move |app,content,w,cx|app.show_workflow_content(filename,content,w,cx),w,cx);
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let busy = workflow_disabled(&weak, &root, cx);
+            let mut inspect = div().flex().gap_2().child(Input::new(&path).flex_1());
+            for (untracked, label, id) in [
+                (false, "파일 내용", "stash-tracked-content"),
+                (true, "미추적 내용", "stash-untracked-content"),
+            ] {
+                let input = path.clone();
+                let target = root.clone();
+                let selected = entry.clone();
+                inspect = inspect.child(wf_action(&weak, id, label, busy, move |app, w, cx| {
+                    let path = PathBuf::from(input.read(cx).value().as_ref());
+                    let filename = path.display().to_string();
+                    app.workflow_read(
+                        target.clone(),
+                        {
+                            let entry = selected.clone();
+                            move |ops| ops.stash_content(&entry, &path, untracked)
+                        },
+                        move |app, content, w, cx| {
+                            app.show_workflow_content(filename, content, w, cx)
+                        },
+                        w,
+                        cx,
+                    );
                 }));
             }
-            let mut actions=div().flex().gap_2().justify_end().child(workflow_close());
-            for (id,label,action) in [("stash-apply","적용",WorkflowWrite::Apply(entry.clone())),("stash-pop","적용 후 제거",WorkflowWrite::Pop(entry.clone())),("stash-drop","삭제…",WorkflowWrite::Drop(entry.clone()))] {
-                let target=root.clone();let selected=entry.clone();
-                actions=actions.child(wf_action(&weak,id,label,busy,move |app,w,cx| {
-                    let detail=match &action {
-                        WorkflowWrite::Drop(_) => format!("공유 stash를 삭제합니다. 이 항목의 보관 내용을 잃을 수 있습니다.\n{}\n{}\n{}",selected.selector,selected.oid,selected.message),
-                        WorkflowWrite::Pop(_) => format!("이 워크트리에 적용하고 성공하면 공유 stash에서 제거합니다. 충돌이나 실패 시 stash를 유지합니다.\n{}\n{}",selected.oid,selected.message),
-                        _ => format!("이 워크트리에 적용합니다. Stash는 유지됩니다.\n{}\n{}",selected.oid,selected.message),
-                    };
-                    app.confirm_workflow(target.clone(),format!("Stash {label}"),detail,action.clone(),w,cx);
+            let mut actions = div().flex().gap_2().justify_end().child(workflow_close());
+            for (id, label, action) in [
+                (
+                    "stash-apply",
+                    "Apply · 보관 유지",
+                    WorkflowWrite::Apply(entry.clone()),
+                ),
+                (
+                    "stash-pop",
+                    "Pop · 적용 후 제거",
+                    WorkflowWrite::Pop(entry.clone()),
+                ),
+                ("stash-drop", "삭제…", WorkflowWrite::Drop(entry.clone())),
+            ] {
+                let target = root.clone();
+                let selected = entry.clone();
+                actions = actions.child(wf_action(&weak, id, label, busy, move |app, w, cx| {
+                    let detail = stash_write_detail(&selected, &action);
+                    app.confirm_workflow(
+                        target.clone(),
+                        format!("Stash {label}"),
+                        detail,
+                        action.clone(),
+                        w,
+                        cx,
+                    );
                 }));
             }
-            dialog.title(format!("{} · {}",entry.selector,short_oid(&entry.oid))).width(ui_px(780.)).margin_top(ui_px(24.)).on_ok(|_,_,_|false)
-                .child(div().v_flex().gap_2().child(workflow_scope(&root))
-                    .child(div().text_ellipsis().child(entry.message.clone()))
-                    .child(workflow_note(&format!("원본 브랜치 기록: {} · 저장소 전체 공유",entry.source_branch.as_deref().unwrap_or("확인 불가"))))
-                    .child(editor_view(&preview,true,214.))
-                    .child(inspect))
+            dialog
+                .title(format!("{} · {}", entry.selector, short_oid(&entry.oid)))
+                .width(ui_px(780.))
+                .margin_top(ui_px(24.))
+                .on_ok(|_, _, _| false)
+                .child(
+                    div()
+                        .v_flex()
+                        .gap_2()
+                        .child(workflow_scope(&root))
+                        .child(div().text_ellipsis().child(entry.message.clone()))
+                        .child(workflow_note(&format!(
+                            "원본 브랜치 기록: {} · 저장소 전체 공유",
+                            entry.source_branch.as_deref().unwrap_or("확인 불가")
+                        )))
+                        .child(editor_view(&preview, true, 214.))
+                        .child(inspect),
+                )
                 .footer(actions)
         });
     }
@@ -554,6 +643,21 @@ impl Pokarak {
         };
         self.workflow_write(draft.root.clone(), "충돌 결과 저장·stage", job, window, cx);
     }
+}
+fn stash_write_detail(entry: &StashEntry, action: &WorkflowWrite) -> String {
+    let effect = match action {
+        WorkflowWrite::Drop(_) => {
+            "공유 stash를 삭제합니다. 이 항목의 보관 내용을 잃을 수 있습니다."
+        }
+        WorkflowWrite::Pop(_) => {
+            "이 워크트리에 적용하고 성공하면 공유 stash에서 제거합니다. 충돌이나 실패 시 stash를 유지합니다."
+        }
+        _ => "이 워크트리에 적용합니다. Stash는 유지됩니다.",
+    };
+    format!(
+        "{effect}\n{}\n{}\n{}",
+        entry.selector, entry.oid, entry.message
+    )
 }
 fn workflow_disabled(weak: &WeakEntity<Pokarak>, root: &Path, cx: &App) -> bool {
     weak.upgrade().is_none_or(|view| {

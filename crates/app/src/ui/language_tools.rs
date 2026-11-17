@@ -917,6 +917,7 @@ impl Pokarak {
                     };
                     match hover {
                         Ok(Some(hover)) => {
+                            details.push("커서의 타입 · 문서".into());
                             details.extend(hover.contents.into_iter().map(|m| m.value))
                         }
                         Ok(None) => {}

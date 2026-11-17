@@ -120,6 +120,11 @@ pub fn worktree_inventory(root: &Path) -> Result<Vec<Worktree>> {
 pub fn worktree_change_count(root: &Path) -> Result<usize> {
     backend::worktree_change_count(root)
 }
+/// Return the selected worktree's dirty count and a graph refresh fingerprint.
+/// Ignored, untracked build output does not contribute to this fingerprint.
+pub fn worktree_change_summary(root: &Path) -> Result<(usize, String)> {
+    backend::worktree_change_summary(root)
+}
 /// Capture index, HEAD, working bytes, and worktree inventory without refreshing
 /// the index. Inventory counts are uncommitted counts, independent of comparison.
 pub fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {

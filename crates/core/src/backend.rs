@@ -156,6 +156,33 @@ pub(crate) fn worktree_change_count(root: &Path) -> Result<usize> {
     Ok(capture.changes(root, &capture.head_tree, true)?.len())
 }
 
+/// Graph-only refresh checks include refs and worktree registration, but never
+/// read sibling working files or generate per-file diff statistics.
+pub(crate) fn worktree_change_summary(root: &Path) -> Result<(usize, String)> {
+    let capture = Capture::read(root, &Tree::new())?;
+    let count = capture.changes(root, &capture.head_tree, true)?.len();
+    let mut fingerprint = Sha256::new();
+    feed(&mut fingerprint, capture.fingerprint.as_bytes());
+    let refs = git::words(
+        root,
+        &[
+            "for-each-ref",
+            "--format=%(refname)%00%(objectname)",
+            "--",
+            "refs/heads/",
+            "refs/remotes/",
+            "refs/tags/",
+            "refs/stash",
+        ],
+    )?;
+    feed(&mut fingerprint, &refs);
+    feed(
+        &mut fingerprint,
+        &git::words(root, &["worktree", "list", "--porcelain", "-z"])?,
+    );
+    Ok((count, format!("{:x}", fingerprint.finalize())))
+}
+
 /// Working change inventory for the independent commit dialog. No index refresh,
 /// filters, worktree inventory traversal, or disk-backed staged preview.
 pub(crate) fn commit_working_changes(root: &Path) -> Result<Vec<ChangedFile>> {

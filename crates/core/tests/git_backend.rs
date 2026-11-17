@@ -240,6 +240,31 @@ fn branch_counts_are_separate_from_dirty_worktree_counts() {
 }
 
 #[test]
+fn graph_summary_distinguishes_tracked_changes_from_ignored_build_output() {
+    let repo = Repo::new();
+    repo.write(".gitignore", "**/build/\n.gradle/\n");
+    repo.write("module/build/keep.kt", "tracked build input");
+    repo.git(&["add", "-f", "--", "module/build/keep.kt"]);
+    repo.add(".gitignore");
+    repo.commit();
+    let summary = || pokarak_core::worktree_change_summary(&repo.root).unwrap();
+    let clean = summary();
+    assert_eq!(clean.0, 0);
+    repo.write("module/build/classes/Demo.class", "output");
+    repo.write(".gradle/caches/item", "cache");
+    assert_eq!(summary(), clean);
+    repo.write("module/build/keep.kt", "changed once");
+    let edited = summary();
+    assert_eq!(edited.0, 1);
+    repo.write("module/build/keep.kt", "changed twice");
+    let edited_again = summary();
+    assert_eq!(edited_again.0, 1);
+    assert_ne!(edited_again.1, edited.1);
+    repo.git(&["branch", "another"]);
+    assert_ne!(summary().1, edited_again.1);
+}
+
+#[test]
 fn paths_are_lossless_literal_and_nul_delimited() {
     let repo = Repo::new();
     let names = [

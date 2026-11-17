@@ -411,13 +411,13 @@ impl Pokarak {
             let confirmed = previous.oid.clone();
             let expected = snapshot.clone();
             let disabled = weak.upgrade().is_none_or(|app| app.read(cx).commit_disabled());
-            dialog.title("이전 커밋 수정 확인").width(px(660.)).margin_top(px(24.)).overlay_closable(false).on_ok(|_,_,_|false)
+            dialog.title("이전 커밋 수정 확인").width(ui_px(660.)).margin_top(ui_px(24.)).overlay_closable(false).on_ok(|_,_,_|false)
                 .child(div().v_flex().gap_2()
                     .child(commit_note(format!("작업 대상: {}", snapshot.root.display())))
                     .child(commit_note(format!("{}\n{} <{}>\n{}", previous.oid, previous.author, previous.email, previous.date)))
-                    .child(div().id("amend-old-message").max_h(px(80.)).overflow_y_scroll().child(previous.message.clone()))
+                    .child(div().id("amend-old-message").max_h(ui_px(80.)).overflow_y_scroll().child(previous.message.clone()))
                     .child(commit_note(format!("현재 index의 {}개 변경과 아래 메시지로 이 커밋을 교체합니다. 이미 공유한 커밋을 수정하면 다른 사람의 이력과 달라집니다.", snapshot.staged.len())))
-                    .child(Editor::new(&message).aria_label("수정할 커밋 메시지").h(px(82.)).font_family("IBM Plex Sans").text_size(px(13.)))
+                    .child(Editor::new(&message).aria_label("수정할 커밋 메시지").h(ui_px(82.)).font_family("IBM Plex Sans").text_size(ui_text(13.)))
                     .child(commit_note("작업 파일은 자동 stage하지 않습니다. 기존 작성자와 Git hooks를 사용합니다.")))
                 .footer(div().flex().justify_end().gap_2()
                     .child(Button::new("amend-cancel").label("취소").small().on_click(|_,w,cx|w.close_dialog(cx)))
@@ -444,8 +444,8 @@ impl Pokarak {
             let close = weak.clone();
             dialog
                 .title("Stage / 커밋")
-                .width(px(860.))
-                .margin_top(px(12.))
+                .width(ui_px(860.))
+                .margin_top(ui_px(12.))
                 .overlay_closable(false)
                 .on_ok(|_, _, _| false)
                 .on_close(move |_, _, cx| {
@@ -488,7 +488,7 @@ fn commit_button(
         })
 }
 fn commit_note(text: impl Into<String>) -> Div {
-    div().text_size(px(12.)).child(text.into())
+    div().text_size(ui_text(12.)).child(text.into())
 }
 fn commit_editor(
     text: &str,

@@ -333,7 +333,7 @@ impl Pokarak {
         window.open_dialog(cx, move |dialog, _, _| {
             let mut sections = div()
                 .id("git-action-sections")
-                .max_h(px(355.))
+                .max_h(ui_px(355.))
                 .overflow_y_scroll()
                 .v_flex()
                 .gap_3()
@@ -397,8 +397,8 @@ impl Pokarak {
             }
             dialog
                 .title("Git 작업")
-                .width(px(600.))
-                .margin_top(px(16.))
+                .width(ui_px(600.))
+                .margin_top(ui_px(16.))
                 .child(sections)
                 .footer(close_row())
         });
@@ -485,7 +485,7 @@ impl Pokarak {
                 };
                 let _ = target.update(cx, |app, cx| app.confirm_git_operation(GitConfirmation { root: state_for_action.root.clone(), label: title.into(), detail, operation, destructive: delete }, window, cx));
             }));
-            dialog.title(title).width(px(640.)).child(body.child(buttons))
+            dialog.title(title).width(ui_px(640.)).child(body.child(buttons))
         });
     }
 
@@ -559,7 +559,7 @@ impl Pokarak {
                         let _ = target.update(cx, |app, cx| app.confirm_git_operation(GitConfirmation { root: state.root.clone(), label, detail, operation, destructive: prune }, window, cx));
                     }));
             }
-            dialog.title(title).width(px(620.)).child(body.child(buttons))
+            dialog.title(title).width(ui_px(620.)).child(body.child(buttons))
         });
     }
 
@@ -602,7 +602,7 @@ impl Pokarak {
                     }, window, cx);
                 });
             });
-            dialog.title(format!("{label} 확인")).width(px(640.)).child(div().v_flex().gap_4()
+            dialog.title(format!("{label} 확인")).width(ui_px(640.)).child(div().v_flex().gap_4()
                 .child(scope(&root, None)).child(div().child(detail.clone()))
                 .child(note("설정된 Git hooks와 기존 인증·SSH 설정을 사용합니다. 터미널 입력이 필요한 인증은 외부 터미널에서 준비한 뒤 다시 시도하세요."))
                 .child(div().flex().justify_end().gap_2().child(close_button()).child(action)))
@@ -618,7 +618,7 @@ impl Pokarak {
         let weak = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, cx| {
             let palette = Palette::new(cx);
-            let mut rows = div().id("git-remotes-list").v_flex().gap_4().max_h(px(380.)).overflow_y_scroll();
+            let mut rows = div().id("git-remotes-list").v_flex().gap_4().max_h(ui_px(380.)).overflow_y_scroll();
             if state.remotes.is_empty() { rows = rows.child(note("등록된 원격 저장소가 없습니다.")); }
             for (index, remote) in state.remotes.iter().enumerate() {
                 let mut actions = div().flex().flex_wrap().gap_2();
@@ -656,7 +656,7 @@ impl Pokarak {
             }
             let target = weak.clone();
             let root = state.root.clone();
-            dialog.title("원격 저장소 설정").width(px(680.)).child(div().v_flex().gap_4()
+            dialog.title("원격 저장소 설정").width(ui_px(680.)).child(div().v_flex().gap_4()
                 .child(scope(&state.root, None))
                 .child(note("이 저장소와 연결된 모든 워크트리가 공유하는 Git 설정입니다."))
                 .child(rows)
@@ -715,7 +715,7 @@ impl Pokarak {
             let url_for_action = url.clone();
             let root_for_action = root.clone();
             let initial_name = initial_name.clone();
-            dialog.title(title).width(px(660.)).child(div().v_flex().gap_4().child(scope(&root, None))
+            dialog.title(title).width(ui_px(660.)).child(div().v_flex().gap_4().child(scope(&root, None))
                 .child(if is_new { field("원격 이름", &name) } else { div().child(format!("원격: {initial_name}")) })
                 .child(field(if kind == RemoteUrlKind::Push { "Push URL" } else { "Fetch URL" }, &url))
                 .child(note(if multiple { "URL이 여러 개 설정되어 있습니다. 다른 URL을 덮어쓰지 않도록 외부 Git에서 편집하세요." } else { "저장소 로컬 설정만 변경합니다. 이 작업은 서버에 연결하지 않습니다." }))
@@ -744,7 +744,7 @@ impl Pokarak {
             let root_for_action = root.clone();
             let old_for_action = old_name.clone();
             let name_for_action = name.clone();
-            dialog.title("원격 이름 변경").width(px(600.)).child(div().v_flex().gap_4().child(scope(&root, None))
+            dialog.title("원격 이름 변경").width(ui_px(600.)).child(div().v_flex().gap_4().child(scope(&root, None))
                 .child(format!("현재 원격 이름: {old_name}")).child(field("새 이름", &name))
                 .child(div().flex().justify_end().gap_2().child(close_button()).child(Button::new("git-remote-rename-confirm").label("변경 확인…").on_click(move |_, window, cx| {
                     let new_name = name_for_action.read(cx).value().trim().to_owned();
@@ -778,7 +778,7 @@ impl Pokarak {
             let name_for_action = name.clone();
             let email_for_action = email.clone();
             let root = state.root.clone();
-            dialog.title("Git 작성자 설정 — 이 저장소만").width(px(640.)).child(div().v_flex().gap_4()
+            dialog.title("Git 작성자 설정 — 이 저장소만").width(ui_px(640.)).child(div().v_flex().gap_4()
                 .child(scope(&state.root, None))
                 .child(note("커밋에 기록되는 작성자 정보입니다. 서버 로그인·인증 설정과는 별개입니다. 현재 유효한 값을 표시하며, 저장하면 이 저장소와 연결된 워크트리에 적용됩니다."))
                 .child(note(&format!("현재 저장소 로컬 값: 이름 {} / 이메일 {}", state.local_identity.name.as_deref().unwrap_or("미설정 (상위 설정 상속)"), state.local_identity.email.as_deref().unwrap_or("미설정 (상위 설정 상속)"))))
@@ -811,7 +811,7 @@ fn choice(
 fn scope(root: &Path, branch: Option<&str>) -> Div {
     let mut content = div().v_flex().gap_1().child(
         div()
-            .text_size(px(12.))
+            .text_size(ui_text(12.))
             .child(format!("워크트리: {}", root.display())),
     );
     if let Some(branch) = branch {
@@ -837,7 +837,7 @@ fn select_field(label: &'static str, input: &Choice) -> Div {
 }
 
 fn note(text: &str) -> Div {
-    div().text_size(px(12.)).child(text.to_owned())
+    div().text_size(ui_text(12.)).child(text.to_owned())
 }
 fn close_button() -> Button {
     Button::new("git-dialog-close")

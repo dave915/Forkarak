@@ -28,12 +28,12 @@ impl Pokarak {
             .min_w_0()
             .gap_2()
             .when(inline, |d| d.flex_1())
-            .when(!inline, |d| d.h(px(236.)))
+            .when(!inline, |d| d.h(ui_px(236.)))
             .child(
                 div()
                     .v_flex()
                     .min_h_0()
-                    .w(px(if inline { 210. } else { 270. }))
+                    .w(ui_px(if inline { 210. } else { 270. }))
                     .flex_shrink_0()
                     .border_r_1()
                     .border_color(palette.rgb(LINE))
@@ -57,14 +57,18 @@ impl Pokarak {
             })
             .on_action(|_: &FindDefinition, _, cx| cx.stop_propagation())
             .on_action(|_: &FindReferences, _, cx| cx.stop_propagation())
-            .child(div().flex_none().text_size(px(12.)).text_ellipsis().child(
-                match (inline, branch) {
-                    (true, Some(branch)) => format!("미커밋 변경  ·  {branch}"),
-                    (true, None) => "미커밋 변경".into(),
-                    (false, Some(branch)) => format!("{branch}  ·  {}", root.display()),
-                    (false, None) => root.display().to_string(),
-                },
-            ))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(ui_text(12.))
+                    .text_ellipsis()
+                    .child(match (inline, branch) {
+                        (true, Some(branch)) => format!("미커밋 변경  ·  {branch}"),
+                        (true, None) => "미커밋 변경".into(),
+                        (false, Some(branch)) => format!("{branch}  ·  {}", root.display()),
+                        (false, None) => root.display().to_string(),
+                    }),
+            )
             .child(pane);
         let feedback = self.commit_ui.error.as_deref().or(self.error.as_deref());
         let message = feedback.or_else(|| {
@@ -80,10 +84,10 @@ impl Pokarak {
             panel = panel.child(
                 div()
                     .id("commit-feedback")
-                    .max_h(px(42.))
+                    .max_h(ui_px(42.))
                     .flex_none()
                     .overflow_y_scroll()
-                    .text_size(px(11.))
+                    .text_size(ui_text(11.))
                     .text_color(palette.rgb(if feedback.is_some() { RED } else { MUTED }))
                     .child(text.to_owned()),
             );
@@ -139,10 +143,10 @@ impl Pokarak {
             let message = Editor::new(editor)
                 .aria_label("커밋 메시지")
                 .disabled(self.git_is_busy())
-                .h(px(if inline { 42. } else { 62. }))
+                .h(ui_px(if inline { 42. } else { 62. }))
                 .w_full()
                 .font_family("IBM Plex Sans")
-                .text_size(px(13.));
+                .text_size(ui_text(13.));
             composer = composer.child(
                 div()
                     .v_flex()
@@ -151,7 +155,7 @@ impl Pokarak {
                     .when(inline, |d| d.flex_1())
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text(11.))
                             .text_color(palette.rgb(MUTED))
                             .child("커밋 메시지"),
                     )
@@ -187,7 +191,7 @@ impl Pokarak {
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_text(12.))
                             .text_color(palette.rgb(TEXT))
                             .child(format!(
                                 "{}  {count}",
@@ -252,7 +256,7 @@ impl Pokarak {
                             div()
                                 .flex()
                                 .w_full()
-                                .h(px(24.))
+                                .h(ui_px(24.))
                                 .items_center()
                                 .gap_1()
                                 .child(
@@ -323,7 +327,7 @@ impl Pokarak {
                 .flex_1()
                 .min_w_0()
                 .text_ellipsis()
-                .text_size(px(11.))
+                .text_size(ui_text(11.))
                 .text_color(palette.rgb(MUTED))
                 .child(side.map_or_else(String::new, |s| {
                     let pair = if s == Side::Unstaged {

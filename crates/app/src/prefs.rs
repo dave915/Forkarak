@@ -15,7 +15,8 @@ pub fn set_session_dir(path: PathBuf) {
 #[serde(default)]
 pub struct Preferences {
     pub theme: crate::theme::ThemeChoice,
-    pub code_font_size: f32,
+    #[serde(flatten)]
+    pub display: crate::theme::DisplaySettings,
     pub split_diff: bool,
     pub show_branches: bool,
     pub recent: Vec<PathBuf>,
@@ -64,6 +65,8 @@ pub struct SavedView {
     pub graph_detail_collapsed: bool,
     pub graph_branch: Option<String>,
     pub collapsed_graph_sections: HashSet<String>,
+    pub sidebar_width: Option<f32>,
+    pub code_files_width: Option<f32>,
     pub graph_height: Option<f32>,
     pub graph_files_width: Option<f32>,
     pub diff_split_ratio: Option<f32>,
@@ -103,5 +106,39 @@ impl Preferences {
                 let _ = std::fs::rename(temp, path);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::Preferences;
+    use crate::theme::DisplaySettings;
+
+    #[test]
+    fn legacy_session_keeps_code_font_and_defaults_new_preferences() {
+        let old: Preferences =
+            serde_json::from_str(r#"{"code_font_size":19,"split_diff":true}"#).unwrap();
+        let saved = serde_json::to_value(&old).unwrap();
+        assert_eq!(old.display.code_font_size, 19.);
+        assert_eq!(old.display.ui_font_size, 13.);
+        assert_eq!(saved["ui_zoom_percent"], 100);
+        assert_eq!(saved["code_font_size"], 19.);
+        assert!(old.split_diff);
+    }
+
+    #[test]
+    fn invalid_display_values_fall_back_independently() {
+        let input = DisplaySettings {
+            ui_font_size: f32::NAN,
+            code_font_size: 20.,
+            ui_zoom_percent: 0,
+        };
+        assert_eq!(
+            input.validated(),
+            DisplaySettings {
+                code_font_size: 20.,
+                ..Default::default()
+            }
+        );
     }
 }

@@ -62,7 +62,7 @@ impl Pokarak {
         palette: Palette,
     ) -> AnyElement {
         let disabled = self.commit_disabled();
-        let font_size = px(self.prefs.code_font_size);
+        let font_size = ui_px(self.prefs.display.code_font_size);
         let marked = self.commit_ui.marked.clone();
         let token = self.commit_ui.preview_request;
         uniform_list("partial-diff", preview.lines().len(), move |range, _, _| {

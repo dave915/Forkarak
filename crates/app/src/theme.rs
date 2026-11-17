@@ -52,11 +52,85 @@ impl Palette {
     }
 }
 
+/// Stored in logical units. Existing sessions already use the code_font_size key.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DisplaySettings {
+    pub code_font_size: f32,
+    pub ui_font_size: f32,
+    pub ui_zoom_percent: u16,
+}
+
+impl DisplaySettings {
+    pub const DEFAULT: Self = Self {
+        code_font_size: 13.,
+        ui_font_size: 13.,
+        ui_zoom_percent: 100,
+    };
+    pub const CODE_RANGE: std::ops::RangeInclusive<f32> = 10. ..=24.;
+    pub const UI_RANGE: std::ops::RangeInclusive<f32> = 11. ..=18.;
+    pub const ZOOM_RANGE: std::ops::RangeInclusive<u16> = 80..=140;
+
+    pub fn validated(mut self) -> Self {
+        if !Self::CODE_RANGE.contains(&self.code_font_size) {
+            self.code_font_size = Self::DEFAULT.code_font_size;
+        }
+        if !Self::UI_RANGE.contains(&self.ui_font_size) {
+            self.ui_font_size = Self::DEFAULT.ui_font_size;
+        }
+        if !Self::ZOOM_RANGE.contains(&self.ui_zoom_percent) {
+            self.ui_zoom_percent = Self::DEFAULT.ui_zoom_percent;
+        }
+        self
+    }
+
+    fn scale(self) -> f32 {
+        f32::from(self.ui_zoom_percent) / 100.
+    }
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+// Window layout and drawing run on GPUI's main thread. These app-wide units also
+// apply to menus, dialogs, and virtual rows built outside the root view's render.
+thread_local! {
+    static DISPLAY: std::cell::Cell<DisplaySettings> = const { std::cell::Cell::new(DisplaySettings::DEFAULT) };
+}
+
+/// Convert a design dimension to actual GPUI layout pixels. Measured bounds and
+/// pointer coordinates are already in those pixels.
+pub fn ui_px(value: f32) -> Pixels {
+    px(value * DISPLAY.get().scale())
+}
+
+pub fn logical_px(value: Pixels) -> f32 {
+    f32::from(value) / DISPLAY.get().scale()
+}
+
+pub fn ui_text(value: f32) -> Pixels {
+    let display = DISPLAY.get();
+    px(value * display.ui_font_size / 13. * display.scale())
+}
+
+pub fn apply_display(settings: DisplaySettings, cx: &mut App) {
+    DISPLAY.set(settings);
+    Theme::update(cx, |theme| {
+        // GPUI Kit sets the root rem from font_size, including its overlay layer.
+        theme.font_size = ui_text(13.);
+        theme.mono_font_size = ui_px(settings.code_font_size);
+    });
+    cx.refresh_windows();
+}
+
 pub fn code_row_height(font_size: Pixels) -> Pixels {
     px((f32::from(font_size) * 1.55).ceil())
 }
 
-pub fn apply(choice: ThemeChoice, font_size: f32, window: &mut Window, cx: &mut App) {
+pub fn apply(choice: ThemeChoice, display: DisplaySettings, window: &mut Window, cx: &mut App) {
     let mode = match choice {
         ThemeChoice::Dark => ThemeMode::Dark,
         ThemeChoice::Light => ThemeMode::Light,
@@ -66,13 +140,12 @@ pub fn apply(choice: ThemeChoice, font_size: f32, window: &mut Window, cx: &mut 
     let palette = Palette::new(cx);
     Theme::update(cx, |theme| {
         theme.font_family = "IBM Plex Sans".into();
-        theme.font_size = px(13.);
         theme.mono_font_family = "JetBrains Mono".into();
-        theme.mono_font_size = px(font_size);
         theme.colors.background = palette.rgb(0x20252c).into();
         theme.colors.foreground = palette.rgb(0xe5eaf0).into();
         theme.colors.border = palette.rgb(0x343e49).into();
         theme.colors.accent = palette.rgb(0x314353).into();
         theme.colors.accent_foreground = palette.rgb(0xe5eaf0).into();
     });
+    apply_display(display, cx);
 }

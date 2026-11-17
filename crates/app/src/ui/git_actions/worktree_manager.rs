@@ -92,7 +92,7 @@ impl Pokarak {
             let mut list = div()
                 .id("manage-worktree-list")
                 .v_flex()
-                .max_h(px(205.))
+                .max_h(ui_px(205.))
                 .overflow_y_scroll();
             for (index, tree) in trees.iter().enumerate() {
                 let title = if tree.is_detached {
@@ -151,7 +151,7 @@ impl Pokarak {
                                 .child(format!("{title}   {status}"))
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(ui_text(11.))
                                         .text_color(palette.rgb(MUTED))
                                         .text_ellipsis()
                                         .child(tree.path.display().to_string()),
@@ -212,7 +212,7 @@ impl Pokarak {
             }
             dialog
                 .title("워크트리 관리")
-                .width(px(640.))
+                .width(ui_px(640.))
                 .child(div().v_flex().gap_3().child(buttons).child(list))
                 .footer(close_row())
         });
@@ -234,7 +234,7 @@ impl Pokarak {
             let root = root.clone();
             dialog
                 .title("워크트리 제거 확인")
-                .width(px(590.))
+                .width(ui_px(590.))
                 .child(message.clone())
                 .footer(
                     div()
@@ -302,7 +302,7 @@ impl Pokarak {
                 || (new_branch && name.read(cx).value().trim().is_empty());
             dialog
                 .title("워크트리 생성")
-                .width(px(630.))
+                .width(ui_px(630.))
                 .child(
                     div()
                         .v_flex()

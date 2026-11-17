@@ -315,8 +315,8 @@ impl Pokarak {
         window.open_dialog(cx,move |dialog,_,cx| {
             let busy=weak.upgrade().is_none_or(|v|history_disabled(v.read(cx)));
             let destination=target.clone(); let source=commit.oid.clone();
-            dialog.title(format!("{} 확인",action.label())).width(px(650.)).margin_top(px(20.)).overlay_closable(false).on_ok(|_,_,_|false)
-                .child(div().v_flex().gap_3().text_size(px(13.))
+            dialog.title(format!("{} 확인",action.label())).width(ui_px(650.)).margin_top(ui_px(20.)).overlay_closable(false).on_ok(|_,_,_|false)
+                .child(div().v_flex().gap_3().text_size(ui_text(13.))
                     .child(format!("원본 커밋: {}\n{}",commit.oid,visible(&commit.subject)))
                     .child(format!("대상 브랜치: {}\n대상 HEAD: {}",target.branch,target.head))
                     .child(format!("대상 워크트리: {}",target.root.display()))
@@ -359,9 +359,9 @@ fn history_button(
 fn history_error(error: String) -> impl IntoElement {
     div()
         .id("history-error")
-        .max_h(px(54.))
+        .max_h(ui_px(54.))
         .overflow_y_scroll()
-        .text_size(px(12.))
+        .text_size(ui_text(12.))
         .child(error)
 }
 fn short(oid: &str) -> &str {

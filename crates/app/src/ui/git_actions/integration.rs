@@ -73,7 +73,7 @@ impl Pokarak {
             } else {
                 body = body.child(note("선택할 다른 로컬 또는 원격 추적 브랜치가 없습니다."));
             }
-            dialog.title(label).width(px(590.)).child(body).footer(
+            dialog.title(label).width(ui_px(590.)).child(body).footer(
                 div()
                     .flex()
                     .justify_end()
@@ -125,7 +125,7 @@ impl Pokarak {
                 .child(format!("현재 HEAD   {}    ·    선택한 브랜치   {source}  {}",&target.current.head[..8],&target.oid[..8]))
                 .child(description).child(note("충돌이 생기면 ‘Stash / 충돌 해결’에서 해결한 뒤 계속하거나 중단할 수 있습니다."));
             let root=target.current.root.clone();
-            dialog.title(format!("{label} 확인")).width(px(620.)).child(body)
+            dialog.title(format!("{label} 확인")).width(ui_px(620.)).child(body)
                 .footer(div().flex().justify_end().gap_2().child(close_button()).child(Button::new("integration-confirm").label(format!("{label} 실행")).primary().on_click(move |_,w,cx|{
                     let target=target.clone();
                     let _=weak.update(cx,|app,cx|{w.close_dialog(cx);app.run_git_job(root.clone(),label.into(),move |ops|ops.integrate_branch(kind,&target),w,cx);});

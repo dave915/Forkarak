@@ -294,7 +294,7 @@ impl Render for SplitDiff {
             .ok()
             .filter(|w| *w > 0.)
             .unwrap_or(f32::from(font_size) * 0.61);
-        let gutter = self.number_digits.max(4) as f32 * advance + 10.;
+        let gutter = self.number_digits.max(4) as f32 * advance + f32::from(ui_px(10.));
         let min_pane = gutter + 7. * advance;
         let row_height = theme::code_row_height(font_size);
         let ratio = split_ratio(self.preferred_ratio(cx), self.panel_width, min_pane);
@@ -330,11 +330,11 @@ impl Render for SplitDiff {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::finish_resize))
             .child(
                 div()
-                    .h(px(24.))
+                    .h(ui_px(24.))
                     .flex_none()
                     .flex()
                     .items_center()
-                    .text_size(px(11.))
+                    .text_size(ui_text(11.))
                     .bg(palette.rgb(SIDE))
                     .text_color(palette.rgb(MUTED))
                     .child(
@@ -346,7 +346,7 @@ impl Render for SplitDiff {
                     .child(header("변경 후").id("split-after-header").flex_1()),
             )
             .on_scroll(cx.listener(move |this, event: &ScrollEvent, _, cx| {
-                let delta = event.delta.pixel_delta(px(20.));
+                let delta = event.delta.pixel_delta(ui_px(20.));
                 let dx = if event.modifiers.shift && delta.x == px(0.) {
                     delta.y
                 } else {

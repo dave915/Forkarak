@@ -154,7 +154,7 @@ impl Pokarak {
             })
             .cloned();
         div()
-            .h(px(32.))
+            .h(ui_px(32.))
             .flex_none()
             .px_3()
             .flex()
@@ -163,7 +163,7 @@ impl Pokarak {
             .border_t_1()
             .border_color(palette.rgb(LINE))
             .bg(palette.rgb(SIDE))
-            .text_size(px(12.))
+            .text_size(ui_text(12.))
             .child(
                 div()
                     .flex_1()
@@ -263,7 +263,7 @@ impl Pokarak {
         let output = self.analysis_feedback.output.clone();
         div()
             .id("analysis-output")
-            .h(px(210.))
+            .h(ui_px(210.))
             .max_h(relative(0.3))
             .min_h_0()
             .flex_none()
@@ -274,7 +274,7 @@ impl Pokarak {
             .overflow_hidden()
             .child(
                 div()
-                    .h(px(34.))
+                    .h(ui_px(34.))
                     .flex_none()
                     .px_3()
                     .flex()
@@ -321,10 +321,10 @@ impl Pokarak {
                     range
                         .map(|index| {
                             div()
-                                .h(px(19.))
+                                .h(ui_px(19.))
                                 .px_3()
                                 .font_family("JetBrains Mono")
-                                .text_size(px(11.))
+                                .text_size(ui_text(11.))
                                 .text_color(palette.rgb(MUTED))
                                 .whitespace_nowrap()
                                 .child(lines[index].clone())

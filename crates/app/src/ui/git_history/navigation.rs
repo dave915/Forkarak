@@ -96,8 +96,8 @@ impl Pokarak {
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
                 .title(title.clone())
-                .width(px(620.))
-                .margin_top(px(28.))
+                .width(ui_px(620.))
+                .margin_top(ui_px(28.))
                 .child(picker.clone())
         });
         input.update(cx, |input, cx| input.focus(window, cx));
@@ -234,13 +234,13 @@ impl Pokarak {
                                             } else {
                                                 IconName::ChevronDown
                                             })
-                                            .size(px(12.)),
+                                            .size(ui_px(12.)),
                                         )
                                         .child(div().flex_1().text_ellipsis().child(group.title()))
                                         .child(
                                             div()
                                                 .text_color(palette.rgb(MUTED))
-                                                .text_size(px(11.))
+                                                .text_size(ui_text(11.))
                                                 .child(count.to_string()),
                                         ),
                                 )
@@ -268,7 +268,7 @@ impl Pokarak {
                             let target = weak.clone();
                             return Some(
                                 div()
-                                    .h(px(30.))
+                                    .h(ui_px(30.))
                                     .w_full()
                                     .flex()
                                     .items_center()
@@ -341,7 +341,7 @@ impl Pokarak {
                             .ghost()
                             .small()
                             .w_full()
-                            .h(px(29.))
+                            .h(ui_px(29.))
                             .justify_start()
                             .accessibility_label(format!("{} {label} 커밋으로 이동", group.title()))
                             .tooltip(tip)
@@ -355,7 +355,7 @@ impl Pokarak {
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .child(Icon::new(icon).size(px(14.)).text_color(
+                                    .child(Icon::new(icon).size(ui_px(14.)).text_color(
                                         palette.rgb(if selected { BLUE } else { MUTED }),
                                     ))
                                     .child(div().min_w_0().text_ellipsis().child(label)),
@@ -369,7 +369,7 @@ impl Pokarak {
                             });
                         let mut row = div()
                             .id(("graph-nav-item", index))
-                            .h(px(30.))
+                            .h(ui_px(30.))
                             .w_full()
                             .px_1()
                             .child(button);
@@ -506,7 +506,7 @@ impl Render for CommitSearch {
         let mut rows = div()
             .v_flex()
             .id("graph-search-results")
-            .max_h(px(278.))
+            .max_h(ui_px(278.))
             .overflow_y_scroll();
         for (i, commit) in self.results.commits.iter().enumerate() {
             let oid = commit.oid.clone();
@@ -515,7 +515,7 @@ impl Render for CommitSearch {
                     .ghost()
                     .small()
                     .w_full()
-                    .h(px(32.))
+                    .h(ui_px(32.))
                     .justify_start()
                     .flex_none()
                     .accessibility_label(format!(
@@ -546,7 +546,7 @@ impl Render for CommitSearch {
                             )
                             .child(
                                 div()
-                                    .max_w(px(110.))
+                                    .max_w(ui_px(110.))
                                     .text_color(palette.rgb(MUTED))
                                     .text_ellipsis()
                                     .child(visible(&commit.author)),

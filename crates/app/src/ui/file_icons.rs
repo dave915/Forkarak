@@ -1,6 +1,7 @@
 //! Filename-only selection also works for deleted files and historical tree entries.
+use crate::theme::ui_px;
 use gpui_kit::component::{ActiveTheme, button::Button};
-use gpui_kit::{App, ElementId, Img, ParentElement, SharedString, Styled, div, img, px};
+use gpui_kit::{App, ElementId, Img, ParentElement, SharedString, Styled, div, img};
 use serde::Deserialize;
 use std::{collections::HashMap, path::Path, sync::LazyLock};
 
@@ -46,7 +47,7 @@ impl Associations {
 pub(super) fn icon_for_path(path: &Path, cx: &App) -> Img {
     let name = THEME.artwork(path, !cx.theme().is_dark());
     img(format!("vscode-icons/{name}"))
-        .size(px(16.))
+        .size(ui_px(16.))
         .flex_none()
 }
 
@@ -79,7 +80,7 @@ pub(super) fn changed_file_button(
         .gap_1()
         .text_left()
         .child(icon_for_path(path, cx))
-        .child(div().w(px(14.)).flex_none().child(status))
+        .child(div().w(ui_px(14.)).flex_none().child(status))
         .child(div().flex_1().min_w_0().text_ellipsis().child(display_path));
     Button::new(id)
         .accessibility_label(label.clone())

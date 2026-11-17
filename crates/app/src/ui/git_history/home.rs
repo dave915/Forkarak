@@ -104,7 +104,9 @@ impl Pokarak {
             .overflow_hidden()
             .child(
                 div()
-                    .h(px(38.))
+                    .id("graph-controls")
+                    .overflow_x_scroll()
+                    .h(ui_px(38.))
                     .flex_none()
                     .px_3()
                     .flex()
@@ -115,7 +117,7 @@ impl Pokarak {
                     .child(self.branch_filter_control(cx))
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(ui_text(11.))
                             .text_color(palette.rgb(MUTED))
                             .child(status),
                     )
@@ -160,7 +162,7 @@ impl Pokarak {
                 Button::new("graph-working-changes")
                     .ghost()
                     .small()
-                    .h(px(32.))
+                    .h(ui_px(32.))
                     .w_full()
                     .selected(self.inline_commit_active())
                     .disabled(self.loading || self.git_is_busy())
@@ -173,7 +175,7 @@ impl Pokarak {
                             .gap_2()
                             .child(
                                 Icon::new(IconName::GitCommitHorizontal)
-                                    .size(px(15.))
+                                    .size(ui_px(15.))
                                     .text_color(palette.rgb(BLUE)),
                             )
                             .child(working_title)
@@ -201,16 +203,17 @@ impl Pokarak {
         }
         let graph_height = saved
             .and_then(|s| s.graph_height)
-            .map(px)
+            .map(ui_px)
             .unwrap_or(window.viewport_size().height * 0.38)
             .clamp(
-                px(150.),
-                (window.viewport_size().height - px(245.)).max(px(150.)),
+                ui_px(150.),
+                (window.viewport_size().height - ui_px(245.)).max(ui_px(150.)),
             );
         let resize = weak.clone();
         let resize_root = self.current.clone();
         v_resizable(SharedString::from(format!(
-            "graph-detail-panes:{resize_root:?}"
+            "graph-detail-panes:{resize_root:?}:{}",
+            self.prefs.display.ui_zoom_percent
         )))
         .on_resize(move |state, _, cx| {
             if let Some(height) = state.read(cx).sizes().first().copied() {
@@ -218,7 +221,7 @@ impl Pokarak {
                     if let Some(session) =
                         resize_root.as_ref().and_then(|r| app.sessions.get_mut(r))
                     {
-                        session.saved.graph_height = Some(height.into());
+                        session.saved.graph_height = Some(theme::logical_px(height));
                     }
                 });
             }
@@ -226,16 +229,18 @@ impl Pokarak {
         .child(
             resizable_panel()
                 .size(graph_height)
-                .size_range(px(150.)..px(1200.))
+                .size_range(ui_px(150.)..ui_px(1200.))
                 .child(graph),
         )
-        .child(resizable_panel().size_range(px(180.)..px(1600.)).child(
-            if self.inline_commit_active() {
-                self.render_inline_commit(window, cx)
-            } else {
-                self.render_graph_detail(cx)
-            },
-        ))
+        .child(
+            resizable_panel()
+                .size_range(ui_px(180.)..ui_px(1600.))
+                .child(if self.inline_commit_active() {
+                    self.render_inline_commit(window, cx)
+                } else {
+                    self.render_graph_detail(cx)
+                }),
+        )
         .into_any_element()
     }
 
@@ -267,8 +272,8 @@ impl Pokarak {
         let files_width = self
             .session()
             .and_then(|s| s.saved.graph_files_width)
-            .map(px)
-            .unwrap_or(px(230.));
+            .map(ui_px)
+            .unwrap_or(ui_px(230.));
         let busy = history_disabled(self);
         let weak = cx.entity().downgrade();
         let resize = weak.clone();
@@ -321,7 +326,7 @@ impl Pokarak {
                         });
                     })
                     .ghost()
-                    .h(px(29.))
+                    .h(ui_px(29.))
                     .w_full()
                     .selected(selected.as_ref() == Some(&file.path))
                 })
@@ -337,12 +342,12 @@ impl Pokarak {
             .bg(palette.rgb(SIDE))
             .child(
                 div()
-                    .h(px(34.))
+                    .h(ui_px(34.))
                     .flex_none()
                     .px_3()
                     .flex()
                     .items_center()
-                    .text_size(px(12.))
+                    .text_size(ui_text(12.))
                     .border_b_1()
                     .border_color(palette.rgb(LINE))
                     .child(format!("변경 파일  {}", detail.files.len())),
@@ -381,7 +386,9 @@ impl Pokarak {
             .overflow_hidden()
             .child(
                 div()
-                    .h(px(34.))
+                    .id("history-file-controls")
+                    .overflow_x_scroll()
+                    .h(ui_px(34.))
                     .flex_none()
                     .px_2()
                     .flex()
@@ -450,7 +457,7 @@ impl Pokarak {
                             .ml_2()
                             .flex_1()
                             .min_w_0()
-                            .text_size(px(11.))
+                            .text_size(ui_text(11.))
                             .text_ellipsis()
                             .child(
                                 ui.selected
@@ -462,24 +469,24 @@ impl Pokarak {
             )
             .child(div().flex_1().min_h_0().overflow_hidden().child(preview));
         div().size_full().v_flex().overflow_hidden()
-            .child(div().h(px(38.)).flex_none().px_3().flex().items_center().gap_2().border_b_1().border_color(palette.rgb(LINE))
+            .child(div().h(ui_px(38.)).flex_none().px_3().flex().items_center().gap_2().border_b_1().border_color(palette.rgb(LINE))
                 .child(div().flex_1().min_w_0().text_ellipsis().font_weight(FontWeight::MEDIUM).child(visible(&detail.commit.subject)))
                 .child(parents))
-            .child(div().h(px(26.)).flex_none().px_3().flex().items_center().text_size(px(11.)).text_color(palette.rgb(MUTED))
+            .child(div().h(ui_px(26.)).flex_none().px_3().flex().items_center().text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
                 .child(format!("{}  ·  {}  ·  {}", short(&detail.commit.oid), visible(&detail.commit.author), detail.commit.date)))
-            .child(div().flex_1().min_h_0().child(h_resizable(SharedString::from(format!("history-file-panes:{resize_root:?}")))
+            .child(div().flex_1().min_h_0().child(h_resizable(SharedString::from(format!("history-file-panes:{resize_root:?}:{}", self.prefs.display.ui_zoom_percent)))
                 .on_resize(move |state,_,cx| {
                     if let Some(width) = state.read(cx).sizes().first().copied() {
                         let _=resize.update(cx, |app,_| {
                             if let Some(session)=resize_root.as_ref().and_then(|r|app.sessions.get_mut(r)) {
-                                session.saved.graph_files_width=Some(width.into());
+                                session.saved.graph_files_width=Some(theme::logical_px(width));
                             }
                         });
                     }
                 })
-                .child(resizable_panel().size(files_width).size_range(px(170.)..px(500.)).child(file_pane))
+                .child(resizable_panel().size(files_width).size_range(ui_px(170.)..ui_px(500.)).child(file_pane))
                 .child(resizable_panel().child(reader))))
-            .child(div().h(px(24.)).flex_none().px_3().flex().items_center().text_size(px(10.)).text_color(palette.rgb(MUTED))
+            .child(div().h(ui_px(24.)).flex_none().px_3().flex().items_center().text_size(ui_text(10.)).text_color(palette.rgb(MUTED))
                 .child(if ui.document.as_ref().is_some_and(|doc| doc.truncated) { "일부 미리보기 · 2 MiB / 50,000줄 제한 · 읽기 전용" }
                     else if merge { "선택한 부모 대비 변경 · merge 커밋의 cherry-pick/revert는 외부 Git에서 실행하세요." }
                     else { "커밋 시점의 파일 · 읽기 전용" }))

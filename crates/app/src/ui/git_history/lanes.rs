@@ -68,7 +68,7 @@ pub(super) fn graph_view(
     canvas(
         move |_, _, _| row,
         move |bounds, row, window, _| {
-            let x = |lane: usize| bounds.left() + px(8. + lane as f32 * step);
+            let x = |lane: usize| bounds.left() + ui_px(8. + lane as f32 * step);
             let top = bounds.top();
             let middle = top + bounds.size.height * 0.5;
             let bottom = bounds.bottom();
@@ -82,7 +82,7 @@ pub(super) fn graph_view(
                     Some(_) => track_color(track, palette).opacity(0.24),
                     None => track_color(track, palette),
                 };
-                let mut path = PathBuilder::stroke(px(if highlighted { 2.8 } else { 1.8 }));
+                let mut path = PathBuilder::stroke(ui_px(if highlighted { 2.8 } else { 1.8 }));
                 path.move_to(from);
                 let bend = (from.y + to.y) * 0.5;
                 path.cubic_bezier_to(to, point(from.x, bend), point(to.x, bend));
@@ -113,7 +113,7 @@ pub(super) fn graph_view(
                 Some(_) => track_color(row.track, palette).opacity(0.35),
                 None => track_color(row.track, palette),
             };
-            let radius = px(4.);
+            let radius = ui_px(4.);
             window.paint_quad(quad(
                 Bounds::new(
                     point(x(row.lane) - radius, middle - radius),
@@ -121,14 +121,14 @@ pub(super) fn graph_view(
                 ),
                 radius,
                 palette.rgb(BG),
-                px(1.8),
+                ui_px(1.8),
                 color,
                 BorderStyle::Solid,
             ));
         },
     )
-    .w(px(width))
-    .h(px(30.))
+    .w(ui_px(width))
+    .h(ui_px(30.))
     .flex_none()
 }
 

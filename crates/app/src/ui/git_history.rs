@@ -1,5 +1,6 @@
 //! Dedicated immutable history view. Its editors never enter working-tree
 //! documents/navigation, and writes use the existing Git job lifecycle.
+mod branch_filter;
 mod context_actions;
 mod home;
 mod lanes;
@@ -144,11 +145,18 @@ impl Pokarak {
     }
     fn load_history_page(&mut self, first: bool, window: &mut Window, cx: &mut Context<Self>) {
         let cursor = self.git_history.cursor.clone();
+        let branch = self.graph_branch().map(str::to_owned);
         self.history_read(
             move |root| {
                 if first {
+                    if let Some(name) = &branch
+                        && let Some((page, catalog)) =
+                            history::navigation::open_branch(root, name, 100)?
+                    {
+                        return Ok((page, Some(catalog), None));
+                    }
                     history::navigation::open(root, 100)
-                        .map(|(page, catalog)| (page, Some(catalog)))
+                        .map(|(page, catalog)| (page, Some(catalog), branch))
                 } else {
                     history::next_page(
                         root,
@@ -157,10 +165,17 @@ impl Pokarak {
                             .ok_or_else(|| anyhow::anyhow!("No further page"))?,
                         100,
                     )
-                    .map(|page| (page, None))
+                    .map(|page| (page, None, None))
                 }
             },
-            move |app, (page, catalog), window, cx| {
+            move |app, (page, catalog, missing_branch), window, cx| {
+                if let Some(name) = missing_branch {
+                    app.save_graph_branch(None, cx);
+                    app.status = format!(
+                        "{} 브랜치가 없어 전체 그래프를 표시합니다",
+                        branch_filter::branch_label(&name)
+                    );
+                }
                 if let Some(catalog) = catalog {
                     app.git_history.nav.catalog = Some(Arc::new(catalog));
                 }
@@ -173,7 +188,10 @@ impl Pokarak {
                     app.check_graph_changes(cx);
                 }
                 if first && !app.inline_commit_active() {
-                    let head = app.active_worktree().map(|tree| tree.head.as_str());
+                    let head = app
+                        .active_worktree()
+                        .filter(|_| app.graph_branch().is_none())
+                        .map(|tree| tree.head.as_str());
                     let selected = app
                         .git_history
                         .entries

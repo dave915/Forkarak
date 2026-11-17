@@ -51,6 +51,7 @@ pub struct SavedView {
     pub code: bool,
     pub all_files: bool,
     pub graph_detail_collapsed: bool,
+    pub graph_branch: Option<String>,
     pub collapsed_graph_sections: HashSet<String>,
     pub graph_height: Option<f32>,
     pub graph_files_width: Option<f32>,

@@ -89,9 +89,13 @@ impl Pokarak {
                 busy: false,
             }
         });
+        let title = self
+            .graph_branch()
+            .map(|name| format!("커밋 검색 · {}", branch_filter::branch_label(name)))
+            .unwrap_or_else(|| "커밋 검색".into());
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
-                .title("커밋 검색")
+                .title(title.clone())
                 .width(px(620.))
                 .margin_top(px(28.))
                 .child(picker.clone())
@@ -119,9 +123,27 @@ impl Pokarak {
             return;
         };
         let target = oid.clone();
+        let scoped = self.graph_branch().is_some();
         self.history_read(
-            move |root| catalog.around(root, &target),
-            move |app, (page, i), w, cx| {
+            move |root| {
+                if scoped {
+                    if let Some((page, index)) = catalog.around_if_present(root, &target)? {
+                        return Ok((page, index, None));
+                    }
+                    let (_, all) = history::navigation::open(root, 1)?;
+                    let (page, index) = all.around(root, &target)?;
+                    Ok((page, index, Some(all)))
+                } else {
+                    let (page, index) = catalog.around(root, &target)?;
+                    Ok((page, index, None))
+                }
+            },
+            move |app, (page, i, all), w, cx| {
+                if let Some(catalog) = all {
+                    app.save_graph_branch(None, cx);
+                    app.git_history.nav.catalog = Some(Arc::new(catalog));
+                    app.status = "전체 브랜치에서 커밋을 표시합니다".into();
+                }
                 app.git_history.entries = page.entries.into();
                 app.git_history.in_neighborhood = true;
                 app.refresh_graph_hover(cx);

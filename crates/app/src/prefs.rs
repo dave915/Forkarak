@@ -102,6 +102,7 @@ pub struct SavedView {
     pub graph_height: Option<f32>,
     pub graph_files_width: Option<f32>,
     pub diff_split_ratio: Option<f32>,
+    pub diff_hide_whitespace: bool,
     pub graph_columns: HashMap<GraphColumn, f32>,
     pub filter: String,
     pub text_search: bool,

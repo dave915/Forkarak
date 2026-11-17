@@ -2,6 +2,52 @@ use super::*;
 use gpui_kit::component::resizable::v_resizable;
 
 impl Pokarak {
+    pub(in crate::ui) fn history_diff_active(&self) -> bool {
+        self.git_history.active
+            && !self.inline_commit_active()
+            && !self.git_history.code
+            && self.git_history.document.is_some()
+    }
+
+    pub(in crate::ui) fn jump_history_diff_hunk(
+        &self,
+        forward: bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.history_diff_active()
+            && let Some(diff) = &self.git_history.document
+        {
+            if !self.prefs.split_diff
+                && !self.hides_diff_whitespace()
+                && let Some(editor) = &self.git_history.editor
+            {
+                let rows: Vec<_> = diff
+                    .patch
+                    .lines()
+                    .enumerate()
+                    .filter_map(|(row, line)| line.starts_with("@@ ").then_some(row))
+                    .collect();
+                let state = editor.read(cx);
+                let current = state
+                    .visible_row_range()
+                    .map(|rows| rows.start)
+                    .unwrap_or(0);
+                let height = state.line_height().unwrap_or_else(|| {
+                    theme::code_row_height(ui_px(self.prefs.display.code_font_size))
+                });
+                let x = state.scroll_offset().x;
+                if let Some(row) = diff_tools::hunk_target(&rows, current, forward) {
+                    editor.update(cx, |editor, cx| {
+                        editor.set_scroll_offset(point(x, -height * row as f32), cx)
+                    });
+                }
+            } else {
+                diff.jump_hunk(self, None, forward, cx);
+            }
+        }
+    }
+
     pub(in crate::ui) fn leave_git_graph(&mut self) {
         self.leave_inline_commit();
         self.clear_graph_hover();
@@ -402,6 +448,12 @@ impl Pokarak {
             .filter(|doc| !ui.code && self.prefs.split_diff && !doc.binary)
         {
             doc.split(self, cx)
+        } else if let Some(doc) = ui
+            .document
+            .as_ref()
+            .filter(|doc| !ui.code && self.hides_diff_whitespace() && !doc.binary)
+        {
+            doc.unified(self, None, true, cx)
         } else if let Some(editor) = &ui.editor {
             Editor::new(editor)
                 .readonly(true)
@@ -510,6 +562,13 @@ impl Pokarak {
                             ),
                     ),
             )
+            .when(!ui.code, |reader| {
+                reader.children(
+                    ui.document
+                        .as_ref()
+                        .and_then(|doc| self.diff_reading_controls(doc, true, cx)),
+                )
+            })
             .child(div().flex_1().min_h_0().overflow_hidden().child(preview));
         div().size_full().v_flex().overflow_hidden()
             .child(div().h(ui_px(38.)).flex_none().px_3().flex().items_center().gap_2().border_b_1().border_color(palette.rgb(LINE))

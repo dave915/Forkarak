@@ -4,6 +4,7 @@ mod branch_review;
 mod cli_control;
 mod code_edit;
 mod code_workspace;
+mod diff_tools;
 mod draft_reconciliation;
 mod file_icons;
 mod file_inspector;
@@ -129,6 +130,7 @@ actions!(
 );
 
 pub fn bind_keys(cx: &mut App) {
+    diff_tools::bind_keys(cx);
     #[cfg(target_os = "macos")]
     crate::terminal::bind_keys(cx);
     #[cfg(target_os = "macos")]
@@ -2094,99 +2096,7 @@ impl Pokarak {
         } else if let Some(diff) = diff.filter(|_| self.prefs.split_diff) {
             diff.split(self, cx)
         } else if let Some(diff) = diff {
-            let font_size = ui_px(self.prefs.display.code_font_size);
-            let line_number_width = (font_size * 3.5).max(ui_px(45.));
-            let widest = diff
-                .lines
-                .iter()
-                .enumerate()
-                .max_by_key(|(_, line)| line.text.len())
-                .map(|(index, _)| index);
-            let document = diff.document.clone();
-            let syntax = diff.syntax.clone();
-            let weak = cx.entity().downgrade();
-            uniform_list("diff-lines", document.lines.len(), move |range, _, cx| {
-                range
-                    .map(|ix| {
-                        let line = &document.lines[ix];
-                        let new_line = line.new_line;
-                        let (background, color, sign) = match line.kind {
-                            DiffKind::Addition => (patch::ADD_BG, GREEN, "+"),
-                            DiffKind::Deletion => (patch::DELETE_BG, RED, "−"),
-                            DiffKind::Header => (0x283744, BLUE, ""),
-                            DiffKind::Context => (BG, TEXT, ""),
-                        };
-                        let target = weak.clone();
-                        div()
-                            .id(("diff-row", ix))
-                            .min_w_full()
-                            .h(theme::code_row_height(font_size))
-                            .flex()
-                            .items_center()
-                            .bg(palette.rgb(background))
-                            .font_family("JetBrains Mono")
-                            .text_size(font_size)
-                            .text_color(palette.rgb(color))
-                            .child(
-                                div()
-                                    .w(line_number_width)
-                                    .flex_none()
-                                    .text_right()
-                                    .pr_2()
-                                    .text_color(palette.rgb(MUTED))
-                                    .child(
-                                        line.old_line.map(|n| n.to_string()).unwrap_or_default(),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .w(line_number_width)
-                                    .flex_none()
-                                    .text_right()
-                                    .pr_2()
-                                    .text_color(palette.rgb(MUTED))
-                                    .child(
-                                        line.new_line.map(|n| n.to_string()).unwrap_or_default(),
-                                    ),
-                            )
-                            .child(div().w(ui_px(22.)).flex_none().child(sign))
-                            .child(
-                                div()
-                                    .whitespace_nowrap()
-                                    .when(line.kind != DiffKind::Header, |d| {
-                                        d.text_color(palette.rgb(TEXT))
-                                    })
-                                    .child(syntax.unified_line(line, cx)),
-                            )
-                            .on_click(move |event, window, cx| {
-                                if event.click_count() == 2
-                                    && let Some(line_number) = new_line
-                                {
-                                    let _ = target.update(cx, |this, cx| {
-                                        if let Some(path) = this.selected() {
-                                            this.open_file(
-                                                path,
-                                                true,
-                                                Some(Position::new(
-                                                    line_number.saturating_sub(1) as u32,
-                                                    0,
-                                                )),
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    });
-                                }
-                            })
-                            .into_any_element()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .track_scroll(&session.scroll)
-            .with_width_from_item(widest)
-            .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-            .size_full()
-            .into_any_element()
+            diff.unified(self, Some(&session.scroll), false, cx)
         } else {
             div()
                 .p_4()
@@ -2205,6 +2115,7 @@ impl Pokarak {
             .overflow_hidden()
             .child(tabs)
             .child(head)
+            .when(!code, |reader| reader.children(diff.and_then(|doc| self.diff_reading_controls(doc, false, cx))))
             .when(code, |d| d.child(self.code_edit_controls(path, cx)))
             .children(self.code_draft_notice(path, cx))
             .when(deleted && code && !dirty, |d| {
@@ -2518,7 +2429,7 @@ impl Render for Pokarak {
                 })
             },
         );
-        root.key_context(if self.git_history.active { "Pokarak GitGraph" } else { "Pokarak" }).track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(ui_text(13.)).font_family("IBM Plex Sans")
+        root.key_context(self.diff_key_context()).track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(ui_text(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
             .on_action(cx.listener(|this,_:&SearchGitGraph,w,cx|this.open_graph_search(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitHistory,w,cx|this.open_git_history(w,cx)))
@@ -2535,6 +2446,8 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&NextProject,w,cx|this.cycle_project(true,w,cx)))
             .on_action(cx.listener(|this,_:&PreviousProject,w,cx|this.cycle_project(false,w,cx)))
             .on_action(cx.listener(|this,_:&Refresh,w,cx|this.refresh(w,cx)))
+            .on_action(cx.listener(|this,_:&diff_tools::NextDiffHunk,w,cx|this.jump_diff_hunk(true,w,cx)))
+            .on_action(cx.listener(|this,_:&diff_tools::PreviousDiffHunk,w,cx|this.jump_diff_hunk(false,w,cx)))
             .on_action(cx.listener(|this,_:&SaveCodeFile,w,cx|this.save_code_file(false,w,cx)))
             .on_action(cx.listener(|this,_:&Back,w,cx|{if !this.git_history.active {this.navigate_history(true,w,cx)}}))
             .on_action(cx.listener(|this,_:&Forward,w,cx|{if !this.git_history.active {this.navigate_history(false,w,cx)}}))

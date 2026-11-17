@@ -1,11 +1,15 @@
 //! Align both halves of a change on a single virtualized vertical list.
+use super::diff_tools::{DiffAnalysis, DiffView};
 use super::{syntax::CodeSyntax, *};
 use gpui_kit::{
     base::ElementExt,
     component::{ActiveTheme, resizable::resize_handle},
 };
 use pokarak_core::DiffLine;
-use std::{cell::OnceCell, ops::Deref};
+use std::{
+    cell::{Cell, OnceCell},
+    ops::{Deref, Range},
+};
 
 /// The two revisions may use different languages (rename) and lexical state.
 #[derive(Default)]
@@ -46,11 +50,13 @@ impl DiffSyntax {
 pub(super) struct PreparedDiff {
     document: Arc<DiffDocument>,
     syntax: Arc<DiffSyntax>,
+    analysis: Arc<DiffAnalysis>,
 }
 
 impl PreparedDiff {
     pub(super) fn new(document: DiffDocument) -> Self {
         Self {
+            analysis: Arc::new(DiffAnalysis::new(&document.lines)),
             syntax: Arc::new(DiffSyntax::new(&document)),
             document: Arc::new(document),
         }
@@ -60,7 +66,11 @@ impl PreparedDiff {
 pub(super) struct ReviewDiff {
     pub(super) document: Arc<DiffDocument>,
     pub(super) syntax: Arc<DiffSyntax>,
-    split: OnceCell<Entity<SplitDiff>>,
+    analysis: Arc<DiffAnalysis>,
+    views: [OnceCell<Arc<DiffView>>; 2],
+    split: [OnceCell<Entity<SplitDiff>>; 2],
+    active_split: Cell<usize>,
+    unified_scroll: UniformListScrollHandle,
 }
 
 impl From<PreparedDiff> for ReviewDiff {
@@ -68,7 +78,11 @@ impl From<PreparedDiff> for ReviewDiff {
         Self {
             document: prepared.document,
             syntax: prepared.syntax,
-            split: OnceCell::new(),
+            analysis: prepared.analysis,
+            views: [OnceCell::new(), OnceCell::new()],
+            split: [OnceCell::new(), OnceCell::new()],
+            active_split: Cell::new(0),
+            unified_scroll: UniformListScrollHandle::new(),
         }
     }
 }
@@ -81,8 +95,28 @@ impl Deref for ReviewDiff {
 }
 
 impl ReviewDiff {
+    pub(super) fn view(&self, hide_whitespace: bool) -> Arc<DiffView> {
+        self.views[usize::from(hide_whitespace)]
+            .get_or_init(|| Arc::new(self.analysis.view(&self.document.lines, hide_whitespace)))
+            .clone()
+    }
+
+    fn split_entity(&self, app: &Pokarak, cx: &mut Context<Pokarak>) -> &Entity<SplitDiff> {
+        let filter = usize::from(app.hides_diff_whitespace());
+        self.active_split.set(filter);
+        self.split[filter].get_or_init(|| {
+            let owner = cx.weak_entity();
+            let worktree = app.current.clone();
+            let doc = self.document.clone();
+            let syntax = self.syntax.clone();
+            let view = self.view(filter != 0);
+            let analysis = self.analysis.clone();
+            cx.new(|_| SplitDiff::new(doc, syntax, analysis, view, owner, worktree))
+        })
+    }
+
     pub(super) fn split_position(&self, cx: &App) -> Option<(usize, f32)> {
-        let split = self.split.get()?.read(cx);
+        let split = self.split[self.active_split.get()].get()?.read(cx);
         Some((scroll_row(&split.scroll), split.horizontal))
     }
 
@@ -92,9 +126,7 @@ impl ReviewDiff {
         position: (usize, f32),
         cx: &mut Context<Pokarak>,
     ) {
-        let split = self
-            .split
-            .get_or_init(|| app.new_split_diff(self.document.clone(), self.syntax.clone(), cx));
+        let split = self.split_entity(app, cx);
         split.update(cx, |split, cx| {
             split.scroll.scroll_to_item(
                 position.0.min(split.rows.len().saturating_sub(1)),
@@ -121,10 +153,221 @@ impl ReviewDiff {
                 .child(text)
                 .into_any_element();
         }
-        self.split
-            .get_or_init(|| app.new_split_diff(self.document.clone(), self.syntax.clone(), cx))
-            .clone()
-            .into_any_element()
+        if self.view(app.hides_diff_whitespace()).visible.is_empty() {
+            return div()
+                .p_3()
+                .child("공백만 바뀐 줄을 숨겼습니다. 표시 필터를 끄면 전체 변경을 볼 수 있습니다.")
+                .into_any_element();
+        }
+        self.split_entity(app, cx).clone().into_any_element()
+    }
+
+    pub(super) fn jump_hunk(
+        &self,
+        app: &Pokarak,
+        scroll: Option<&UniformListScrollHandle>,
+        forward: bool,
+        cx: &mut Context<Pokarak>,
+    ) {
+        if self.binary || self.truncated || self.view(app.hides_diff_whitespace()).hunks.is_empty()
+        {
+            return;
+        }
+        if app.prefs.split_diff {
+            self.split_entity(app, cx).update(cx, |split, cx| {
+                let hunks: Vec<_> = split
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(row, item)| match item {
+                        Row::Header(i) if split.doc.lines[*i].text.starts_with("@@") => Some(row),
+                        _ => None,
+                    })
+                    .collect();
+                let hunks = if hunks.is_empty() {
+                    split
+                        .rows
+                        .iter()
+                        .enumerate()
+                        .find_map(|(i, row)| {
+                            let changed = match row {
+                                Row::Sides(a, b) => a.iter().chain(b.iter()).any(|&index| {
+                                    matches!(
+                                        split.doc.lines[index].kind,
+                                        DiffKind::Addition | DiffKind::Deletion
+                                    )
+                                }),
+                                Row::Header(_) => false,
+                            };
+                            changed.then_some(vec![i])
+                        })
+                        .unwrap_or_default()
+                } else {
+                    hunks
+                };
+                if let Some(row) =
+                    diff_tools::hunk_target(&hunks, scroll_row(&split.scroll), forward)
+                {
+                    split.scroll.scroll_to_item(row, ScrollStrategy::Top);
+                    cx.notify();
+                }
+            });
+        } else {
+            let scroll = scroll.unwrap_or(&self.unified_scroll);
+            if let Some(row) = diff_tools::hunk_target(
+                &self.view(app.hides_diff_whitespace()).hunks,
+                scroll_row(scroll),
+                forward,
+            ) {
+                scroll.scroll_to_item(row, ScrollStrategy::Top);
+                cx.notify();
+            }
+        }
+    }
+
+    pub(super) fn unified(
+        &self,
+        app: &Pokarak,
+        scroll: Option<&UniformListScrollHandle>,
+        history: bool,
+        cx: &mut Context<Pokarak>,
+    ) -> AnyElement {
+        let view = self.view(app.hides_diff_whitespace());
+        if view.visible.is_empty() {
+            return div()
+                .p_3()
+                .child(if !self.lines.is_empty() && app.hides_diff_whitespace() {
+                    "공백만 바뀐 줄을 숨겼습니다. 표시 필터를 끄면 전체 변경을 볼 수 있습니다."
+                        .into()
+                } else if self.patch.is_empty() {
+                    "텍스트 변경이 없습니다.".to_owned()
+                } else {
+                    self.patch.clone()
+                })
+                .into_any_element();
+        }
+        let font_size = ui_px(app.prefs.display.code_font_size);
+        let number_width = (font_size * 3.5).max(ui_px(45.));
+        let widest = view
+            .visible
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, i)| self.lines[**i].text.len())
+            .map(|(row, _)| row);
+        let document = self.document.clone();
+        let syntax = self.syntax.clone();
+        let analysis = self.analysis.clone();
+        let palette = Palette::new(cx);
+        let owner = cx.weak_entity();
+        let root = app.current.clone();
+        let path = self.path.clone();
+        uniform_list(
+            if history {
+                "history-unified-diff"
+            } else {
+                "diff-lines"
+            },
+            view.visible.len(),
+            move |range, _, cx| {
+                range
+                    .map(|row| {
+                        let i = view.visible[row];
+                        let line = &document.lines[i];
+                        let (background, color, sign) = match line.kind {
+                            DiffKind::Addition => (patch::ADD_BG, GREEN, "+"),
+                            DiffKind::Deletion => (patch::DELETE_BG, RED, "−"),
+                            DiffKind::Header => (0x283744, BLUE, ""),
+                            DiffKind::Context => (BG, TEXT, ""),
+                        };
+                        let source = syntax.source_line(line, line.new_line.is_none());
+                        let styled = diff_tools::styled_line(
+                            &line.text,
+                            source
+                                .map(|(syntax, index)| syntax.spans(index, cx))
+                                .unwrap_or_default(),
+                            &analysis.inline[i],
+                            &line.kind,
+                            false,
+                            cx,
+                        );
+                        let owner = owner.clone();
+                        let root = root.clone();
+                        let path = path.clone();
+                        let line_number = line.new_line;
+                        div()
+                            .id(("review-diff-row", row))
+                            .min_w_full()
+                            .h(theme::code_row_height(font_size))
+                            .flex()
+                            .items_center()
+                            .bg(palette.rgb(background))
+                            .font_family("JetBrains Mono")
+                            .text_size(font_size)
+                            .text_color(palette.rgb(color))
+                            .child(
+                                div()
+                                    .w(number_width)
+                                    .flex_none()
+                                    .text_right()
+                                    .pr_2()
+                                    .text_color(palette.rgb(MUTED))
+                                    .child(
+                                        line.old_line.map(|n| n.to_string()).unwrap_or_default(),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .w(number_width)
+                                    .flex_none()
+                                    .text_right()
+                                    .pr_2()
+                                    .text_color(palette.rgb(MUTED))
+                                    .child(
+                                        line.new_line.map(|n| n.to_string()).unwrap_or_default(),
+                                    ),
+                            )
+                            .child(div().w(ui_px(22.)).flex_none().child(sign))
+                            .child(
+                                div()
+                                    .whitespace_nowrap()
+                                    .when(line.kind != DiffKind::Header, |row| {
+                                        row.text_color(palette.rgb(TEXT))
+                                    })
+                                    .child(styled),
+                            )
+                            .on_click(move |event, window, cx| {
+                                if !history
+                                    && event.click_count() == 2
+                                    && let Some(line) = line_number
+                                {
+                                    let _ = owner.update(cx, |app, cx| {
+                                        if app.current == root
+                                            && app.selected().as_ref() == Some(&path)
+                                        {
+                                            app.open_file(
+                                                path.clone(),
+                                                true,
+                                                Some(Position::new(
+                                                    line.saturating_sub(1) as u32,
+                                                    0,
+                                                )),
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    });
+                                }
+                            })
+                            .into_any_element()
+                    })
+                    .collect::<Vec<_>>()
+            },
+        )
+        .track_scroll(scroll.unwrap_or(&self.unified_scroll))
+        .with_width_from_item(widest)
+        .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+        .size_full()
+        .into_any_element()
     }
 }
 
@@ -175,9 +418,28 @@ fn align(lines: &[DiffLine]) -> Vec<Row> {
     rows
 }
 
+fn align_view(lines: &[DiffLine], view: &DiffView) -> Vec<Row> {
+    align(lines)
+        .into_iter()
+        .filter_map(|row| match row {
+            Row::Header(i) => view.keep[i].then_some(Row::Header(i)),
+            Row::Sides(a, b) => {
+                let a = a.filter(|&i| view.keep[i]);
+                let b = b.filter(|&i| view.keep[i]);
+                if a.is_none() && b.is_none() {
+                    None
+                } else {
+                    Some(Row::Sides(a, b))
+                }
+            }
+        })
+        .collect()
+}
+
 pub(super) struct SplitDiff {
     doc: Arc<DiffDocument>,
     syntax: Arc<DiffSyntax>,
+    analysis: Arc<DiffAnalysis>,
     rows: Arc<[Row]>,
     scroll: UniformListScrollHandle,
     horizontal: f32,
@@ -190,6 +452,8 @@ pub(super) struct SplitDiff {
 }
 
 impl Pokarak {
+    /// Index/staging previews always retain the exact original rows, regardless
+    /// of the optional display filter in the independent review surfaces.
     pub(super) fn new_split_diff(
         &self,
         doc: Arc<DiffDocument>,
@@ -198,7 +462,9 @@ impl Pokarak {
     ) -> Entity<SplitDiff> {
         let owner = cx.weak_entity();
         let worktree = self.current.clone();
-        cx.new(|_| SplitDiff::new(doc, syntax, owner, worktree))
+        let analysis = Arc::new(DiffAnalysis::new(&doc.lines));
+        let view = Arc::new(analysis.view(&doc.lines, false));
+        cx.new(|_| SplitDiff::new(doc, syntax, analysis, view, owner, worktree))
     }
 }
 
@@ -232,10 +498,12 @@ impl SplitDiff {
     fn new(
         doc: Arc<DiffDocument>,
         syntax: Arc<DiffSyntax>,
+        analysis: Arc<DiffAnalysis>,
+        view: Arc<DiffView>,
         owner: WeakEntity<Pokarak>,
         worktree: Option<PathBuf>,
     ) -> Self {
-        let rows = align(&doc.lines).into();
+        let rows = align_view(&doc.lines, &view).into();
         let mut max_columns = [0; 2];
         let mut last_number = 1;
         for line in &doc.lines {
@@ -265,6 +533,7 @@ impl SplitDiff {
         Self {
             doc,
             syntax,
+            analysis,
             rows,
             scroll: UniformListScrollHandle::new(),
             horizontal: 0.,
@@ -324,6 +593,7 @@ impl SplitDiff {
 
 fn cell(
     line: Option<&DiffLine>,
+    changed: &[Range<usize>],
     before: bool,
     syntax: &DiffSyntax,
     offset: f32,
@@ -376,7 +646,14 @@ fn cell(
                     .whitespace_nowrap()
                     .text_color(palette.rgb(TEXT))
                     .when_some(source, |body, (line, syntax, index)| {
-                        body.child(syntax.styled_line(index, &line.text, true, cx))
+                        body.child(diff_tools::styled_line(
+                            &line.text,
+                            syntax.spans(index, cx),
+                            changed,
+                            &line.kind,
+                            true,
+                            cx,
+                        ))
                     }),
             ),
         )
@@ -388,6 +665,7 @@ impl Render for SplitDiff {
         let rows = self.rows.clone();
         let doc = self.doc.clone();
         let syntax = self.syntax.clone();
+        let analysis = self.analysis.clone();
         let font_size = cx.theme().mono_font_size;
         let font_family = cx.theme().mono_font_family.clone();
         let text = cx.text_system();
@@ -487,6 +765,8 @@ impl Render for SplitDiff {
                                     .child(
                                         cell(
                                             l.map(|i| &doc.lines[i]),
+                                            l.map(|i| analysis.inline[i].as_slice())
+                                                .unwrap_or_default(),
                                             true,
                                             &syntax,
                                             offset,
@@ -500,6 +780,8 @@ impl Render for SplitDiff {
                                     .child(
                                         cell(
                                             r.map(|i| &doc.lines[i]),
+                                            r.map(|i| analysis.inline[i].as_slice())
+                                                .unwrap_or_default(),
                                             false,
                                             &syntax,
                                             offset,
@@ -544,6 +826,54 @@ impl Render for SplitDiff {
 #[cfg(test)]
 mod tests {
     use super::{Row, align, max_offset, split_ratio};
+
+    #[test]
+    fn whitespace_view_keeps_original_split_line_mapping_and_unfiltered_stage_rows() {
+        use super::{DiffAnalysis, align_view};
+        use pokarak_core::{DiffKind, DiffLine};
+        let lines = vec![
+            DiffLine {
+                kind: DiffKind::Header,
+                text: "@@ -1,2 +1,2 @@".into(),
+                old_line: None,
+                new_line: None,
+            },
+            DiffLine {
+                kind: DiffKind::Deletion,
+                text: "  same();".into(),
+                old_line: Some(1),
+                new_line: None,
+            },
+            DiffLine {
+                kind: DiffKind::Deletion,
+                text: "old();".into(),
+                old_line: Some(2),
+                new_line: None,
+            },
+            DiffLine {
+                kind: DiffKind::Addition,
+                text: "same();".into(),
+                old_line: None,
+                new_line: Some(1),
+            },
+            DiffLine {
+                kind: DiffKind::Addition,
+                text: "new();".into(),
+                old_line: None,
+                new_line: Some(2),
+            },
+        ];
+        let analysis = DiffAnalysis::new(&lines);
+        let original = align(&lines);
+        assert_eq!(align_view(&lines, &analysis.view(&lines, false)), original);
+        assert_eq!(
+            align_view(&lines, &analysis.view(&lines, true)),
+            vec![Row::Header(0), Row::Sides(Some(2), Some(4))]
+        );
+        assert_eq!(lines[2].old_line, Some(2));
+        assert_eq!(lines[4].new_line, Some(2));
+        assert_eq!(align(&lines), original);
+    }
 
     #[test]
     fn rows_use_their_own_revision_and_original_file_line() {

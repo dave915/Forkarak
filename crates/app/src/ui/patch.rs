@@ -102,6 +102,7 @@ struct PatchLine {
 struct Layout {
     rows: Vec<PatchLine>,
     sources: Sources,
+    inline: Vec<Vec<Range<usize>>>,
 }
 impl Layout {
     fn new(text: &str, document: Option<Arc<DiffSyntax>>) -> Self {
@@ -188,13 +189,28 @@ impl Layout {
                 }
             }
         }
-        Self { rows, sources }
+        let lines = rows
+            .iter()
+            .map(|row| pokarak_core::DiffLine {
+                kind: row.kind.clone(),
+                old_line: None,
+                new_line: None,
+                text: text[(row.range.start + usize::from(row.source.is_some()))..row.content_end]
+                    .to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let inline = diff_tools::DiffAnalysis::new(&lines).inline;
+        Self {
+            rows,
+            sources,
+            inline,
+        }
     }
 
     fn decorations(&self, text: &str, cx: &App) -> Vec<TextDecoration> {
         let palette = Palette::new(cx);
         let mut out = Vec::new();
-        for row in &self.rows {
+        for (index, row) in self.rows.iter().enumerate() {
             let (prefix, bg) = match row.kind {
                 DiffKind::Header => (Some(BLUE), Some(0x283744)),
                 DiffKind::Addition => (Some(GREEN), Some(ADD_BG)),
@@ -218,30 +234,21 @@ impl Layout {
             if prefix.is_some() {
                 out.push(TextDecoration::new(row.range.start..content, prefix_style));
             }
-            let mut cursor = content;
-            for (range, mut style) in self.sources.get(source).spans(line, cx) {
-                let start = content + range.start;
-                let end = content + range.end;
-                // Out-of-range spans are omitted rather than slicing a neighboring line.
-                if start < cursor
-                    || end > row.content_end
-                    || start >= end
-                    || !text.is_char_boundary(start)
-                    || !text.is_char_boundary(end)
-                {
-                    continue;
-                }
-                if bg.is_some() && cursor < start {
-                    out.push(TextDecoration::new(cursor..start, base));
-                }
-                if bg.is_some() {
-                    style.background_color = bg;
-                }
-                out.push(TextDecoration::new(start..end, style));
-                cursor = end;
+            for (range, style) in diff_tools::line_highlights(
+                &text[content..row.content_end],
+                self.sources.get(source).spans(line, cx),
+                &self.inline[index],
+                &row.kind,
+                bg,
+                cx,
+            ) {
+                out.push(TextDecoration::new(
+                    (content + range.start)..(content + range.end),
+                    style,
+                ));
             }
-            if bg.is_some() && cursor < row.range.end {
-                out.push(TextDecoration::new(cursor..row.range.end, base));
+            if bg.is_some() && row.content_end < row.range.end {
+                out.push(TextDecoration::new(row.content_end..row.range.end, base));
             }
         }
         out
@@ -328,6 +335,35 @@ pub(super) fn editor(
 mod tests {
     use super::{DiffKind, Layout, Sources, header_path};
     use std::path::PathBuf;
+
+    #[test]
+    fn word_ranges_in_selectable_patch_keep_original_text_and_utf8_offsets() {
+        let text = "--- a/example.kt\n+++ b/example.kt\n@@ -1 +1 @@\n-val 이름 = \"😀 오래된 값\"; count = 10;\n+val 이름 = \"😀 새로운 값\"; count = 20;\n";
+        let layout = Layout::new(text, None);
+        let changed: Vec<_> = layout
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| matches!(row.kind, DiffKind::Addition | DiffKind::Deletion))
+            .map(|(i, row)| {
+                let line = &text[(row.range.start + 1)..row.content_end];
+                layout.inline[i]
+                    .iter()
+                    .map(|range| line[range.clone()].to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            changed,
+            vec![
+                vec!["오래된".to_owned(), "10".to_owned()],
+                vec!["새로운".to_owned(), "20".to_owned()]
+            ]
+        );
+        assert!(text.contains(
+            "-val 이름 = \"😀 오래된 값\"; count = 10;\n+val 이름 = \"😀 새로운 값\"; count = 20;"
+        ));
+    }
 
     #[test]
     fn quoted_git_paths_spaces_dates_and_absent_sides() {

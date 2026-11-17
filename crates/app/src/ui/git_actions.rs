@@ -1,4 +1,5 @@
 //! Explicit Git actions; sidebar selection navigates without mutating Git.
+mod branch_forms;
 mod contextual;
 mod history;
 mod network;
@@ -443,9 +444,8 @@ impl Pokarak {
         match page {
             Page::Log => self.open_git_log(window, cx),
             Page::Worktrees => self.show_worktree_manager(state, window, cx),
-            Page::Create | Page::Checkout | Page::Delete => {
-                self.show_branch_form(state, page, window, cx)
-            }
+            Page::Create => self.open_branch_create(None, window, cx),
+            Page::Checkout | Page::Delete => self.show_branch_form(state, page, window, cx),
             Page::Fetch | Page::Push | Page::Pull => {
                 self.show_network_form(state, page, window, cx)
             }

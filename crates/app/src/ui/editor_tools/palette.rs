@@ -47,7 +47,15 @@ fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
                     | "duplicate_line_down"
                     | "replace_file"
                     | "format_file" => editable,
-                    "go_to_line" | "word_wrap" | "select_next_word" | "pin_tab"
+                    "language_completion"
+                    | "language_diagnostics"
+                    | "language_symbols"
+                    | "language_signature"
+                    | "language_hover"
+                    | "go_to_line"
+                    | "word_wrap"
+                    | "select_next_word"
+                    | "pin_tab"
                     | "previous_code" => code,
                     _ => ready,
                 },
@@ -112,12 +120,7 @@ fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
         "cmd-alt-f",
         ReplaceFile
     );
-    add!(
-        "편집: 설정한 포맷터 실행",
-        "format_file",
-        "alt-shift-f",
-        FormatFile
-    );
+    add!("편집: 파일 포맷", "format_file", "alt-shift-f", FormatFile);
     add!("이동: 줄:열 번호로 이동…", "go_to_line", "cmd-l", GoToLine);
     add!("이동: 파일 찾기…", "find_file", "cmd-p", FindFile);
     add!(
@@ -137,6 +140,36 @@ fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
         "find_references",
         "alt-f7",
         FindReferences
+    );
+    add!(
+        "언어 분석: 코드 완성",
+        "language_completion",
+        "ctrl-space",
+        language_tools::Complete
+    );
+    add!(
+        "언어 분석: 현재 파일 진단",
+        "language_diagnostics",
+        "",
+        language_tools::Diagnostics
+    );
+    add!(
+        "언어 분석: 문서 심볼 검색",
+        "language_symbols",
+        "cmd-shift-o",
+        language_tools::Symbols
+    );
+    add!(
+        "언어 분석: 함수 시그니처",
+        "language_signature",
+        "ctrl-shift-space",
+        language_tools::Signature
+    );
+    add!(
+        "언어 분석: 타입 · 문서",
+        "language_hover",
+        "alt-f1",
+        language_tools::Hover
     );
     add!("이동: 뒤로", "back", "cmd-[", Back);
     add!("이동: 앞으로", "forward", "cmd-]", Forward);

@@ -218,6 +218,7 @@ impl Pokarak {
                         })),
                 )
             })
+            .when_some(self.language_retry(cx), |row, button| row.child(button))
             .child(
                 Button::new("dismiss-error")
                     .icon(IconName::X)

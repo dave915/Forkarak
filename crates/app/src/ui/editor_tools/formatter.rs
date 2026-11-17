@@ -11,15 +11,27 @@ struct Formatter {
     path: String,
     args: Vec<String>,
 }
+#[cfg(test)]
 fn run(config: Formatter, root: &Path, file: &Path, text: &str) -> Result<String, String> {
     run_with_timeout(config, root, file, text, Duration::from_secs(15))
 }
+#[cfg(test)]
 fn run_with_timeout(
     config: Formatter,
     root: &Path,
     file: &Path,
     text: &str,
     timeout: Duration,
+) -> Result<String, String> {
+    run_controlled(config, root, file, text, timeout, None)
+}
+fn run_controlled(
+    config: Formatter,
+    root: &Path,
+    file: &Path,
+    text: &str,
+    timeout: Duration,
+    snapshot: Option<pokarak_navigation::DocumentSnapshot>,
 ) -> Result<String, String> {
     let args: Vec<_> = config
         .args
@@ -69,7 +81,12 @@ fn run_with_timeout(
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(15)),
+            Ok(None)
+                if start.elapsed() < timeout
+                    && snapshot.as_ref().is_none_or(|s| s.is_current()) =>
+            {
+                std::thread::sleep(Duration::from_millis(15))
+            }
             result => {
                 #[cfg(target_os = "macos")]
                 if let Some(group) = group {
@@ -79,6 +96,9 @@ fn run_with_timeout(
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(match result {
+                    _ if snapshot.as_ref().is_some_and(|s| !s.is_current()) => {
+                        "소스·보기·신뢰가 변경되어 포맷터를 취소했습니다. 초안을 유지합니다.".into()
+                    }
                     Err(e) => format!("포맷터 상태 확인 실패: {e}"),
                     _ => "포맷터가 15초 안에 완료되지 않았습니다. 초안은 유지했습니다.".into(),
                 });
@@ -172,20 +192,39 @@ impl Pokarak {
             Some(Formatter { path, args })
         });
         let Some(config) = config else {
-            self.status = format!(
-                "{language} 포맷터 실행 경로와 인수를 설정하세요. 입력은 stdin, 결과는 stdout입니다. 파일은 저장하지 않았습니다."
+            self.request_language(
+                language_tools::Tool::Format { save_after, commit },
+                None,
+                window,
+                cx,
             );
-            cx.notify();
             return;
         };
+        let identity = match self.external_format_identity(cx) {
+            Ok(v) => v,
+            Err(e) => {
+                self.status = e;
+                cx.notify();
+                return;
+            }
+        };
+        let source = identity.snapshot.clone();
         let text = editor.read(cx).value().to_string();
         let expected = text.clone();
         let id = editor.entity_id();
         let target = key.clone();
         self.code_edits.tools.formatting.insert(key.clone());
         self.status = "포맷터 실행 중… 입력을 계속하면 오래된 결과는 적용하지 않습니다.".into();
-        let task =
-            cx.background_spawn(async move { run(config, &target.root, &target.path, &text) });
+        let task = cx.background_spawn(async move {
+            run_controlled(
+                config,
+                &target.root,
+                &target.path,
+                &text,
+                Duration::from_secs(15),
+                Some(source),
+            )
+        });
         cx.spawn_in(window, async move |app, cx| {
             let result = task.await;
             let _ = app.update_in(cx, |app, window, cx| {
@@ -200,6 +239,12 @@ impl Pokarak {
                         .is_some_and(|p| app.prefs.trusted.contains(p))
                 {
                     app.status = "신뢰가 해제되어 포맷 결과를 적용하지 않았습니다.".into();
+                    cx.notify();
+                    return;
+                }
+                if !app.accepts_external_format(&identity, cx) {
+                    app.status =
+                        "선택·초안·설정이 변경되어 포맷 결과를 적용하지 않았습니다.".into();
                     cx.notify();
                     return;
                 }

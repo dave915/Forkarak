@@ -13,6 +13,7 @@ mod syntax;
 #[cfg(target_os = "macos")]
 mod terminal_dock;
 mod toolbar;
+mod update_workspace;
 use analysis_feedback::AnalysisFeedback;
 use split_diff::ReviewDiff;
 
@@ -250,6 +251,7 @@ pub struct Pokarak {
     projects: Vec<SavedProject>,
     pending_history: Option<ReadingPoint>,
     pending_projects: VecDeque<PathBuf>,
+    update_view: Option<(PathBuf, crate::prefs::UpdateView)>,
     sessions: HashMap<PathBuf, Session>,
     search_input: Entity<InputState>,
     base_input: Entity<InputState>,
@@ -509,6 +511,17 @@ impl Pokarak {
     pub fn new(initial: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut prefs = Preferences::load();
         prefs.display = prefs.display.validated();
+        let resume = prefs.update_workspace.take();
+        if resume.is_some() {
+            prefs.save();
+        }
+        let (mut commit_ui, mut update_view) = (git_commit::CommitUi::default(), None);
+        if let Some(resume) = resume {
+            commit_ui.restore_messages(resume.messages, window, cx);
+            if initial.is_empty() {
+                update_view = resume.root.map(|root| (root, resume.view));
+            }
+        }
         let projects = prefs.open_projects.clone();
         let mut pending_projects: VecDeque<_> = initial.into_iter().collect();
         let initial = pending_projects
@@ -584,7 +597,8 @@ impl Pokarak {
             file_request: 0,
             navigation_request: 0,
             git_ui: git_actions::GitUi::default(),
-            commit_ui: git_commit::CommitUi::default(),
+            commit_ui,
+            update_view,
             error: None,
             analysis_feedback: AnalysisFeedback::default(),
             status: "저장소를 열어 시작하세요".into(),
@@ -797,6 +811,7 @@ impl Pokarak {
         self.stop_analysis(cx);
         self.analysis_feedback = AnalysisFeedback::default();
         self.invalidate_git_page();
+        let update_view = self.update_view.take();
         self.opening_path = Some(path.clone());
         self.request += 1;
         self.file_request += 1;
@@ -878,7 +893,10 @@ impl Pokarak {
                         this.status = "준비됨".into();
                         if this.pending_projects.is_empty() {
                             this.watch(root.clone(), cx);
-                            this.open_git_history(window, cx);
+                            let view = update_view
+                                .filter(|(path, _)| *path == root)
+                                .map(|(_, view)| view);
+                            this.open_restored_view(view, window, cx);
                             this.restore_git_completion(cx);
                         }
                         this.prefs.last_root = Some(root);

@@ -23,12 +23,36 @@ pub struct Preferences {
     pub display: crate::theme::DisplaySettings,
     pub split_diff: bool,
     pub show_branches: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_workspace: Option<UpdateWorkspace>,
     pub dismissed_update: Option<String>,
     pub recent: Vec<PathBuf>,
     pub last_root: Option<PathBuf>,
     pub worktrees: HashMap<PathBuf, SavedView>,
     pub trusted: Vec<PathBuf>,
     pub open_projects: Vec<SavedProject>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UpdateWorkspace {
+    pub root: Option<PathBuf>,
+    pub view: UpdateView,
+    pub messages: HashMap<PathBuf, String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum UpdateView {
+    Graph(Option<SavedCommit>),
+    Code,
+    Changes,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SavedCommit {
+    pub oid: String,
+    pub parent: usize,
+    pub file: Option<PathBuf>,
+    pub code: bool,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -101,16 +125,17 @@ impl Preferences {
             .unwrap_or_default()
     }
     pub fn save(&self) {
+        let _ = self.try_save();
+    }
+
+    pub fn try_save(&self) -> std::io::Result<()> {
         let path = config_path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(bytes) = serde_json::to_vec_pretty(self) {
-            let temp = path.with_extension("tmp");
-            if std::fs::write(&temp, bytes).is_ok() {
-                let _ = std::fs::rename(temp, path);
-            }
-        }
+        let parent = path.parent().expect("session configuration directory");
+        std::fs::create_dir_all(parent)?;
+        let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+        serde_json::to_writer_pretty(temp.as_file_mut(), self)?;
+        temp.persist(path)?;
+        Ok(())
     }
 }
 

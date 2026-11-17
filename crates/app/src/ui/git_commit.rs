@@ -39,7 +39,44 @@ pub(super) struct CommitUi {
     submitted_message: Option<(PathBuf, String)>,
 }
 
+fn commit_message_editor(
+    text: String,
+    window: &mut Window,
+    cx: &mut Context<Pokarak>,
+) -> Entity<EditorState> {
+    cx.new(|cx| {
+        EditorState::new(window, cx)
+            .language("plaintext")
+            .line_number(false)
+            .soft_wrap(true)
+            .default_value(text)
+    })
+}
+
 impl CommitUi {
+    pub(super) fn draft_messages(&self, cx: &App) -> HashMap<PathBuf, String> {
+        self.messages
+            .iter()
+            .filter_map(|(root, editor)| {
+                let message = editor.read(cx).value();
+                (!message.is_empty()).then(|| (root.clone(), message.to_string()))
+            })
+            .collect()
+    }
+
+    pub(super) fn restore_messages(
+        &mut self,
+        messages: HashMap<PathBuf, String>,
+        window: &mut Window,
+        cx: &mut Context<Pokarak>,
+    ) {
+        self.messages.extend(
+            messages
+                .into_iter()
+                .map(|(root, text)| (root, commit_message_editor(text, window, cx))),
+        );
+    }
+
     fn next_selection(
         &self,
         staged: &[ChangedFile],
@@ -139,12 +176,7 @@ impl Pokarak {
         window.close_all_dialogs(cx);
         self.commit_ui.close();
         if !self.commit_ui.messages.contains_key(&root) {
-            let editor = cx.new(|cx| {
-                EditorState::new(window, cx)
-                    .language("plaintext")
-                    .line_number(false)
-                    .soft_wrap(true)
-            });
+            let editor = commit_message_editor(String::new(), window, cx);
             self.commit_ui.messages.insert(root.clone(), editor);
         }
         self.commit_ui.surface = surface;

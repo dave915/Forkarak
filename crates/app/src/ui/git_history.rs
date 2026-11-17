@@ -44,6 +44,7 @@ pub(super) struct HistoryUi {
     document: Option<ReviewDiff>,
     editor: Option<Entity<EditorState>>,
     code: bool,
+    resume: Option<crate::prefs::SavedCommit>,
     scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
     table_scroll: ScrollHandle,
@@ -53,6 +54,26 @@ pub(super) struct HistoryUi {
 }
 
 impl HistoryUi {
+    pub(super) fn selection(&self) -> Option<crate::prefs::SavedCommit> {
+        let detail = self.detail.as_ref()?;
+        let parent = detail
+            .commit
+            .parents
+            .iter()
+            .position(|oid| Some(oid) == detail.parent.as_ref())
+            .unwrap_or(0);
+        Some(crate::prefs::SavedCommit {
+            oid: detail.commit.oid.clone(),
+            parent,
+            file: self.selected.clone(),
+            code: self.code,
+        })
+    }
+
+    pub(super) fn resume_selection(&mut self, selection: Option<crate::prefs::SavedCommit>) {
+        self.resume = selection;
+    }
+
     fn reset(&mut self, active: bool) {
         let request = self.request + 1;
         *self = Self {
@@ -162,17 +183,29 @@ impl Pokarak {
 
     fn load_first_history_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let branch = self.graph_branch().map(str::to_owned);
+        let resume = self.git_history.resume.take();
         self.history_read(
             move |root| {
-                if let Some(name) = &branch
-                    && let Some((page, catalog)) =
-                        history::navigation::open_branch(root, name, 100)?
-                {
-                    return Ok((page, catalog, None));
-                }
-                history::navigation::open(root, 100).map(|(page, catalog)| (page, catalog, branch))
+                let scoped = branch
+                    .as_ref()
+                    .map(|name| history::navigation::open_branch(root, name, 100))
+                    .transpose()?
+                    .flatten();
+                let (page, catalog, missing_branch) = match scoped {
+                    Some((page, catalog)) => (page, catalog, None),
+                    None => {
+                        let (page, catalog) = history::navigation::open(root, 100)?;
+                        (page, catalog, branch)
+                    }
+                };
+                // The commit can have been pruned while the app was restarting.
+                let restored = resume.and_then(|target| {
+                    let detail = history::commit_detail(root, &target.oid, target.parent).ok()?;
+                    Some((detail, target))
+                });
+                Ok((page, catalog, missing_branch, restored))
             },
-            move |app, (page, catalog, missing_branch), window, cx| {
+            move |app, (page, catalog, missing_branch, restored), window, cx| {
                 if let Some(name) = missing_branch {
                     app.save_graph_branch(None, cx);
                     app.status = format!(
@@ -186,6 +219,20 @@ impl Pokarak {
                     app.check_graph_changes(cx);
                 }
                 if !app.inline_commit_active() {
+                    if let Some((detail, target)) = restored {
+                        if let Some(row) = app
+                            .git_history
+                            .entries
+                            .iter()
+                            .position(|e| e.commit.oid == target.oid)
+                        {
+                            app.git_history
+                                .scroll
+                                .scroll_to_item(row, ScrollStrategy::Top);
+                        }
+                        app.open_commit_detail(detail, target.file, target.code, window, cx);
+                        return;
+                    }
                     let head = app
                         .active_worktree()
                         .filter(|_| app.graph_branch().is_none())
@@ -282,27 +329,33 @@ impl Pokarak {
         self.git_history.editor = None;
         self.history_read(
             move |root| history::commit_detail(root, &oid, parent),
-            |app, detail, w, cx| {
-                app.git_history.detail = Some(detail);
-                app.git_history.selected = None;
-                app.git_history.document = None;
-                app.git_history.editor = None;
-                app.git_history.code = false;
-                app.show_history_detail(w, cx);
-                if let Some(file) = app
-                    .git_history
-                    .detail
-                    .as_ref()
-                    .and_then(|d| d.files.first())
-                    .cloned()
-                {
-                    app.load_history_file(file.path, w, cx);
-                }
-            },
+            |app, detail, w, cx| app.open_commit_detail(detail, None, false, w, cx),
             window,
             cx,
         );
     }
+    fn open_commit_detail(
+        &mut self,
+        detail: CommitDetail,
+        preferred: Option<PathBuf>,
+        code: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let file = preferred
+            .filter(|path| detail.files.iter().any(|f| &f.path == path))
+            .or_else(|| detail.files.first().map(|file| file.path.clone()));
+        self.git_history.detail = Some(detail);
+        self.git_history.selected = None;
+        self.git_history.document = None;
+        self.git_history.editor = None;
+        self.git_history.code = code;
+        self.show_history_detail(window, cx);
+        if let Some(path) = file {
+            self.load_history_file(path, window, cx);
+        }
+    }
+
     fn load_history_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let Some(detail) = self.git_history.detail.clone() else {
             return;

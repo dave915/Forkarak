@@ -1,7 +1,6 @@
-//! Code always inspects working files against HEAD. Legacy branch comparisons
-//! must not survive after removing the Code baseline controls.
+//! Code inspects working files against the worktree's explicitly applied base.
 use super::{
-    CompareMode, FileRevision, Path, PathBuf, Pokarak, Position, ReadingPoint, Session, Snapshot,
+    FileRevision, Path, PathBuf, Pokarak, Position, ReadingPoint, Session, Snapshot,
 };
 
 pub(super) struct PendingFile {
@@ -34,14 +33,13 @@ impl Session {
             .or_else(|| snapshot.changes.first().map(|file| file.path.clone()))
     }
 
-    /// Keep documents, drafts, tabs and native reading coordinates intact. Only
-    /// comparison-derived data needs replacing; a HEAD snapshot can be reused.
+    /// Keep the chosen base, documents, drafts, tabs and reading coordinates.
+    /// Only data from a different comparison needs replacing.
     pub(super) fn prepare_code_snapshot(&mut self) -> bool {
-        self.saved.comparison = CompareMode::Uncommitted;
         if self
             .snapshot
             .as_ref()
-            .is_some_and(|snapshot| snapshot.compare != CompareMode::Uncommitted)
+            .is_some_and(|snapshot| snapshot.compare != self.saved.comparison)
         {
             self.snapshot = None;
             self.diffs.clear();
@@ -99,10 +97,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_branch_migration_preserves_exact_reading_state() {
+    fn saved_branch_review_restores_the_applied_base_and_exact_reading_state() {
         let saved = legacy_view();
-        let mut expected = serde_json::to_value(&saved).unwrap();
-        expected["comparison"] = serde_json::to_value(CompareMode::Uncommitted).unwrap();
+        let expected = serde_json::to_value(&saved).unwrap();
         let restored: SavedView =
             serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
         let session = Session::new(restored);
@@ -111,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn resnapshot_invalidates_only_the_target_worktrees_branch_baseline() {
+    fn changing_the_baseline_invalidates_only_that_worktrees_snapshot() {
         let first = Path::new("/fixture/main");
         let second = Path::new("/fixture/linked");
         let mut sessions = HashMap::from([
@@ -126,6 +123,8 @@ mod tests {
             });
         }
         let before = serde_json::to_value(&sessions[second].saved).unwrap();
+        assert!(!sessions.get_mut(first).unwrap().prepare_code_snapshot());
+        sessions.get_mut(first).unwrap().saved.comparison = CompareMode::Uncommitted;
         assert!(sessions.get_mut(first).unwrap().prepare_code_snapshot());
         assert_eq!(sessions[first].saved.line, 47);
         assert_eq!(sessions[first].saved.selected, Some("src/선택.kt".into()));
@@ -206,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn code_migration_uses_head_and_preserves_the_selected_file_on_real_snapshots() {
+    fn branch_review_survives_refresh_and_can_return_to_head_without_moving_the_reader() {
         let fixture = tempfile::tempdir().unwrap();
         let root = fixture.path();
         git(root, &["init", "-b", "main"]);
@@ -228,6 +227,27 @@ mod tests {
         );
         let mut session = Session::new(legacy_view());
         session.snapshot = Some(branch);
+        assert!(!session.prepare_code_snapshot());
+        let refreshed = pokarak_core::snapshot(root, &session.saved.comparison).unwrap();
+        assert!(
+            refreshed
+                .changes
+                .iter()
+                .any(|file| file.path == Path::new("src/선택.kt"))
+        );
+        // A failed candidate is never installed, retaining the successfully
+        // applied base, snapshot and exact reading position.
+        let saved_before = serde_json::to_value(&session.saved).unwrap();
+        let fingerprint_before = session.snapshot.as_ref().unwrap().fingerprint.clone();
+        assert!(
+            pokarak_core::snapshot(root, &CompareMode::Branch("missing-branch".into())).is_err()
+        );
+        assert_eq!(serde_json::to_value(&session.saved).unwrap(), saved_before);
+        assert_eq!(
+            session.snapshot.as_ref().unwrap().fingerprint,
+            fingerprint_before
+        );
+        session.saved.comparison = CompareMode::Uncommitted;
         assert!(session.prepare_code_snapshot());
         let head = pokarak_core::snapshot(root, &session.saved.comparison).unwrap();
         assert_eq!(head.compare, CompareMode::Uncommitted);

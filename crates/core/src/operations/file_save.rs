@@ -32,17 +32,17 @@ pub fn save_file(root: &Path, path: &Path, expected: &str, replacement: &str) ->
     PreparedSave::new(root, path, expected, replacement)?.commit()
 }
 
-struct Target {
-    root: PathBuf,
-    relative: PathBuf,
-    root_dir: File,
-    parent: File,
-    name: CString,
-    administration: Vec<(u64, u64)>,
+pub(super) struct Target {
+    pub(super) root: PathBuf,
+    pub(super) relative: PathBuf,
+    pub(super) root_dir: File,
+    pub(super) parent: File,
+    pub(super) name: CString,
+    pub(super) administration: Vec<(u64, u64)>,
 }
 
 impl Target {
-    fn open(root: &Path, path: &Path) -> Result<Self> {
+    pub(super) fn open(root: &Path, path: &Path) -> Result<Self> {
         ensure!(
             !path.as_os_str().is_empty()
                 && path.components().all(|component| matches!(component,
@@ -82,7 +82,7 @@ impl Target {
         })
     }
 
-    fn revalidate(&self) -> Result<()> {
+    pub(super) fn revalidate(&self) -> Result<()> {
         ensure!(
             identity(&open_directory(&self.root)?.metadata()?)
                 == identity(&self.root_dir.metadata()?),
@@ -229,11 +229,11 @@ impl Drop for PreparedSave {
     }
 }
 
-fn identity(metadata: &Metadata) -> (u64, u64) {
+pub(super) fn identity(metadata: &Metadata) -> (u64, u64) {
     (metadata.dev(), metadata.ino())
 }
 
-fn unchanged(a: &Metadata, b: &Metadata) -> bool {
+pub(super) fn unchanged(a: &Metadata, b: &Metadata) -> bool {
     identity(a) == identity(b)
         && a.len() == b.len()
         && a.mode() == b.mode()
@@ -257,7 +257,7 @@ fn open_directory(path: &Path) -> Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn open_at(parent: &File, name: &CStr, flags: i32) -> io::Result<File> {
+pub(super) fn open_at(parent: &File, name: &CStr, flags: i32) -> io::Result<File> {
     // SAFETY: parent and terminated name stay live; creation always uses 0600.
     let fd = unsafe {
         libc::openat(
@@ -292,7 +292,7 @@ fn open_parent(root: &File, path: &Path, administration: &[(u64, u64)]) -> Resul
     Ok(directory)
 }
 
-fn create_temporary(parent: &File) -> Result<(CString, File)> {
+pub(super) fn create_temporary(parent: &File) -> Result<(CString, File)> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     for _ in 0..128 {

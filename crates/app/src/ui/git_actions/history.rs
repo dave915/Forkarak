@@ -105,7 +105,8 @@ pub(super) struct ErrorHelp {
 }
 
 pub(super) fn error_help(error: &str) -> ErrorHelp {
-    let text = error.to_lowercase();
+    let diagnostic = error.split("\nFor authentication failures, configure your existing credential helper or SSH agent in a terminal, then retry.").next().unwrap_or(error);
+    let text = diagnostic.to_lowercase();
     let (message, action) = if [
         "authentication",
         "permission denied",
@@ -176,11 +177,24 @@ pub(super) fn error_help(error: &str) -> ErrorHelp {
     ErrorHelp { message, action }
 }
 
-fn timestamp(time: SystemTime) -> String {
-    match time.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(value) => format!("Unix {}", value.as_secs()),
-        Err(_) => "시간 알 수 없음".into(),
+pub(super) fn relative_time(time: SystemTime, now: SystemTime) -> String {
+    let Ok(age) = now.duration_since(time) else {
+        return "방금 (시계 차이)".into();
+    };
+    let seconds = age.as_secs();
+    if seconds < 60 {
+        format!("{seconds}초 전")
+    } else if seconds < 3600 {
+        format!("{}분 전", seconds / 60)
+    } else if seconds < 86400 {
+        format!("{}시간 전", seconds / 3600)
+    } else {
+        format!("{}일 전", seconds / 86400)
     }
+}
+
+fn timestamp(time: SystemTime) -> String {
+    relative_time(time, SystemTime::now())
 }
 
 impl Pokarak {
@@ -366,9 +380,9 @@ impl Pokarak {
 
 #[cfg(test)]
 mod tests {
-    use super::{begin, finish, bounded, error_help, HelpAction, Status, OUTPUT_LIMIT};
-    use std::{collections::HashMap, path::Path};
+    use super::{HelpAction, OUTPUT_LIMIT, Status, begin, bounded, error_help, finish};
     use pokarak_core::operations::OperationOutput;
+    use std::{collections::HashMap, path::Path};
     #[test]
     fn history_is_bounded_and_worktree_scoped_and_keeps_success_output() {
         let mut history = HashMap::new();
@@ -416,5 +430,41 @@ mod tests {
                 == HelpAction::Integrate
         );
         assert!(error_help("local changes would be overwritten").action == HelpAction::Changes);
+    }
+    #[test]
+    fn wrapped_errors_ignore_core_generic_auth_advice() {
+        let footer = "\nFor authentication failures, configure your existing credential helper or SSH agent in a terminal, then retry. For rejected updates, fetch and review the branch first. No force or automatic stash is used.";
+        for (diagnostic, expected) in [
+            (
+                "fatal: Not possible to fast-forward, aborting",
+                HelpAction::Integrate,
+            ),
+            (
+                "! [rejected] main -> main (non-fast-forward)",
+                HelpAction::Fetch,
+            ),
+            ("local changes would be overwritten", HelpAction::Changes),
+            ("Permission denied (publickey)", HelpAction::Terminal),
+        ] {
+            let full = format!("Git operation failed in /fixture:\n{diagnostic}\n{footer}");
+            assert!(error_help(&full).action == expected, "{full}");
+        }
+    }
+    #[test]
+    fn timestamps_are_readable_relative_ages() {
+        use std::time::{Duration, SystemTime};
+        let then = SystemTime::UNIX_EPOCH;
+        assert_eq!(
+            super::relative_time(then, then + Duration::from_secs(10)),
+            "10초 전"
+        );
+        assert_eq!(
+            super::relative_time(then, then + Duration::from_secs(120)),
+            "2분 전"
+        );
+        assert_eq!(
+            super::relative_time(then, then + Duration::from_secs(7200)),
+            "2시간 전"
+        );
     }
 }

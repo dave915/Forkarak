@@ -246,6 +246,15 @@ impl ReviewedFiles {
         Ok(())
     }
 
+    fn save_reviewed_and_should_advance(
+        &mut self,
+        key: ReviewKey,
+        stamp: String,
+        advance: bool,
+    ) -> bool {
+        self.set(key, Some(stamp)).is_ok() && advance
+    }
+
     fn begin(&mut self, context: ReviewContext) -> u64 {
         self.serial = self.serial.wrapping_add(1);
         self.checking = true;
@@ -510,12 +519,14 @@ impl Pokarak {
                 }
                 match result {
                     Ok(Some(stamp)) if stamp == expected => {
-                        if app.reviewed_files.set(key, Some(stamp)).is_ok()
-                            && app.prefs.option_bool(
-                                app.current_project.as_deref(),
-                                "review.advance",
-                                false,
-                            )
+                        let advance = app.prefs.option_bool(
+                            app.current_project.as_deref(),
+                            "review.advance",
+                            false,
+                        );
+                        if app
+                            .reviewed_files
+                            .save_reviewed_and_should_advance(key, stamp, advance)
                         {
                             app.next_unreviewed_file(window, cx);
                         }
@@ -949,5 +960,37 @@ mod tests {
         assert_eq!(std::sync::Arc::strong_count(&document), 1);
         std::sync::Arc::make_mut(&mut document).new_text = "after".into();
         assert_ne!(state.cached_stamp(&document).unwrap(), before);
+    }
+    #[test]
+    fn review_advance_requires_enabled_setting_and_a_durable_successful_mark() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("marks.json");
+        let key = ReviewKey::new(
+            Path::new("/fixture"),
+            Path::new("one.txt"),
+            ReviewContext::Working(None),
+        )
+        .unwrap();
+        let stamp = "a".repeat(64);
+        let mut state = ReviewedFiles::load_from(path.clone());
+        assert!(!state.save_reviewed_and_should_advance(key.clone(), stamp.clone(), false));
+        assert_eq!(state.state(&key), ReviewState::Reviewed);
+        assert_eq!(
+            ReviewedFiles::load_from(path.clone()).stored.get(&key),
+            Some(&stamp)
+        );
+        state.set(key.clone(), None).unwrap();
+        assert!(state.save_reviewed_and_should_advance(key.clone(), stamp.clone(), true));
+        assert_eq!(
+            ReviewedFiles::load_from(path.clone()).stored.get(&key),
+            Some(&stamp)
+        );
+        state.set(key.clone(), None).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(!state.save_reviewed_and_should_advance(key.clone(), stamp, true));
+        assert_eq!(state.state(&key), ReviewState::Unchecked);
+        assert!(state.error.is_some());
+        assert!(path.is_dir());
     }
 }

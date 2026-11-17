@@ -14,6 +14,8 @@ const READY: &[u8] = b"POKARAK_UPDATE_READY";
 const RESTARTING: &[u8] = b"POKARAK_UPDATE_RESTARTING";
 const CHECK_TIMEOUT: Duration = Duration::from_secs(45);
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const CANCEL_EOF_GRACE: Duration = Duration::from_secs(15);
+const CANCEL_TERM_GRACE: Duration = Duration::from_secs(3);
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const DIAGNOSTIC_LIMIT: usize = 4096;
 const POLL: Duration = Duration::from_millis(20);
@@ -184,30 +186,79 @@ impl Prepared {
 // even when the installer or one of its tools fills a pipe without a newline.
 struct Helper {
     child: Option<Child>,
-    stdout: UnixStream,
-    stderr: UnixStream,
+    output: Option<[smol::Async<UnixStream>; 2]>,
     diagnostics: Vec<u8>,
 }
 
-fn output_pipe() -> io::Result<(UnixStream, Stdio)> {
+fn output_pipe() -> io::Result<(smol::Async<UnixStream>, Stdio)> {
     let (read, write) = UnixStream::pair()?;
-    read.set_nonblocking(true)?;
-    Ok((read, Stdio::from(OwnedFd::from(write))))
+    Ok((smol::Async::new(read)?, Stdio::from(OwnedFd::from(write))))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Drain {
+    Closed,
+    Waiting,
+    More,
 }
 
 // Bound work per poll so an output flood cannot starve stderr or the deadline.
-fn drain(stream: &mut UnixStream, mut consume: impl FnMut(&[u8])) -> io::Result<bool> {
+fn drain(stream: &smol::Async<UnixStream>, mut consume: impl FnMut(&[u8])) -> io::Result<Drain> {
+    let mut stream = stream.get_ref();
     let mut bytes = [0; 8192];
     for _ in 0..8 {
         match stream.read(&mut bytes) {
-            Ok(0) => return Ok(true),
+            Ok(0) => return Ok(Drain::Closed),
             Ok(n) => consume(&bytes[..n]),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(Drain::Waiting),
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         }
     }
-    Ok(false)
+    Ok(Drain::More)
+}
+
+fn wait_for_output(output: &[smol::Async<UnixStream>; 2], states: [Drain; 2], deadline: Instant) {
+    if states.contains(&Drain::More) {
+        return;
+    }
+    async fn readable(stream: &smol::Async<UnixStream>, state: Drain) {
+        if state == Drain::Closed {
+            std::future::pending::<()>().await;
+        }
+        let _ = stream.readable().await;
+    }
+    let either = smol::future::or(
+        readable(&output[0], states[0]),
+        readable(&output[1], states[1]),
+    );
+    smol::block_on(smol::future::or(either, async {
+        smol::Timer::at(deadline).await;
+    }));
+}
+
+// The child must remain waitable until all signals to its private group have
+// been sent. Checking with WNOWAIT preserves that ownership after a clean exit.
+fn exited_unreaped(child: &Child) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+        Pid::from_raw(child.id() as i32)
+            .and_then(|pid| {
+                waitid(
+                    WaitId::Pid(pid),
+                    WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+                )
+                .ok()
+                .flatten()
+            })
+            .is_some()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = child;
+        false
+    }
 }
 
 impl Helper {
@@ -223,8 +274,7 @@ impl Helper {
             .map_err(|e| format!("업데이트 도우미를 실행할 수 없습니다. {e}"))?;
         Ok(Self {
             child: Some(child),
-            stdout,
-            stderr,
+            output: Some([stdout, stderr]),
             diagnostics: vec![],
         })
     }
@@ -234,7 +284,8 @@ impl Helper {
         let mut line = Vec::new();
         let mut seen = false;
         loop {
-            let stdout_done = drain(&mut self.stdout, |chunk| {
+            let output = self.output.as_ref().expect("live update output");
+            let stdout = drain(&output[0], |chunk| {
                 if let Some(marker) = marker {
                     for &b in chunk {
                         if b == b'\n' {
@@ -252,7 +303,7 @@ impl Helper {
                 }
             })
             .map_err(|e| e.to_string())?;
-            let stderr_done = drain(&mut self.stderr, |chunk| {
+            let stderr = drain(&output[1], |chunk| {
                 let tail = &chunk[chunk.len().saturating_sub(DIAGNOSTIC_LIMIT)..];
                 let discard =
                     (self.diagnostics.len() + tail.len()).saturating_sub(DIAGNOSTIC_LIMIT);
@@ -263,13 +314,13 @@ impl Helper {
             if seen {
                 return Ok(vec![]);
             }
-            if stdout_done && stderr_done && marker.is_some() {
+            let closed = stdout == Drain::Closed && stderr == Drain::Closed;
+            if closed && marker.is_some() {
                 // Leave the child waitable for cancellation, even if only its
                 // descendants are still running after a failed handshake.
                 return Err(self.error("업데이트 도우미가 확인 응답 없이 연결을 종료했습니다."));
             }
-            if stdout_done
-                && stderr_done
+            if closed
                 && let Some(status) = self
                     .child
                     .as_mut()
@@ -288,7 +339,12 @@ impl Helper {
             if Instant::now() >= deadline {
                 return Err(self.error("업데이트 도우미 응답 시간이 초과되었습니다."));
             }
-            thread::sleep(POLL);
+            let wake = if closed {
+                deadline.min(Instant::now() + POLL)
+            } else {
+                deadline
+            };
+            wait_for_output(output, [stdout, stderr], wake);
         }
     }
 
@@ -300,41 +356,54 @@ impl Helper {
             format!("{description}\n{}", details.trim())
         }
     }
-}
 
-impl Drop for Helper {
-    fn drop(&mut self) {
-        let Some(mut child) = self.child.take() else {
-            return;
-        };
-        // EOF lets a staged helper run its cleanup trap without blocking the UI.
+    fn cancel(
+        &mut self,
+        eof_grace: Duration,
+        term_grace: Duration,
+    ) -> Option<thread::JoinHandle<()>> {
+        let mut child = self.child.take()?;
+        let output = self.output.take().expect("live update output");
+        // EOF lets the staged helper remove its files. Transfer both sockets to
+        // the cleanup thread so even large diagnostics can finish as it exits.
         child.stdin.take();
-        let mut stdout = self.stdout.try_clone().ok();
-        let mut stderr = self.stderr.try_clone().ok();
-        thread::spawn(move || {
-            let mut drain_for = |grace: Duration| {
+        Some(thread::spawn(move || {
+            let drain_for = |grace: Duration, until_exit: bool| {
                 let deadline = Instant::now() + grace;
                 while Instant::now() < deadline {
-                    for socket in [&mut stdout, &mut stderr].into_iter().flatten() {
-                        let _ = drain(socket, |_| {});
+                    let states = output
+                        .each_ref()
+                        .map(|stream| drain(stream, |_| {}).unwrap_or(Drain::Closed));
+                    if until_exit && exited_unreaped(&child) {
+                        return;
                     }
-                    thread::sleep(POLL);
+                    let wake = if until_exit {
+                        deadline.min(Instant::now() + POLL)
+                    } else {
+                        deadline
+                    };
+                    wait_for_output(&output, states, wake);
                 }
             };
-            drain_for(Duration::from_secs(1));
+            drain_for(eof_grace, true);
             #[cfg(target_os = "macos")]
             if let Some(group) = rustix::process::Pid::from_raw(child.id() as i32) {
                 use rustix::process::{Signal, kill_process_group};
-                // spawn placed this child in its own process group. Keep the
-                // leader unreaped until both signals have been sent: its PID
-                // reserves the group ID even if it exits at EOF or on TERM.
+                // Keep the group leader unreaped through escalation: a surviving
+                // descendant may ignore TERM even when the leader already exited.
                 let _ = kill_process_group(group, Signal::TERM);
-                drain_for(Duration::from_secs(1));
+                drain_for(term_grace, false);
                 let _ = kill_process_group(group, Signal::KILL);
             }
             let _ = child.kill();
             let _ = child.wait();
-        });
+        }))
+    }
+}
+
+impl Drop for Helper {
+    fn drop(&mut self) {
+        self.cancel(CANCEL_EOF_GRACE, CANCEL_TERM_GRACE);
     }
 }
 
@@ -390,7 +459,7 @@ mod tests {
             "echo v1.2.3; echo v1.2.4",
             "printf v1.2.3",
             "echo v1.2.3; exit 1",
-            "printf '%100000s' x",
+            "/bin/dd if=/dev/zero bs=65536 count=2 2>/dev/null",
         ] {
             assert!(check_with(shell(script), "1.0.0").is_err(), "{script}");
         }
@@ -450,18 +519,33 @@ printf done > "$8"
     #[test]
     fn eof_cancels_before_restart_and_drains_diagnostics() {
         let temp = tempdir().unwrap();
-        let canceled = temp.path().join("canceled");
         let mut command = shell(
             r#"
+set -eu
+/bin/mkdir "$1/staged"
 echo POKARAK_UPDATE_READY
-if ! IFS= read -r reply; then
-    printf '%180000s\n' cleanup >&2
-    touch "$1"
-fi"#,
+if IFS= read -r reply; then exit 1; fi
+# Eight MiB exceeds the local socket buffer. Cleanup can complete only if the
+# reader keeps draining stderr after closing the helper's stdin.
+/bin/dd if=/dev/zero bs=65536 count=128 >&2 2>/dev/null
+/bin/rmdir "$1/staged"
+echo canceled > "$1/canceled"
+"#,
         );
-        command.arg(&canceled);
-        drop(Prepared::start(command, Duration::from_secs(5)).unwrap());
-        wait_for(&canceled);
+        command.arg(temp.path());
+        let mut prepared = Prepared::start(command, Duration::from_secs(5)).unwrap();
+        assert!(temp.path().join("staged").is_dir());
+        prepared
+            .0
+            .cancel(CANCEL_EOF_GRACE, Duration::from_millis(100))
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(temp.path().join("canceled")).unwrap(),
+            "canceled\n"
+        );
+        assert!(!temp.path().join("staged").exists());
     }
 
     #[test]
@@ -470,7 +554,7 @@ fi"#,
             r#"
 echo POKARAK_UPDATE_READY >&2
 echo NOT_POKARAK_UPDATE_READY
-printf '%180000s\n' error >&2
+/bin/dd if=/dev/zero bs=65536 count=8 >&2 2>/dev/null || exit 1
 echo 'verification failed' >&2
 exit 7"#,
         );
@@ -571,7 +655,11 @@ exit 7"#,
                     .is_err()
             );
         }
-        drop(helper);
+        helper
+            .cancel(Duration::from_millis(250), Duration::from_secs(1))
+            .unwrap()
+            .join()
+            .unwrap();
         let deadline = Instant::now() + Duration::from_secs(8);
         while alive() > 0 && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(100));

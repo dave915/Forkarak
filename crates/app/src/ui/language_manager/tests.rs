@@ -254,6 +254,7 @@ fn bundled_java_and_first_use_kotlin_status_remain_distinct_and_invalid_manifest
     let mut f = Fixture::new();
     let resources = f._temp.path().join("Resources");
     fs::create_dir_all(resources.join("language-tools")).unwrap();
+    let resources = resources.canonicalize().unwrap();
     let bin = resources.join("language-tools/java-fixture");
     fs::write(&bin, "#!/bin/sh\nexit 99\n").unwrap();
     fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();

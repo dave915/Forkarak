@@ -595,7 +595,7 @@ impl GitOperations {
         );
         self.workflow_output(result)
     }
-    fn workflow_output(&self, output: Captured) -> Result<OperationOutput> {
+    pub(super) fn workflow_output(&self, output: Captured) -> Result<OperationOutput> {
         Ok(OperationOutput {
             root: self.root.clone(),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

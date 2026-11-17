@@ -190,7 +190,7 @@ pub fn next_page(root: &Path, cursor: &HistoryCursor, size: usize) -> Result<His
     })
 }
 
-fn parse_commits(data: &[u8]) -> Result<Vec<Commit>> {
+pub(crate) fn parse_commits(data: &[u8]) -> Result<Vec<Commit>> {
     if data.is_empty() {
         return Ok(vec![]);
     }

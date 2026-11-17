@@ -13,6 +13,7 @@ mod file_save;
 pub mod files;
 pub mod history_actions;
 pub mod integration;
+pub mod preview;
 pub mod sync;
 pub mod workflow;
 pub mod worktrees;
@@ -579,7 +580,11 @@ impl GitOperations {
     }
 
     fn metadata(&self, args: &[&str]) -> Result<Vec<u8>> {
-        let output = self.check_result(capture(self.command(args), self.timeout, &self.cancellation)?)?;
+        let output = self.check_result(capture(
+            self.command(args),
+            self.timeout,
+            &self.cancellation,
+        )?)?;
         ensure!(
             !output.truncated,
             "Git metadata exceeds the safety limit; use Git externally to narrow it"
@@ -598,7 +603,11 @@ impl GitOperations {
             self.root.display(),
             String::from_utf8_lossy(&result.stderr).trim(),
             String::from_utf8_lossy(&result.stdout).trim(),
-            errors::guidance(errors::classify_diagnostics(&format!("{}\n{}", String::from_utf8_lossy(&result.stderr), String::from_utf8_lossy(&result.stdout))))
+            errors::guidance(errors::classify_diagnostics(&format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stderr),
+                String::from_utf8_lossy(&result.stdout)
+            )))
         );
         Ok(result)
     }
@@ -676,8 +685,14 @@ impl GitOperations {
 
     // Child operation modules use this for per-command environment changes.
     fn run_command(&self, command: Command) -> Result<Captured> {
-        capture_observed(command, self.timeout, &self.cancellation, OUTPUT_LIMIT, self.progress.as_ref().map(|p| (self.root.as_path(), p)))
-            .with_context(|| format!("Git in {}", self.root.display()))
+        capture_observed(
+            command,
+            self.timeout,
+            &self.cancellation,
+            OUTPUT_LIMIT,
+            self.progress.as_ref().map(|p| (self.root.as_path(), p)),
+        )
+        .with_context(|| format!("Git in {}", self.root.display()))
     }
 }
 
@@ -783,7 +798,9 @@ fn drain(
         match stream.read(&mut buffer) {
             Ok(0) => return Ok(true),
             Ok(n) => {
-                if let Some((root, progress, channel)) = observe { progress.emit(root, channel, &buffer[..n]); }
+                if let Some((root, progress, channel)) = observe {
+                    progress.emit(root, channel, &buffer[..n]);
+                }
                 let retain = n.min(limit.saturating_sub(kept.len()));
                 kept.extend_from_slice(&buffer[..retain]);
                 *truncated |= retain != n;
@@ -1011,6 +1028,12 @@ mod tests {
         use super::*;
         include!("operations/comparison_tests.rs");
     }
+
+    mod preview_actions {
+        use super::*;
+        include!("operations/preview_tests.rs");
+    }
+
 
     mod progress_tests {
         use super::*;

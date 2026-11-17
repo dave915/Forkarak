@@ -2,6 +2,8 @@ mod assets;
 mod cli;
 mod control;
 mod prefs;
+pub mod task_runtime;
+pub mod extension_host;
 #[cfg(target_os = "macos")]
 mod terminal;
 mod theme;
@@ -12,6 +14,13 @@ use gpui_kit::*;
 use std::borrow::Cow;
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "--extension-host") {
+        std::process::exit(if args.get(1).is_some_and(|arg| arg == "spring") {
+            extension_host::run_builtin_spring()
+        } else {
+            2
+        });
+    }
     if args.first().is_some_and(|arg| arg == "ctl") {
         let (response, code) = cli::ctl::response(&args[1..]);
         println!("{response}");

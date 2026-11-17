@@ -121,10 +121,10 @@ fn prepare_rows_with_sources(
                 .push((index, hit.column));
             let start = hit.line.saturating_sub(2);
             let end = (hit.line as usize + 3).min(lines.len());
-            for row in start as usize..end {
+            for (row, text) in lines.iter().enumerate().take(end).skip(start as usize) {
                 visible
                     .entry(row as u32)
-                    .or_insert_with(|| (lines[row].to_owned(), None, 0));
+                    .or_insert_with(|| ((*text).to_owned(), None, 0));
             }
             let text = lines
                 .get(hit.line as usize)

@@ -48,12 +48,14 @@ fn comment_token(path: &Path) -> Option<(&'static str, &'static str)> {
     )
 }
 
+type TextTransform = (Range<usize>, String, Range<usize>);
+
 pub(super) fn transform(
     text: &str,
     selection: Range<usize>,
     path: &Path,
     command: LineCommand,
-) -> Result<Option<(Range<usize>, String, Range<usize>)>, String> {
+) -> Result<Option<TextTransform>, String> {
     let span = line_span(text, selection);
     let block = &text[span.clone()];
     let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };

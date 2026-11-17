@@ -91,6 +91,8 @@ pub struct SavedView {
     pub tabs: Vec<PathBuf>,
     pub code: bool,
     pub all_files: bool,
+    pub hide_sidebar: bool,
+    pub hide_files: bool,
     pub collapsed_folders: HashSet<PathBuf>,
     pub graph_detail_collapsed: bool,
     pub graph_branch: Option<String>,
@@ -171,5 +173,53 @@ mod display_tests {
                 ..Default::default()
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod pane_visibility_tests {
+    use super::{Preferences, SavedView};
+    use std::path::Path;
+
+    #[test]
+    fn legacy_and_new_worktrees_default_to_visible_panels() {
+        let prefs: Preferences = serde_json::from_str(
+            r#"{"worktrees":{"/project":{"selected":"src/main.rs","sidebar_width":247,"code_files_width":311}}}"#,
+        ).unwrap();
+        let legacy = &prefs.worktrees[Path::new("/project")];
+        assert!(!legacy.hide_sidebar && !legacy.hide_files);
+        assert_eq!(legacy.sidebar_width, Some(247.));
+        assert_eq!(legacy.code_files_width, Some(311.));
+        let fresh = SavedView::default();
+        assert!(!fresh.hide_sidebar && !fresh.hide_files);
+    }
+
+    #[test]
+    fn panel_visibility_round_trips_independently_for_each_worktree() {
+        let mut prefs = Preferences::default();
+        prefs.worktrees.insert(
+            "/project".into(),
+            SavedView {
+                hide_sidebar: true,
+                sidebar_width: Some(245.),
+                ..Default::default()
+            },
+        );
+        prefs.worktrees.insert(
+            "/linked-worktree".into(),
+            SavedView {
+                hide_files: true,
+                code_files_width: Some(315.),
+                ..Default::default()
+            },
+        );
+        let restored: Preferences =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
+        let project = &restored.worktrees[Path::new("/project")];
+        let linked = &restored.worktrees[Path::new("/linked-worktree")];
+        assert!(project.hide_sidebar && !project.hide_files);
+        assert!(!linked.hide_sidebar && linked.hide_files);
+        assert_eq!(project.sidebar_width, Some(245.));
+        assert_eq!(linked.code_files_width, Some(315.));
     }
 }

@@ -3043,7 +3043,7 @@ impl Render for Pokarak {
         let body = if self.current.is_some() && self.git_history.active {
             h_resizable("graph-main-panes")
                 .child(resizable_panel().size(px(210.)).size_range(px(160.)..px(420.)).child(self.render_worktrees(cx)))
-                .child(resizable_panel().child(self.render_git_graph(cx)))
+                .child(resizable_panel().child(self.render_git_graph(window,cx)))
                 .into_any_element()
         } else if self.current.is_some() {
             h_resizable("main-panes")

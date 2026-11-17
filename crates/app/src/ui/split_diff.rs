@@ -61,7 +61,13 @@ fn align(lines: &[DiffLine]) -> Vec<Row> {
                 pos += 1;
             }
             DiffKind::Header => {
-                rows.push(Row::Header(pos));
+                // Both paths already appear in the file controls; keep the first changed
+                // lines visible even when the graph detail is short.
+                let file_header = pos < 2
+                    && (lines[pos].text.starts_with("--- ") || lines[pos].text.starts_with("+++ "));
+                if !file_header {
+                    rows.push(Row::Header(pos));
+                }
                 pos += 1;
             }
             _ => {

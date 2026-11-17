@@ -81,6 +81,30 @@ impl Deref for ReviewDiff {
 }
 
 impl ReviewDiff {
+    pub(super) fn split_position(&self, cx: &App) -> Option<(usize, f32)> {
+        let split = self.split.get()?.read(cx);
+        Some((scroll_row(&split.scroll), split.horizontal))
+    }
+
+    pub(super) fn restore_split_position(
+        &self,
+        app: &Pokarak,
+        position: (usize, f32),
+        cx: &mut Context<Pokarak>,
+    ) {
+        let split = self
+            .split
+            .get_or_init(|| app.new_split_diff(self.document.clone(), self.syntax.clone(), cx));
+        split.update(cx, |split, cx| {
+            split.scroll.scroll_to_item(
+                position.0.min(split.rows.len().saturating_sub(1)),
+                ScrollStrategy::Top,
+            );
+            split.horizontal = position.1.max(0.);
+            cx.notify();
+        });
+    }
+
     pub(super) fn split(&self, app: &Pokarak, cx: &mut Context<Pokarak>) -> AnyElement {
         if self.document.lines.is_empty() {
             let text = if self.document.patch.is_empty() {

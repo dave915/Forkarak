@@ -169,15 +169,23 @@ impl GitOperations {
             "-z",
             "--",
         ])?;
-        let mut scopes = BTreeSet::<OsString>::new();
-        for path in ignored.split(|&b| b == 0).filter(|path| !path.is_empty()) {
-            if let Some(first) = crate::git::path(path).components().next() {
-                scopes.insert(first.as_os_str().to_owned());
-            }
-        }
+        let ignored: Vec<_> = ignored
+            .split(|&b| b == 0)
+            .filter(|path| !path.is_empty())
+            .map(crate::git::path)
+            .collect();
+        let scopes: BTreeSet<OsString> = ignored
+            .iter()
+            .filter_map(|path| {
+                path.components()
+                    .next()
+                    .map(|first| first.as_os_str().to_owned())
+            })
+            .collect();
         if scopes.is_empty() {
             return Ok(());
         }
+        self.guard_directory_renames(expected, &ignored)?;
         let replay = format!("{}..{}", expected.oid, expected.current.head);
         let checkout = &[
             "diff",
@@ -221,4 +229,88 @@ impl GitOperations {
         }
         Ok(())
     }
+    // ort can infer a new filename absent from both input trees when one
+    // side moves a directory and the other adds a file under its old name.
+    // Preserve ignored files within these directories as well.
+    fn guard_directory_renames(
+        &self,
+        expected: &BranchIntegration,
+        ignored: &[PathBuf],
+    ) -> Result<()> {
+        let range = format!("{}...{}", expected.current.head, expected.oid);
+        let log = self.metadata(&[
+            "log",
+            "--format=",
+            "--name-status",
+            "-z",
+            "--diff-merges=first-parent",
+            "--find-renames",
+            "--diff-filter=R",
+            &range,
+            "--",
+        ])?;
+        guard_renamed_dirs(&log, ignored)?;
+        // Net renames can span several commits (e.g. copying and then
+        // deleting in a later commit), so check each merge input as well.
+        let bases = self.run(&["merge-base", "--all", &expected.current.head, &expected.oid])?;
+        ensure!(
+            matches!(bases.code, Some(0 | 1)) && !bases.truncated,
+            "Could not inspect common ancestors before integration"
+        );
+        for base in std::str::from_utf8(&bases.stdout)?.lines() {
+            for tip in [&expected.current.head, &expected.oid] {
+                if tip != base {
+                    let names = self.metadata(&[
+                        "diff",
+                        "--name-status",
+                        "-z",
+                        "--find-renames",
+                        "--diff-filter=R",
+                        base,
+                        tip,
+                        "--",
+                    ])?;
+                    guard_renamed_dirs(&names, ignored)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn guard_renamed_dirs(names: &[u8], ignored: &[PathBuf]) -> Result<()> {
+    let mut fields = names.split(|&b| b == 0).filter(|field| !field.is_empty());
+    while let Some(status) = fields.next() {
+        ensure!(
+            status.starts_with(b"R"),
+            "Could not inspect directory renames"
+        );
+        let from = crate::git::path(fields.next().context("Missing old rename path")?);
+        let to = crate::git::path(fields.next().context("Missing new rename path")?);
+        let mut old = from.parent().unwrap_or(Path::new(""));
+        let mut new = to.parent().unwrap_or(Path::new(""));
+        if old == new {
+            continue;
+        }
+        // A move of old/sub/f → new/sub/f can imply a move of old/ to new/.
+        while old.file_name().is_some() && old.file_name() == new.file_name() {
+            old = old.parent().unwrap_or(Path::new(""));
+            new = new.parent().unwrap_or(Path::new(""));
+        }
+        for dir in [old, new]
+            .into_iter()
+            .filter(|dir| !dir.as_os_str().is_empty())
+        {
+            if let Some(path) = ignored
+                .iter()
+                .find(|path| path.starts_with(dir) || dir.starts_with(path))
+            {
+                bail!(
+                    "Ignored path {:?} is in a directory renamed across these branches. Move it before integrating because Git may infer new filenames there.",
+                    path
+                );
+            }
+        }
+    }
+    Ok(())
 }

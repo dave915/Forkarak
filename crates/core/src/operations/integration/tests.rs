@@ -197,3 +197,33 @@ fn ignored_changes_survive_both_integrations_including_transient_replay_paths() 
         "unrelated"
     );
 }
+
+#[test]
+fn inferred_directory_rename_cannot_replace_an_ignored_file() {
+    let f = Fixture::new();
+    let op = f.op();
+    f.git(&["config", "merge.directoryRenames", "true"]);
+    fs::create_dir(f.root.join("old")).unwrap();
+    f.commit("old/tracked", "moved anchor");
+    f.git(&["switch", "-c", "incoming"]);
+    f.commit("old/new", "incoming file");
+    f.git(&["switch", "main"]);
+    f.git(&["mv", "--", "old", "renamed"]);
+    f.git(&["commit", "-m", "move directory"]);
+    fs::write(f.root.join(".git/info/exclude"), "renamed/new\n").unwrap();
+    fs::write(f.root.join("renamed/new"), "private bytes").unwrap();
+    let chosen = choose(&op, "refs/heads/incoming");
+    for kind in [IntegrationKind::Merge, IntegrationKind::Rebase] {
+        assert!(
+            op.integrate_branch(kind, &chosen)
+                .unwrap_err()
+                .to_string()
+                .contains("renamed")
+        );
+        assert_eq!(
+            fs::read(f.root.join("renamed/new")).unwrap(),
+            b"private bytes"
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), chosen.current.head);
+    }
+}

@@ -3,12 +3,15 @@ use gpui_kit::component::resizable::v_resizable;
 
 impl Pokarak {
     pub(in crate::ui) fn leave_git_graph(&mut self) {
+        self.leave_inline_commit();
+        self.git_history.hovered_tip = None;
         self.git_history.active = false;
         self.git_history.request += 1;
         self.git_history.loading = false;
     }
 
     pub(in crate::ui) fn reset_git_history(&mut self) {
+        self.leave_inline_commit();
         self.git_history.reset(true);
     }
 
@@ -17,6 +20,7 @@ impl Pokarak {
         self.git_history.reset(active);
         if active {
             self.open_git_history(window, cx);
+            self.refresh_inline_commit(window, cx);
         }
     }
 
@@ -138,13 +142,31 @@ impl Pokarak {
                     .small()
                     .h(px(32.))
                     .w_full()
-                    .justify_start()
-                    .disabled(self.loading)
-                    .label(format!("●  미커밋 변경   {count}개 파일"))
-                    .tooltip("현재 작업 파일의 staged·unstaged 변경 보기")
+                    .selected(self.inline_commit_active())
+                    .disabled(self.loading || self.git_is_busy())
+                    .accessibility_label(format!("미커밋 변경 {count}개 파일"))
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Icon::new(IconName::GitCommitHorizontal)
+                                    .size(px(15.))
+                                    .text_color(palette.rgb(BLUE)),
+                            )
+                            .child("미커밋 변경")
+                            .child(
+                                div()
+                                    .text_color(palette.rgb(MUTED))
+                                    .child(format!("{count}개 파일")),
+                            ),
+                    )
+                    .tooltip("변경 사항 검토 · 스테이징 · 커밋")
                     .on_click(cx.listener(|app, _, window, cx| {
-                        app.show_code_view(window, cx);
-                        app.compare(false, window, cx);
+                        app.set_graph_detail_collapsed(false, cx);
+                        app.open_inline_commit(window, cx);
                     })),
             )
             .child(header)
@@ -207,11 +229,13 @@ impl Pokarak {
                     .size_range(px(150.)..px(1200.))
                     .child(graph),
             )
-            .child(
-                resizable_panel()
-                    .size_range(px(180.)..px(1600.))
-                    .child(self.render_graph_detail(cx)),
-            )
+            .child(resizable_panel().size_range(px(180.)..px(1600.)).child(
+                if self.inline_commit_active() {
+                    self.render_inline_commit(window, cx)
+                } else {
+                    self.render_graph_detail(cx)
+                },
+            ))
             .into_any_element()
     }
 
@@ -441,9 +465,7 @@ impl Pokarak {
         div().size_full().v_flex().overflow_hidden()
             .child(div().h(px(38.)).flex_none().px_3().flex().items_center().gap_2().border_b_1().border_color(palette.rgb(LINE))
                 .child(div().flex_1().min_w_0().text_ellipsis().font_weight(FontWeight::MEDIUM).child(visible(&detail.commit.subject)))
-                .child(parents)
-                .child(history_button(&weak, "history-pick", "Cherry-pick…", busy || merge, |app, window, cx| app.prepare_history_action(HistoryAction::CherryPick, window, cx)).ghost())
-                .child(history_button(&weak, "history-revert", "Revert…", busy || merge, |app, window, cx| app.prepare_history_action(HistoryAction::Revert, window, cx)).ghost()))
+                .child(parents))
             .child(div().h(px(26.)).flex_none().px_3().flex().items_center().text_size(px(11.)).text_color(palette.rgb(MUTED))
                 .child(format!("{}  ·  {}  ·  {}", short(&detail.commit.oid), visible(&detail.commit.author), detail.commit.date)))
             .child(div().flex_1().min_h_0().child(h_resizable("history-file-panes")

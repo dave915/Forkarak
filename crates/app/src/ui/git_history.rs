@@ -5,8 +5,8 @@ mod home;
 mod lanes;
 mod rows;
 use super::*;
-use lanes::{BranchTrace, graph_view, reference_name, track_color};
 use context_actions::commit_context_menu;
+use lanes::{BranchTrace, graph_view, reference_name, track_color};
 use pokarak_core::history::{self, Commit, CommitDetail, GraphRow, HistoryCursor, HistoryEntry};
 use pokarak_core::operations::history_actions::{HistoryAction, HistoryTarget};
 
@@ -138,7 +138,7 @@ impl Pokarak {
                 app.git_history.cursor = page.next;
                 app.git_history.limit_reached = page.limit_reached;
                 app.git_history.shallow = page.shallow;
-                if first {
+                if first && !app.inline_commit_active() {
                     let head = app.snapshot().map(|s| s.worktree.head.as_str());
                     let selected = app
                         .git_history
@@ -244,28 +244,6 @@ impl Pokarak {
     fn show_history_detail(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.git_history.active = true;
         cx.notify();
-    }
-    fn prepare_history_action(
-        &mut self,
-        action: HistoryAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if history_disabled(self) {
-            return;
-        }
-        let Some(oid) = self
-            .git_history
-            .detail
-            .as_ref()
-            .map(|d| d.commit.oid.clone())
-        else {
-            return;
-        };
-        let Some(root) = self.git_history.root.clone() else {
-            return;
-        };
-        self.prepare_commit_by_oid(action, &root, &oid, window, cx);
     }
     fn confirm_history_action(
         &mut self,

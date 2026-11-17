@@ -1,8 +1,8 @@
 //! Explicit Git actions; branch-sidebar selection remains comparison-only.
 mod contextual;
 mod worktree_manager;
-pub(in crate::ui) use contextual::branch_context_menu;
 use super::*;
+pub(in crate::ui) use contextual::branch_context_menu;
 pub(super) mod integration;
 use gpui_kit::component::{
     IndexPath,
@@ -257,7 +257,12 @@ impl Pokarak {
         self.load_git_page(None, window, cx);
     }
 
-    pub(super) fn load_git_page(&mut self, page: Option<Page>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn load_git_page(
+        &mut self,
+        page: Option<Page>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.git_is_busy() || self.loading {
             return;
         }
@@ -277,7 +282,10 @@ impl Pokarak {
                     return;
                 }
                 this.git_ui.loading = false;
-                if this.current.as_ref() != Some(&root) || this.request != generation || this.opening_path.is_some() {
+                if this.current.as_ref() != Some(&root)
+                    || this.request != generation
+                    || this.opening_path.is_some()
+                {
                     cx.notify();
                     return;
                 }
@@ -555,7 +563,9 @@ impl Pokarak {
             destructive,
         } = confirmation;
         let checkout_source = matches!(operation, Operation::CheckoutBranch { .. }).then(|| {
-            self.snapshot().and_then(|snapshot| (!snapshot.worktree.is_detached).then(|| snapshot.worktree.branch.clone()))
+            self.snapshot().and_then(|snapshot| {
+                (!snapshot.worktree.is_detached).then(|| snapshot.worktree.branch.clone())
+            })
         });
         window.close_dialog(cx);
         let weak = cx.entity().downgrade();

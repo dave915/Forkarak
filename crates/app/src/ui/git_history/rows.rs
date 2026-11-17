@@ -66,6 +66,7 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.leave_inline_commit();
         self.set_graph_detail_collapsed(false, cx);
         self.load_history_detail(oid, 0, window, cx);
     }
@@ -79,7 +80,12 @@ impl Pokarak {
         let ui = &self.git_history;
         let busy = history_disabled(self);
         let entries = ui.entries.clone();
-        let selected = ui.detail.as_ref().map(|detail| detail.commit.oid.clone());
+        let selected = ui
+            .detail
+            .as_ref()
+            .filter(|_| !self.inline_commit_active())
+            .map(|detail| detail.commit.oid.clone());
+        let menu_root = ui.root.clone();
         let trace = ui
             .hovered_tip
             .as_deref()
@@ -154,7 +160,7 @@ impl Pokarak {
                         });
                     let target = weak.clone();
                     let related = trace.as_ref().is_none_or(|path| path.row(index).node);
-                    Button::new(("history-row", index))
+                    let button = Button::new(("history-row", index))
                         .ghost()
                         .small()
                         .w_full()
@@ -207,7 +213,16 @@ impl Pokarak {
                             let _ = target.update(cx, |app, cx| {
                                 app.reveal_history_commit(oid.clone(), w, cx)
                             });
-                        })
+                        });
+                    div()
+                        .id(("commit-context", index))
+                        .w_full()
+                        .child(button)
+                        .context_menu(commit_context_menu(
+                            weak.clone(),
+                            menu_root.clone(),
+                            commit.clone(),
+                        ))
                 })
                 .collect()
         })

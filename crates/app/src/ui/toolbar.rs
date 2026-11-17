@@ -20,12 +20,6 @@ impl Pokarak {
             .flex()
             .items_center()
             .gap(ui_px(4.))
-            .child(
-                Icon::new(IconName::Utensils)
-                    .data(include_bytes!("../../../../assets/icons/spork.svg").as_slice())
-                    .size(ui_px(18.))
-                    .text_color(palette.rgb(BLUE)),
-            )
             .when(!has_projects, |bar| {
                 bar.child(
                     div()

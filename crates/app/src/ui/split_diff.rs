@@ -128,7 +128,7 @@ impl ReviewDiff {
     ) {
         let split = self.split_entity(app, cx);
         split.update(cx, |split, cx| {
-            split.scroll.scroll_to_item(
+            split.scroll.scroll_to_item_strict(
                 position.0.min(split.rows.len().saturating_sub(1)),
                 ScrollStrategy::Top,
             );
@@ -208,7 +208,7 @@ impl ReviewDiff {
                 if let Some(row) =
                     diff_tools::hunk_target(&hunks, scroll_row(&split.scroll), forward)
                 {
-                    split.scroll.scroll_to_item(row, ScrollStrategy::Top);
+                    split.scroll.scroll_to_item_strict(row, ScrollStrategy::Top);
                     cx.notify();
                 }
             });
@@ -219,7 +219,7 @@ impl ReviewDiff {
                 scroll_row(scroll),
                 forward,
             ) {
-                scroll.scroll_to_item(row, ScrollStrategy::Top);
+                scroll.scroll_to_item_strict(row, ScrollStrategy::Top);
                 cx.notify();
             }
         }

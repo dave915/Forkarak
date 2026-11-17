@@ -86,7 +86,7 @@ fn align(lines: &[DiffLine]) -> Vec<Row> {
     rows
 }
 
-struct SplitDiff {
+pub(super) struct SplitDiff {
     doc: Arc<DiffDocument>,
     rows: Arc<[Row]>,
     scroll: UniformListScrollHandle,
@@ -95,7 +95,7 @@ struct SplitDiff {
 }
 
 impl SplitDiff {
-    fn new(doc: Arc<DiffDocument>) -> Self {
+    pub(super) fn new(doc: Arc<DiffDocument>) -> Self {
         let rows = align(&doc.lines).into();
         let max_columns = doc
             .lines

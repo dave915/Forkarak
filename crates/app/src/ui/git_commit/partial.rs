@@ -1,6 +1,19 @@
 use super::*;
 
 impl Pokarak {
+    pub(super) fn toggle_partial_split(&mut self, cx: &mut Context<Self>) {
+        if self.commit_ui.split.take().is_none()
+            && let Some(preview) = &self.commit_ui.partial
+        {
+            let document = Arc::new(DiffDocument {
+                lines: preview.lines().to_vec(),
+                ..Default::default()
+            });
+            self.commit_ui.split = Some(cx.new(|_| split_diff::SplitDiff::new(document)));
+        }
+        cx.notify();
+    }
+
     pub(super) fn apply_line_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.commit_disabled() || self.commit_ui.marked.is_empty() {
             return;
@@ -76,7 +89,11 @@ impl Pokarak {
                     } else {
                         "☐"
                     };
-                    let label = format!("{marker} {prefix} {}", line.text);
+                    let label = if let Some(number) = line.new_line.or(line.old_line) {
+                        format!("{marker} {number:>4}  {prefix} {}", line.text)
+                    } else {
+                        format!("{marker} {prefix} {}", line.text)
+                    };
                     if !selectable {
                         return div()
                             .h(px(21.))

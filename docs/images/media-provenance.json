@@ -1,0 +1,26 @@
+{
+  "code-workspace.png": {
+    "source_revision": "c6509b7",
+    "source": "editor-comparison/forkarak-native.png",
+    "logical_bounds": {
+      "width": 1440,
+      "height": 900
+    },
+    "condition": "Default panels in Code after explicit mode selection; read-only working file."
+  },
+  "graph-review.png": {
+    "source_revision": "f8cb1ec4ad7e222faec4c7dcc4a2165b264c3ae6",
+    "source_worker_capture": "compact-ui-media/final-history-wide.png",
+    "logical_bounds": {
+      "width": 1440,
+      "height": 900
+    },
+    "condition": "Actual authored Java fixture, committed snapshot, current compact reader. No active workflow banner."
+  },
+  "icon-presets.png": {
+    "source_revision": "ed24efe",
+    "source": "assets/icons/app/{charcoal,deep-blue,deep-green,plum,ivory,light-blue}.png",
+    "condition": "Contact sheet of authoritative icon assets, not a screenshot. Only resized and labeled."
+  },
+  "editor-comparison/": "See editor-comparison/capture-conditions.json; full-window native PNGs plus clearly labeled composites. No GIF is referenced; old stacked-toolbar media is not used."
+}

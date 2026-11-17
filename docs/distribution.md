@@ -1,8 +1,56 @@
-# CLI 설치와 릴리스
+# 설치, CLI와 배포
 
-지원 대상은 Apple Silicon Mac, macOS 13 이상이다. 배포 파일은 네이티브 Rust/GPUI 앱이며, 설치하는 Mac에서 앱을 컴파일하지 않는다. Intel Mac과 Windows/Linux 설치는 지원하지 않는다. 최소 OS는 선언값이며 macOS 13 실기기 검증은 별도다.
+지원 대상은 Apple Silicon Mac, macOS 13 이상이다. 네이티브 Rust/GPUI 앱이며 Intel Mac과 Windows/Linux 배포는 검증하지 않았다. 최소 OS는 선언값으로, macOS 13 실기기 검증과는 구분한다.
 
-## 설치와 업데이트
+이 문서의 새 에디터·언어 관리·CLI 기능은 통합된 개발 버전을 기준으로 한다. **이번 변경으로 새 릴리스를 게시하지 않았다.** 공개 다운로드는 기존 안정 버전이며 아래 소스 빌드와 기능 구성이 다를 수 있다.
+
+## 현재 소스에서 빌드하기
+
+개발 Mac에는 Rust/Cargo와 Apple 개발 도구·SDK가 필요하다. 다음 명령은 프로젝트 루트에서 실행한다.
+
+```sh
+cargo run -p pokarak -- /absolute/path/to/git-project
+./scripts/package-macos.sh
+```
+
+첫 명령은 개발 실행 파일을 사용한다. 두 번째 명령은 `dist/Forkarak.app`을 만들며 자동 실행하지 않는다. 기본 패키지에는 Java 서버와 런타임·고지·소스 자료가 포함된다. 빌드 머신의 Python 3, macOS 시스템 도구와 콜드 캐시 다운로드용 네트워크가 필요하다. 설치 후 앱 시작이나 관리 서버 사용에 사용자 Python/Homebrew/npm 설치가 필요한 것은 아니다. Herdr에서 오래 걸리는 빌드·검증은 `hc run --bg`와 `hc wait`로 수행한다.
+
+앱을 원하는 위치에 둔 뒤, 그 **현재 번들**에서 CLI를 설치한다. 예를 들어 `~/Applications/Forkarak.app`에 둔 경우:
+
+```sh
+~/Applications/Forkarak.app/Contents/MacOS/forkarak install-cli
+# 다른 명령 설치 폴더를 쓰려면:
+~/Applications/Forkarak.app/Contents/MacOS/forkarak install-cli --bin-dir /absolute/path/to/bin
+```
+
+`install-cli`는 이 로컬 번들을 검증하고 `~/.local/bin/forkarak`과 `~/.local/bin/fkk`를 함께 설치한다. 앱을 다운로드하거나 교체하지 않으며 셸 설정을 변경하지 않는다. 두 명령은 해당 번들의 위치를 사용하므로 앱을 이동했다면 새 위치에서 다시 설치한다. `~/.local/bin`을 PATH에 추가하면 짧은 명령으로 실행할 수 있다.
+
+## 파일과 프로젝트 열기
+
+```sh
+fkk .
+forkarak /absolute/path/to/git-project
+fkk src/order-service.ts
+fkk --goto src/order-service.ts:24:5
+forkarak --reuse-window /absolute/path/to/another-git-project
+forkarak --new-window .
+```
+
+`forkarak`과 `fkk`는 같은 기능이다. 경로는 **기존 Git 워크트리 안의 존재하는 파일·디렉터리**여야 한다. Git 밖의 단독 파일, 새 파일 생성, `--wait`와 `--diff`는 지원하지 않는다. 파일을 열기 위해 git-init, checkout, 빌드나 언어 분석을 실행하지 않는다. 예약어 또는 `-`로 시작하는 파일은 `--` 뒤에 쓴다.
+
+| 옵션 | 동작 |
+| --- | --- |
+| `-g, --goto FILE:LINE[:COLUMN]` | 여러 번 지정 가능. 줄·열은 1부터 시작하며 열은 Unicode 문자 기준이다. 전체 이름과 일치하는 파일이 있으면 그 이름을 우선한다. 일반 경로의 콜론은 위치로 해석하지 않는다. |
+| `-r, --reuse-window` | 일치하는 실행 세션을 재사용하며, 명시적 재사용이면 유일한 다른 세션에 프로젝트를 열 수도 있다. 대상이 모호하면 오류로 표시한다. |
+| `-n, --new-window` | 새 창으로 연다. `--reuse-window`와 함께 쓸 수 없다. |
+| `--session SOCKET` | 재사용할 로컬 세션을 명시한다. |
+| `--background`, `--no-launch` | 동일한 자동화 옵션. 실행 중인 적격 세션만 사용하며 앱을 실행하거나 앞으로 가져오지 않는다. 세션이 없으면 실패한다. |
+| `--session-dir DIR` | 설정·세션 경로와 세션 매칭 범위를 분리한다. |
+| `--window-size WIDTHxHEIGHT` | 새 창의 크기를 지정한다. 기존 창 크기는 바꾸지 않는다. |
+
+기본 실행은 모든 요청 워크트리가 들어 있는 유일한 세션을 재사용하고, 파일·위치가 준비된 뒤 해당 창을 보여준다. 여러 세션이 일치하면 임의로 고르지 않는다. 자동화에서는 `--background`와 명시적 세션을 사용한다. 위치 검증은 화면에 표시한 실제 소스와 보관 중인 초안을 기준으로 한다. 전체 문법은 `forkarak --help`, JSON 자동화는 `forkarak ctl --help`를 참고한다.
+
+## 공개 안정 버전 설치와 업데이트
 
 공개 GitHub Releases의 최신 안정 버전을 설치한다.
 
@@ -35,7 +83,7 @@ curl -fsSL https://github.com/dave915/Forkarak/releases/latest/download/install.
 rm -f "$installer"
 ```
 
-앱에서 재시작하면 세션 설정에 현재 작업 위치와 작성 중인 커밋 메시지를 저장한다. 저장소 파일과 Git 인덱스는 그대로 유지된다. 언어 서버 설치는 기존 `scripts/setup-language-servers.sh`의 별도 명시적 작업이다.
+앱에서 재시작하면 세션 설정에 현재 작업 위치와 작성 중인 커밋 메시지를 저장한다. 저장소 파일과 Git 인덱스는 그대로 유지된다. 새 개발 버전의 언어 도구는 [언어 지원 관리](language-analysis.md)에서 명시적으로 설치하며, 공개 버전의 도구 구성과 구분한다.
 
 ## 다운로드와 교체
 
@@ -43,7 +91,19 @@ rm -f "$installer"
 
 검증에 실패하면 설치된 앱을 교체하지 않는다. 관련 없는 앱이나 명령, 심볼릭 링크를 덮어쓰지 않는다. CLI로 교체하는 동안 앱이 실행 중이면 종료 후 재시도를 안내한다. 세부 검사와 오류 경로는 `scripts/test-distribution.py`에서 임시 앱과 격리된 설치 디렉터리로 검증한다.
 
-## 새 버전 게시
+## Java 리소스와 검증
+
+기본 패키지의 `Contents/Resources/language-tools/`에는 JDT LS 1.63.0, Temurin 25.0.5+8, 전체 대응 OpenJDK 소스·빌드 자료, JDT와 중첩 JAR의 고지·소스 목록이 들어 있다. 약 **486 MiB**의 언어 리소스이며 다운로드 압축 크기와는 다르다. Kotlin은 바이너리 없이 공식 첫 사용 다운로드 메타데이터만 포함한다.
+
+`language-resources.lock.json`의 고정 URL·해시를 사용하고 `~/Library/Caches/Forkarak/language-resources`의 캐시도 매번 검증한다. 준비된 리소스는 `FORKARAK_LANGUAGE_RESOURCES`로 지정할 수 있다. 빌드 단계에서 내부 파일 링크를 검증·정규화하고 경로 탈출·특수 파일·위험한 링크는 거부한다. JAR 원본은 유지하고 파일시스템의 중첩 Mach-O와 JDK, 외부 앱 순서로 서명한 뒤 최종 `SHA256SUMS` 인벤토리를 만든다.
+
+설치 프로그램은 macOS 시스템 도구로 리소스 목록·무결성과 앱 서명을 확인한다. 현재 설치 경로에서는 앱과 두 관리 CLI를 함께 검증·게시하며, 도중 실패하면 이전 앱·명령을 복원한다. 관련 없는 파일·심볼릭 링크는 덮어쓰지 않는다. 소스의 MIT 라이선스와 포함된 런타임·제3자 자산의 라이선스는 별개다. 실제 고지와 소스 접근 정보는 [번들 고지](../scripts/language-resources-NOTICE.md)와 패키지의 `legal/`, `sources/`에 있다.
+
+새 기본 아이콘은 번들의 `.icns`를 따른다. **기본값 따르기**는 이후 번들 교체의 기본 그림을 따르고, 명시적으로 선택한 여섯 색상은 번들 밖 앱 공통 설정에 저장해 실행 시 Dock 아이콘에 복원한다. 색상별 Finder 아이콘 교체 기능을 뜻하지 않는다.
+
+## 새 버전 게시 절차 (유지보수용)
+
+현재 작업에서는 아래 절차를 실행하지 않는다.
 
 `.github/workflows/release.yml`은 `vX.Y.Z` 태그를 push하면 macOS arm64 환경에서 설치 테스트, 앱 테스트, release 빌드와 패키징을 수행한다. 성공한 산출물만 새 릴리스로 게시한다. 같은 태그의 기존 릴리스 파일은 자동으로 덮어쓰지 않는다. GitHub 문서의 [최신 릴리스 다운로드 URL](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)을 사용하므로 설치 명령은 버전마다 바뀌지 않는다.
 
@@ -78,7 +138,7 @@ python3 scripts/test-distribution.py
 
 ## Apple 서명과 공증
 
-현재 배포는 ad-hoc 서명이다. Apple Developer 계정이나 Developer ID 인증서가 없어 정식 공증을 수행하지 않는다. 브라우저로 다운로드한 앱에는 macOS 보안 경고가 표시될 수 있다. CLI 설치도 모든 기기·보안 정책에서 경고가 없음을 보장하지 않는다.
+현재 개발 패키지와 로컬 설치는 ad-hoc arm64 서명 경로를 검증했다. Apple Developer 계정이나 Developer ID 인증서가 없어 정식 공증을 수행하지 않는다. 브라우저로 다운로드한 앱에는 macOS 보안 경고가 표시될 수 있다. CLI 설치도 모든 기기·보안 정책에서 경고가 없음을 보장하지 않는다.
 
 나중에 Developer ID 인증서와 `notarytool` 키체인 프로필을 준비하면 로컬 릴리스 스크립트에서 서명·공증을 켤 수 있다.
 

@@ -26,6 +26,9 @@ fn guarded_file_actions_no_overwrite_traversal_symlink_or_stale_source() {
     assert!(create_file(&f.root, Path::new("nested/a"), b"bad").is_err());
     assert!(inspect_path(&f.root, Path::new("nested")).is_err());
     let dir = inspect_path(&f.root, Path::new("folder")).unwrap();
+    let mut forged = dir.clone();
+    forged.is_directory = false;
+    assert!(move_path(&f.root, &forged, Path::new("moved-folder")).is_err());
     move_path(&f.root, &dir, Path::new("moved-folder")).unwrap();
     assert!(f.root.join("moved-folder/renamed.txt").exists());
 }

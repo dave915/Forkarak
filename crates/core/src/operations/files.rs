@@ -54,17 +54,17 @@ pub fn create_directory(root: &Path, path: &Path) -> Result<()> {
 }
 
 pub fn move_path(root: &Path, expected: &PathIdentity, destination: &Path) -> Result<()> {
-    ensure!(expected.root == expected.bound_root && expected.path == expected.bound_path, "Move confirmation changed");
+    ensure!(expected.root == expected.bound_root && expected.path == expected.bound_path && expected.is_directory == expected.metadata.is_dir(), "Move confirmation changed");
     let source = guarded(root, &expected.bound_path)?;
     ensure!(source.root == expected.root, "Move belongs to a different worktree");
     let target = guarded(root, destination)?;
     ensure!(expected.path != destination, "Choose a different destination");
-    ensure!(!expected.is_directory || !destination.starts_with(&expected.path), "A directory cannot move into itself");
+    ensure!(!expected.metadata.is_dir() || !destination.starts_with(&expected.path), "A directory cannot move into itself");
     source.revalidate()?;
     target.revalidate()?;
     let file = open_at(&source.parent, &source.name, libc::O_RDONLY)?;
     ensure!(unchanged(&file.metadata()?, &expected.metadata), "Source changed externally; inspect it before moving");
-    if expected.is_directory { guard_subtree(&file, &source.administration, &mut 100_000)?; }
+    if expected.metadata.is_dir() { guard_subtree(&file, &source.administration, &mut 100_000)?; }
     rename_exclusive(&source.parent, &source.name, &target.parent, &target.name)
 }
 
@@ -102,8 +102,19 @@ fn guard_subtree(directory: &File, administration: &[(u64,u64)], budget: &mut us
     impl Drop for Entries { fn drop(&mut self) { unsafe { libc::closedir(self.0); } } }
     let entries = Entries(raw);
     loop {
+        // readdir returns null both at EOF and on error. Clear errno for each
+        // call so a partial scan can never authorize a move after an I/O error.
+        #[cfg(target_os="macos")]
+        let errno = unsafe { libc::__error() };
+        #[cfg(not(target_os="macos"))]
+        let errno = unsafe { libc::__errno_location() };
+        unsafe { *errno = 0; }
         let entry = unsafe { libc::readdir(entries.0) };
-        if entry.is_null() { break; }
+        if entry.is_null() {
+            let code = unsafe { *errno };
+            if code != 0 { return Err(io::Error::from_raw_os_error(code)).context("Cannot completely inspect directory move"); }
+            break;
+        }
         let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
         if matches!(name.to_bytes(), b"." | b"..") { continue; }
         ensure!(*budget > 0, "Directory move exceeds the 100000-entry safety limit");

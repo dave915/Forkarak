@@ -44,7 +44,8 @@ jobs:
           python3 scripts/test-distribution.py
           python3 scripts/test-cli-launcher.py
       - name: Test application
-        run: cargo test --locked --workspace --features pokarak-navigation/test-server
+        working-directory: /tmp
+        run: cargo test --locked --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" --workspace --features pokarak-navigation/test-server
       - name: Build release
         run: ./scripts/release-macos.sh --version "$RELEASE_TAG"
       - name: Record source revision

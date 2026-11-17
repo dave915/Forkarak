@@ -47,7 +47,15 @@ fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
                     | "duplicate_line_down"
                     | "replace_file"
                     | "format_file" => editable,
-                    "go_to_line" | "word_wrap" | "select_next_word" | "pin_tab"
+                    "language_completion"
+                    | "language_diagnostics"
+                    | "language_symbols"
+                    | "language_signature"
+                    | "language_hover"
+                    | "go_to_line"
+                    | "word_wrap"
+                    | "select_next_word"
+                    | "pin_tab"
                     | "previous_code" => code,
                     _ => ready,
                 },
@@ -112,12 +120,7 @@ fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
         "cmd-alt-f",
         ReplaceFile
     );
-    add!(
-        "편집: 설정한 포맷터 실행",
-        "format_file",
-        "alt-shift-f",
-        FormatFile
-    );
+    add!("편집: 파일 포맷", "format_file", "alt-shift-f", FormatFile);
     add!("이동: 줄:열 번호로 이동…", "go_to_line", "cmd-l", GoToLine);
     add!("이동: 파일 찾기…", "find_file", "cmd-p", FindFile);
     add!(
@@ -137,6 +140,36 @@ fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
         "find_references",
         "alt-f7",
         FindReferences
+    );
+    add!(
+        "코드 지원: 자동완성",
+        "language_completion",
+        "ctrl-space",
+        language_tools::Complete
+    );
+    add!(
+        "코드 지원: 오류 확인",
+        "language_diagnostics",
+        "",
+        language_tools::Diagnostics
+    );
+    add!(
+        "코드 지원: 파일 구조 검색",
+        "language_symbols",
+        "cmd-shift-o",
+        language_tools::Symbols
+    );
+    add!(
+        "코드 지원: 함수 도움말",
+        "language_signature",
+        "ctrl-shift-space",
+        language_tools::Signature
+    );
+    add!(
+        "코드 지원: 타입 · 설명",
+        "language_hover",
+        "alt-f1",
+        language_tools::Hover
     );
     add!("이동: 뒤로", "back", "cmd-[", Back);
     add!("이동: 앞으로", "forward", "cmd-]", Forward);

@@ -808,6 +808,16 @@ impl CodeEdits {
             .map(|b| b.draft.expected.clone())
     }
 
+    /// Retained current working drafts for a snapshot-based language request.
+    /// Historical sources never create these buffers.
+    pub(super) fn analysis_drafts(&self, root: &Path) -> Vec<(PathBuf, String)> {
+        self.buffers
+            .iter()
+            .filter(|(key, buffer)| key.root == root && buffer.dirty())
+            .map(|(key, buffer)| (key.path.clone(), buffer.draft.text.clone()))
+            .collect()
+    }
+
     pub(super) fn editing(&self, root: &Path, path: &Path) -> bool {
         self.buffer(root, path)
             .is_some_and(|b| b.editing && !b.saving)

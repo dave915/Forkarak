@@ -570,7 +570,10 @@ impl Pokarak {
                     "검토 완료"
                 },
             )
-            .accessibility_label("파일 검토 완료 표시 전환")
+            .accessibility_label(
+                self.review_disabled_reason()
+                    .unwrap_or("파일 검토 완료 표시 전환"),
+            )
             .tooltip(
                 self.review_disabled_reason()
                     .unwrap_or("현재 파일과 비교 내용이 바뀌면 완료 표시가 해제됩니다."),
@@ -730,25 +733,71 @@ impl Pokarak {
             (has_file && self.opening_path.is_none() && !self.loading && !self.file_loading)
                 .then(|| self.review_disabled_reason())
                 .flatten();
-        self.reviewed_files
-            .error
-            .as_deref()
-            .or(reason)
-            .map(|error| {
-                div()
-                    .px_3()
-                    .py_1()
-                    .flex_none()
-                    .text_size(ui_text(11.))
-                    .text_color(Palette::new(cx).rgb(RED))
-                    .child(error.to_owned())
-                    .into_any_element()
-            })
+        let stale = self
+            .current
+            .as_ref()
+            .zip(self.selected().as_ref())
+            .is_some_and(|(root, path)| {
+                !self.git_history.active && self.code_edits.stale(root, path)
+            });
+        global_review_notice(
+            self.reviewed_files.error.as_deref(),
+            self.reviewed_files.unreadable,
+            stale,
+            reason,
+        )
+        .map(|error| {
+            div()
+                .px_3()
+                .py_1()
+                .flex_none()
+                .text_size(ui_text(11.))
+                .text_color(Palette::new(cx).rgb(RED))
+                .child(error.to_owned())
+                .into_any_element()
+        })
     }
+}
+
+/// Disabled states are ordinary context; only failed IO/persistence or a stale
+/// draft should appear in the workspace's red error notice.
+fn global_review_notice<'a>(
+    error: Option<&'a str>,
+    unreadable: bool,
+    stale: bool,
+    disabled_reason: Option<&'a str>,
+) -> Option<&'a str> {
+    error.or_else(|| (unreadable || stale).then_some(disabled_reason).flatten())
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ordinary_disabled_review_context_is_not_a_global_failure() {
+        for reason in [
+            "비교할 변경사항이 없습니다.",
+            "파일을 읽고 있습니다.",
+            "비교할 변경 파일을 선택하세요.",
+            "미저장 초안입니다.",
+        ] {
+            assert_eq!(
+                super::global_review_notice(None, false, false, Some(reason)),
+                None
+            );
+        }
+        assert_eq!(
+            super::global_review_notice(Some("기록 보관 실패"), false, false, Some("정상 비활성")),
+            Some("기록 보관 실패")
+        );
+        assert_eq!(
+            super::global_review_notice(None, true, false, Some("기록 읽기 실패")),
+            Some("기록 읽기 실패")
+        );
+        assert_eq!(
+            super::global_review_notice(None, false, true, Some("디스크와 다른 초안")),
+            Some("디스크와 다른 초안")
+        );
+    }
     use super::{ReviewContext, ReviewKey, ReviewSource, ReviewState, ReviewedFiles, fingerprint};
     use pokarak_core::{CompareMode, DiffDocument};
     use std::{fs, path::Path, process::Command};

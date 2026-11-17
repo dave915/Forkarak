@@ -62,6 +62,16 @@ fn prepare_rows(
     query: Option<&str>,
     context: bool,
 ) -> Vec<Row> {
+    prepare_rows_with_sources(hits, revisions, query, context, &HashMap::new())
+}
+
+fn prepare_rows_with_sources(
+    hits: &[SourceLocation],
+    revisions: &HashMap<PathBuf, FileRevision>,
+    query: Option<&str>,
+    context: bool,
+    sources: &HashMap<PathBuf, pokarak_navigation::DocumentSnapshot>,
+) -> Vec<Row> {
     let mut groups: BTreeMap<PathBuf, Vec<(usize, &SourceLocation)>> = BTreeMap::new();
     for (index, hit) in hits.iter().enumerate() {
         groups
@@ -75,6 +85,11 @@ fn prepare_rows(
         rows.push(Row::File(path.clone()));
         let source = context
             .then(|| {
+                if let Some(snapshot) = sources.get(&path) {
+                    // Never read disk for a path whose semantic positions came
+                    // from a retained draft, even after that snapshot expires.
+                    return snapshot.is_current().then(|| snapshot.text().to_owned());
+                }
                 let expected = revisions.get(&path)?;
                 if expected.0 > 2 * 1024 * 1024
                     || expected.0 > context_budget
@@ -216,16 +231,22 @@ impl Pokarak {
         let request = self.navigation_request;
         let results = self.results.clone();
         let revisions = self.result_revisions.clone();
-        let task =
-            cx.background_spawn(
-                async move { prepare_rows(&hits, &revisions, query.as_deref(), true) },
-            );
+        let sources = if self.result_semantic {
+            self.semantic_result_sources()
+        } else {
+            HashMap::new()
+        };
+        let guards: Vec<_> = sources.values().cloned().collect();
+        let task = cx.background_spawn(async move {
+            prepare_rows_with_sources(&hits, &revisions, query.as_deref(), true, &sources)
+        });
         cx.spawn(async move |view, cx| {
             let rows = task.await;
             let _ = view.update(cx, |app, cx| {
                 if app.current.as_ref() == Some(&root)
                     && app.navigation_request == request
                     && Arc::ptr_eq(&app.results, &results)
+                    && guards.iter().all(|s| s.is_current())
                 {
                     app.result_rows = Arc::new(rows);
                     cx.notify();
@@ -516,6 +537,55 @@ impl Pokarak {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn semantic_excerpts_use_retained_source_and_never_fall_back_to_disk_for_it() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let path = root.join("draft.ts");
+        std::fs::write(&path, "const disk = 0;\ndisk();").unwrap();
+        let snapshot = pokarak_navigation::DocumentSnapshot::new(
+            root.clone(),
+            path.clone(),
+            "// retained context\nconst dirty = 1;\ndirty();".into(),
+            1,
+        )
+        .unwrap();
+        let hit = super::SourceLocation {
+            path: path.clone(),
+            line: 2,
+            column: 0,
+            preview: "dirty();".into(),
+        };
+        let sources = std::collections::HashMap::from([(path.clone(), snapshot.clone())]);
+        let revisions = super::result_revisions(std::slice::from_ref(&hit));
+        let rows = super::prepare_rows_with_sources(
+            std::slice::from_ref(&hit),
+            &revisions,
+            None,
+            true,
+            &sources,
+        );
+        let text = rows
+            .iter()
+            .filter_map(|r| {
+                if let super::Row::Line { text, .. } = r {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("retained context"));
+        assert!(text.contains("const dirty"));
+        assert!(!text.contains("disk"));
+        snapshot.invalidate();
+        let rows = super::prepare_rows_with_sources(&[hit], &revisions, None, true, &sources);
+        assert!(
+            rows.iter()
+                .all(|r| !matches!(r,super::Row::Line{text,..} if text.contains("disk")))
+        );
+    }
     use super::{HashMap, Row, SourceLocation, Surface, match_range, prepare_rows};
     #[test]
     fn grouped_excerpts_merge_nearby_context_and_mark_matches() {

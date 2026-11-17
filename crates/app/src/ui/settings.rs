@@ -464,7 +464,7 @@ impl Pokarak {
                 content=content.child(appearance(app,&weak,cx));
             }
             for &field in FIELDS.iter().filter(|field|field.category==category) {content=content.child(field_row(field,&app.prefs,&state,&weak,cx));}
-            if category==Category::Language {content=content.child(trust_settings(app,&weak,&state,cx));}
+            if category==Category::Language {content=content.child(app.language_manager_settings(weak.clone(),cx)).child(trust_settings(app,&weak,&state,cx));}
             if category==Category::Keyboard {content=content.child(keyboard_settings(app,&state,cx));}
             if category==Category::Ai {content=content.child(ai_settings(app,&weak,&state,cx));}
             if category==Category::Execution {content=content.children(management_button("forkarak_tasks::ManageTasks","실행 프로필·작업 관리 열기",cx));}
@@ -480,6 +480,7 @@ impl Pokarak {
                     let message=reset.update(cx,|app,cx| {
                         let backup_options=app.prefs.options.clone(); let backup_projects=app.prefs.project_options.clone();
                         for field in FIELDS.iter().filter(|field|field.category==category && !(root.is_some() && field.app_only)) {app.prefs.remove_option(root.as_deref(),field.key);}
+                        if category==Category::Language {app.prefs.remove_option(root.as_deref(),"language.enabled");app.cancel_managed_language_request();}
                         let old_display=app.prefs.display; let old_theme=app.prefs.theme;
                         if category==Category::Appearance && root.is_none() {app.prefs.display=DisplaySettings::DEFAULT;app.prefs.theme=ThemeChoice::System;}
                         if let Err(error)=app.prefs.try_save(){app.prefs.options=backup_options;app.prefs.project_options=backup_projects;app.prefs.display=old_display;app.prefs.theme=old_theme;return format!("초기화를 저장하지 못했습니다: {error}");}

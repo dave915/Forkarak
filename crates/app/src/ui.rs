@@ -15,11 +15,14 @@ mod git_actions;
 mod git_commit;
 mod git_history;
 mod git_workflow;
+mod language_manager;
+mod language_tools;
 mod pane_visibility;
 mod patch;
 mod reader_navigation;
 mod result_presentation;
 mod reviewed_files;
+mod search_options;
 mod settings;
 mod split_diff;
 mod syntax;
@@ -168,18 +171,24 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("줄 번호로 이동…", editor_tools::GoToLine),
             MenuItem::action("긴 줄 화면 줄바꿈", editor_tools::ToggleWordWrap),
             MenuItem::action("미리보기 탭 고정", editor_tools::PinTab),
-            MenuItem::action("설정한 포맷터 실행", editor_tools::FormatFile),
+            MenuItem::action("파일 포맷", editor_tools::FormatFile),
+            MenuItem::action("자동완성", language_tools::Complete),
+            MenuItem::action("오류 확인", language_tools::Diagnostics),
+            MenuItem::action("함수 도움말", language_tools::Signature),
+            MenuItem::action("타입 · 설명", language_tools::Hover),
         ]),
         Menu::new("탐색").items([
             MenuItem::action("워크트리 선택…", ChooseWorktree),
             MenuItem::action("작업·로그…", execution::ManageTasks),
             MenuItem::action("확장 관리…", execution::ManageExtensions),
+            MenuItem::action("언어 지원 관리…", language_manager::ManageLanguages),
             MenuItem::separator(),
             MenuItem::action("파일 찾기", FindFile),
             MenuItem::action("본문 검색", FindText),
             MenuItem::separator(),
             MenuItem::action("정의로 이동", FindDefinition),
             MenuItem::action("사용처 찾기", FindReferences),
+            MenuItem::action("파일 구조 검색…", language_tools::Symbols),
             MenuItem::separator(),
             MenuItem::action("뒤로", Back),
             MenuItem::action("앞으로", Forward),
@@ -220,6 +229,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-alt-d", ToggleCode, None),
     ]);
     editor_tools::bind_keys(cx);
+    language_tools::bind_keys(cx);
 }
 
 #[derive(Clone)]
@@ -311,6 +321,8 @@ pub struct Pokarak {
     updates: updates::Updates,
     error: Option<String>,
     analysis_feedback: AnalysisFeedback,
+    language_tools: language_tools::LanguageTools,
+    language_manager: language_manager::LanguageManager,
     status: String,
     results: Arc<[ResultExcerpt]>,
     result_revisions: HashMap<PathBuf, FileRevision>,
@@ -657,6 +669,8 @@ impl Pokarak {
             updates: updates::Updates::new(cx),
             error: None,
             analysis_feedback: AnalysisFeedback::default(),
+            language_tools: language_tools::LanguageTools::default(),
+            language_manager: language_manager::LanguageManager::default(),
             status: "저장소를 열어 시작하세요".into(),
             results: Arc::default(),
             result_revisions: HashMap::new(),
@@ -690,6 +704,7 @@ impl Pokarak {
         this.install_git_lifecycle(window, cx);
         this.install_cli_control(window, cx);
         cx.on_release(|this, cx| {
+            this.cancel_language_installers(cx).detach();
             this.cancel_git_job();
             this.execution.shutdown();
             #[cfg(target_os = "macos")]
@@ -701,6 +716,7 @@ impl Pokarak {
         })
         .detach();
         cx.on_app_quit(|this, cx| {
+            let language_installers = this.cancel_language_installers(cx);
             this.cancel_git_job();
             this.execution.shutdown();
             this.persist(cx);
@@ -710,6 +726,7 @@ impl Pokarak {
             #[cfg(target_os = "macos")]
             let terminals = this.shutdown_terminals(cx);
             async move {
+                language_installers.await;
                 #[cfg(target_os = "macos")]
                 for terminal in terminals {
                     terminal.wait().await;
@@ -1203,6 +1220,7 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.invalidate_language_view(cx);
         self.leave_git_graph();
         let Some(root) = self.current.clone() else {
             return;
@@ -1569,6 +1587,7 @@ impl Pokarak {
     }
 
     fn toggle_code(&mut self, code: bool, cx: &mut Context<Self>) {
+        self.invalidate_language_view(cx);
         self.navigation_request += 1;
         self.navigating = false;
         if let Some(root) = &self.current
@@ -1590,6 +1609,8 @@ impl Pokarak {
     }
 
     fn stop_analysis(&mut self, cx: &mut Context<Self>) {
+        self.invalidate_language_view(cx);
+        self.cancel_managed_language_request();
         self.navigation_request += 1;
         if let Some(cancel) = self.cancellation.take() {
             let _ = cancel.cancel();
@@ -1614,14 +1635,38 @@ impl Pokarak {
             self.prefs.trusted.push(root.clone());
             self.prefs.save();
         }
-        let navigator = Navigator::with_options(
+        let configs = match self.configure_language_servers() {
+            Ok(configs) => configs,
+            Err(error) => {
+                self.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+        let formatters = match self.configure_language_formatters() {
+            Ok(formatters) => formatters,
+            Err(error) => {
+                self.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+        let signature = serde_json::json!([configs, formatters]);
+        let mut navigator = Navigator::with_options(
             root,
-            pokarak_navigation::default_configs(),
+            configs,
             pokarak_navigation::NavigatorOptions {
                 allow_project_imports: true,
+                config_file: None,
                 ..Default::default()
             },
         );
+        if let Err(error) = navigator.set_formatter_configs(formatters) {
+            self.error = Some(format!("{error:#}"));
+            cx.notify();
+            return;
+        }
+        self.remember_language_configuration(signature);
         self.cancellation = Some(navigator.cancellation_handle());
         self.navigation = Some(Arc::new(Mutex::new(navigator)));
         self.trust_prompt = false;
@@ -1636,160 +1681,7 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Dialog readers (index/history/conflict) are not current working code.
-        if self.navigating
-            || self.git_history.active
-            || self.active_worktree_has_git_job()
-            || window.has_active_dialog(cx)
-        {
-            return;
-        }
-        let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
-            return;
-        };
-        if self.code_edits.dirty(&root, &path) {
-            self.status =
-                "심볼 탐색 전에 파일을 저장하세요. 미저장 초안을 디스크 소스로 탐색하지 않습니다."
-                    .into();
-            cx.notify();
-            return;
-        }
-        let current_source = self.session().map(|s| s.saved.code).unwrap_or(false)
-            && !self
-                .snapshot()
-                .and_then(|s| s.changes.iter().find(|f| f.path == path))
-                .map(|f| f.status == FileStatus::Deleted)
-                .unwrap_or(false);
-        if !current_source {
-            self.status =
-                "현재 코드 탭에서 심볼을 선택하세요. 변경 전 코드는 탐색하지 않습니다.".into();
-            cx.notify();
-            return;
-        }
-        if self.navigation.is_none() {
-            if self.prefs.trusted.contains(&root) {
-                self.enable_analysis(cx);
-            } else {
-                self.trust_prompt = true;
-                cx.notify();
-                return;
-            }
-        }
-        let Some(editor) = self.active_editor() else {
-            return;
-        };
-        let Some(target) = reader_navigation::navigation_target(
-            editor.read(cx).text(),
-            editor.read(cx).cursor(),
-            position,
-        ) else {
-            return;
-        };
-        let position = target.position;
-        let displayed_text = editor.read(cx).value().to_string();
-        let navigation_anchor = editor
-            .read(cx)
-            .range_to_bounds(&(editor.read(cx).cursor()..editor.read(cx).cursor()));
-        let _symbol_start = target.symbol_start;
-        let absolute = root.join(&path);
-        let navigator = self.navigation.as_ref().unwrap().clone();
-        let retry_kind = kind.clone();
-        let retry_path = path.clone();
-        let is_definition = matches!(kind, NavigationKind::Definition);
-        let title = match kind {
-            NavigationKind::Definition => "정의",
-            NavigationKind::References => "사용처",
-            NavigationKind::Implementation => "구현체",
-        }
-        .to_string();
-        self.navigating = true;
-        self.navigation_request += 1;
-        let token = self.navigation_request;
-        self.status = if matches!(
-            path.extension().and_then(|ext| ext.to_str()),
-            Some("kt" | "kts")
-        ) {
-            format!("Kotlin {title} 찾는 중… 첫 탐색 시 Gradle/Maven 프로젝트를 동기화합니다.")
-        } else {
-            format!("{title} 찾는 중…")
-        };
-        let source = absolute.clone();
-        let expected_text = displayed_text.clone();
-        let task = cx.background_spawn(async move {
-            let mut output = String::new();
-            let result = (|| {
-                let mut nav = navigator
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("분석 서버 상태를 읽을 수 없습니다"))?;
-                let result = (|| {
-                    anyhow::ensure!(
-                        std::fs::read_to_string(&absolute)? == displayed_text,
-                        "파일이 외부에서 변경되었습니다. 새로고침 후 다시 탐색하세요."
-                    );
-                    let result =
-                        nav.navigate(&absolute, position.line, position.character, kind)?;
-                    anyhow::ensure!(
-                        std::fs::read_to_string(&absolute)? == displayed_text,
-                        "탐색 중 파일이 변경되었습니다. 새로고침 후 다시 탐색하세요."
-                    );
-                    let revisions = result_revisions(&result.locations);
-                    anyhow::Ok((result, revisions))
-                })();
-                output = format!("{}\n{}", nav.server_messages(), nav.stderr());
-                result
-            })();
-            (result, output)
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let (result, output) = task.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                if this.navigation_request != token
-                    || this.current.as_ref() != Some(&root)
-                    || this.selected().map(|p| root.join(p)) != Some(source)
-                {
-                    return;
-                }
-                this.navigating = false;
-                if !this.session().map(|s| s.saved.code).unwrap_or(false)
-                    || this.active_editor().map(|e| e.read(cx).value().to_string())
-                        != Some(expected_text)
-                {
-                    return;
-                }
-                this.observe_feedback();
-                this.analysis_feedback.append(&output);
-                match result {
-                    Ok((result, revisions)) => {
-                        this.error = None;
-                        this.result_revisions = revisions;
-                        this.results_root = Some(root.clone());
-                        this.status = result.status.clone();
-                        if is_definition && result.semantic && result.locations.len() == 1 {
-                            this.results_open = false;
-                            this.open_location(result.locations[0].clone(), window, cx);
-                        } else {
-                            this.show_results(title, result, window, cx);
-                            this.result_anchor = navigation_anchor;
-                        }
-                    }
-                    Err(error) => {
-                        let error = format!("{error:#}");
-                        this.record_analysis_failure(
-                            root.clone(),
-                            retry_path,
-                            retry_kind,
-                            position,
-                            error.clone(),
-                        );
-                        this.error = Some(error);
-                        this.status = "분석을 완료하지 못했습니다. Details에서 확인하세요.".into();
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
+        self.request_language(language_tools::Tool::Navigate(kind), position, window, cx);
     }
 
     fn show_results(
@@ -1815,6 +1707,7 @@ impl Pokarak {
             .map(|location| ResultExcerpt { location })
             .collect();
         self.result_title = title.clone();
+        self.result_semantic = result.semantic;
         self.prepare_result_rows(cx);
         if self.result_surface == result_presentation::Surface::Files
             && let Some(root) = &self.current
@@ -1892,8 +1785,12 @@ impl Pokarak {
         let token = self.navigation_request;
         let expected_query = query.clone();
         let search_root = root.clone();
+        let exclusions =
+            search_options::Exclusions::read(&self.prefs, self.current_project.as_deref());
+        let patterns = exclusions.patterns();
         let task = cx.background_spawn(async move {
-            let locations = pokarak_core::search(&search_root, &query, 300)?;
+            let locations =
+                pokarak_core::search_with_exclusions(&search_root, &query, 300, &patterns)?;
             let revisions = result_revisions(&locations);
             anyhow::Ok((locations, revisions))
         });
@@ -1903,6 +1800,7 @@ impl Pokarak {
                 if this.navigation_request != token
                     || this.current.as_ref() != Some(&root)
                     || this.filter.trim() != expected_query
+                    || !exclusions.is_current(&this.prefs, this.current_project.as_deref())
                 {
                     return;
                 }
@@ -2165,7 +2063,7 @@ impl Pokarak {
                         .label("사용처")
                         .ghost()
                         .small()
-                        .disabled(!code || deleted || dirty || self.navigating)
+                        .disabled(!code || deleted || self.navigating)
                         .tooltip("선택한 심볼의 사용처  ⌥F7")
                         .on_click(cx.listener(|this, _, w, cx| {
                             this.request_navigation(NavigationKind::References, None, w, cx)
@@ -2178,7 +2076,7 @@ impl Pokarak {
                         .label("구현체")
                         .ghost()
                         .small()
-                        .disabled(!code || deleted || dirty || self.navigating)
+                        .disabled(!code || deleted || self.navigating)
                         .on_click(cx.listener(|this, _, w, cx| {
                             this.request_navigation(NavigationKind::Implementation, None, w, cx)
                         })),
@@ -2201,7 +2099,7 @@ impl Pokarak {
                         .on_mouse_up(
                             MouseButton::Left,
                             cx.listener(move |this, event: &MouseUpEvent, window, cx| {
-                                if event.modifiers.platform && !deleted && !dirty {
+                                if event.modifiers.platform && !deleted {
                                     this.request_clicked_definition(
                                         &clicked_editor,
                                         event.position,
@@ -2264,6 +2162,7 @@ impl Pokarak {
                     .child(path.to_string_lossy().to_string()),
             )
             .child(head)
+            .when(code && !deleted, |d| d.child(self.language_buttons(cx)))
             .children(self.inline_blame_controls(cx))
             .when(!code, |reader| {
                 reader.children(diff.and_then(|doc| self.diff_reading_controls(doc, false, cx)))
@@ -2293,7 +2192,13 @@ impl Pokarak {
                         .child("큰 파일의 일부만 표시합니다."),
                 )
             })
-            .child(div().flex_1().min_h_0().overflow_hidden().child(content))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(self.with_language_sidebar(content, cx)),
+            )
             .into_any_element()
     }
 
@@ -2394,6 +2299,7 @@ impl Render for Pokarak {
         self.observe_feedback();
         self.sync_editor_bindings(cx);
         self.sync_editor_options(window, cx);
+        self.sync_language_tools(cx);
         let compact = theme::logical_px(window.viewport_size().width) < 1100.
             && self.prefs.option_bool(
                 self.current_project.as_deref(),
@@ -2464,6 +2370,7 @@ impl Render for Pokarak {
         let body = self.with_terminal_dock(body, window);
         let body = self.with_execution_manager(body, window, cx);
         let root = editor_tools::actions(self, div().id("pokarak"), cx);
+        let root = language_tools::actions(self, root, cx);
         #[cfg(target_os = "macos")]
         let root = root.on_action(cx.listener(|app, _: &OpenWorktreeTerminal, window, cx| {
             app.open_worktree_terminal(window, cx)
@@ -2489,6 +2396,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&OpenGitHistory,w,cx|this.open_git_history(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitWorkflow,w,cx|this.open_git_workflow(w,cx)))
             .on_action(cx.listener(|this,_:&OpenSettings,w,cx|this.open_settings(w,cx)))
+            .on_action(cx.listener(|this,_:&language_manager::ManageLanguages,w,cx|this.open_language_manager(w,cx)))
             .on_action(cx.listener(|this,_:&execution::ManageTasks,w,cx|this.open_tasks(w,cx)))
             .on_action(cx.listener(|this,_:&execution::ManageExtensions,w,cx|this.open_extensions(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitActions,w,cx|this.open_git_actions(w,cx)))
@@ -2531,10 +2439,12 @@ impl Render for Pokarak {
                     .child(Button::new("trust-start").label("신뢰하고 분석 허용").small().on_click(cx.listener(|this,_,_,cx|this.enable_analysis(cx))))
                     .child(Button::new("trust-cancel").label("파일만 보기").ghost().small().on_click(cx.listener(|this,_,_,cx|{this.trust_prompt=false;cx.notify();}))))))
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
+            .children(self.language_bottom_panel(cx))
             .when(self.error.is_some(), |d| d.child(self.render_error_summary(cx)))
             .when(self.analysis_feedback.output_open, |d| d.child(self.render_output(cx)))
             .when(self.results_open && self.result_surface == result_presentation::Surface::Bottom && !self.analysis_feedback.output_open,|d|d.child(div().h(ui_px(240.)).max_h(relative(0.4)).child(self.render_results(cx))))
             .children(self.result_popover(window, cx))
+            .children(self.language_popover(window, cx))
             .child(div().h(ui_px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(palette.rgb(LINE)).bg(palette.rgb(SIDE)).text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
                 .child(div().flex_1().min_w_0().text_ellipsis().child(context))
                 .when(self.current.is_some(), |row| row.child(self.git_sync_button(cx)))

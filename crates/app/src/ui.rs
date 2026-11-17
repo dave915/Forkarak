@@ -5,6 +5,8 @@ mod git_commit;
 mod git_history;
 mod git_workflow;
 mod reader_navigation;
+mod split_diff;
+use split_diff::ReviewDiff;
 use analysis_feedback::AnalysisFeedback;
 
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
@@ -156,7 +158,7 @@ struct Session {
     snapshot: Option<Snapshot>,
     saved: SavedView,
     documents: HashMap<PathBuf, Entity<EditorState>>,
-    diffs: HashMap<PathBuf, DiffDocument>,
+    diffs: HashMap<PathBuf, ReviewDiff>,
     scroll: UniformListScrollHandle,
     history: Vec<ReadingPoint>,
     forward: Vec<ReadingPoint>,
@@ -1192,7 +1194,7 @@ impl Pokarak {
                     Ok((text, diff)) => {
                         let session = this.sessions.get_mut(&root).unwrap();
                         if let Some(diff) = diff {
-                            session.diffs.insert(path.clone(), diff);
+                            session.diffs.insert(path.clone(), diff.into());
                         }
                         let editor = session
                             .documents
@@ -1321,6 +1323,11 @@ impl Pokarak {
             self.pending_history = Some(target.clone());
             self.open_file(target.path, false, None, window, cx);
         }
+    }
+
+    fn set_split_diff(&mut self, split: bool) {
+        self.prefs.split_diff = split;
+        self.prefs.save();
     }
 
     fn toggle_code(&mut self, code: bool, cx: &mut Context<Self>) {
@@ -2610,9 +2617,14 @@ impl Pokarak {
                     .label("변경")
                     .ghost()
                     .small()
-                    .selected(!code)
+                    .selected(!code && !self.prefs.split_diff)
                     .disabled(diff.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_code(false, cx))),
+                    .on_click(cx.listener(|this, _, _, cx| {this.set_split_diff(false); this.toggle_code(false, cx)})),
+            )
+            .child(
+                Button::new("work-split").label("좌우").tooltip("변경 전후를 좌우로 비교").small().ghost()
+                    .selected(!code && self.prefs.split_diff).disabled(diff.is_none_or(|d| d.binary))
+                    .on_click(cx.listener(|app, _, _, cx| {app.set_split_diff(true); app.toggle_code(false, cx)})),
             )
             .child(
                 Button::new("code")
@@ -2687,6 +2699,8 @@ impl Pokarak {
                     })
                     .into_any_element()
             }
+        } else if let Some(diff) = diff.filter(|_| self.prefs.split_diff) {
+            diff.split(cx)
         } else if let Some(diff) = diff {
             let widest = diff
                 .lines

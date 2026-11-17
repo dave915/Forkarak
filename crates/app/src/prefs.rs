@@ -91,6 +91,7 @@ pub struct SavedView {
     pub tabs: Vec<PathBuf>,
     pub code: bool,
     pub all_files: bool,
+    pub collapsed_folders: HashSet<PathBuf>,
     pub graph_detail_collapsed: bool,
     pub graph_branch: Option<String>,
     pub collapsed_graph_sections: HashSet<String>,

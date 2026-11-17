@@ -3,6 +3,7 @@ mod cli_control;
 mod code_edit;
 mod file_icons;
 mod file_inspector;
+mod file_tree;
 mod git_actions;
 mod git_commit;
 mod git_history;
@@ -18,6 +19,7 @@ mod toolbar;
 mod update_workspace;
 mod updates;
 use analysis_feedback::AnalysisFeedback;
+use file_tree::FileRow;
 use split_diff::ReviewDiff;
 
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
@@ -209,7 +211,6 @@ struct Session {
     scroll: UniformListScrollHandle,
     history: Vec<ReadingPoint>,
     forward: Vec<ReadingPoint>,
-    collapsed: HashSet<PathBuf>,
     restoring: bool,
 }
 impl Session {
@@ -227,19 +228,9 @@ impl Session {
             scroll: UniformListScrollHandle::new(),
             history: vec![],
             forward: vec![],
-            collapsed: HashSet::new(),
             restoring,
         }
     }
-}
-
-#[derive(Clone)]
-struct FileRow {
-    path: PathBuf,
-    label: String,
-    depth: usize,
-    directory: bool,
-    change: Option<ChangedFile>,
 }
 
 pub struct Pokarak {
@@ -284,6 +275,7 @@ pub struct Pokarak {
     result_scroll: UniformListScrollHandle,
     file_scroll: UniformListScrollHandle,
     file_cursor: usize,
+    file_tree_focus: FocusHandle,
     result_cursor: usize,
     results_focus: FocusHandle,
     navigation: Option<Arc<Mutex<Navigator>>>,
@@ -351,13 +343,8 @@ impl Pokarak {
     }
     fn activate_row(&mut self, row: FileRow, window: &mut Window, cx: &mut Context<Self>) {
         if row.directory {
-            if let Some(root) = &self.current {
-                let collapsed = &mut self.sessions.get_mut(root).unwrap().collapsed;
-                if !collapsed.remove(&row.path) {
-                    collapsed.insert(row.path);
-                }
-            }
-            cx.notify();
+            self.toggle_folder(&row.path, cx);
+            self.file_tree_focus.focus(window, cx);
         } else {
             self.open_file(row.path, true, None, window, cx);
         }
@@ -631,6 +618,7 @@ impl Pokarak {
             result_scroll: UniformListScrollHandle::new(),
             file_scroll: UniformListScrollHandle::new(),
             file_cursor: 0,
+            file_tree_focus: cx.focus_handle(),
             result_cursor: 0,
             results_focus: cx.focus_handle(),
             navigation: None,
@@ -869,6 +857,7 @@ impl Pokarak {
                         this.change_count = None;
                         this.graph_fingerprint = None;
                         this.current = Some(root.clone());
+                        this.file_cursor = 0;
                         let project_root = this
                             .inventory
                             .iter()
@@ -1463,7 +1452,7 @@ impl Pokarak {
                             .scroll_to_item_strict(diff_row, ScrollStrategy::Top);
                         let code = session.saved.code;
                         this.bind_code_editor(&root, &path, &editor, cx);
-                        if !code {
+                        if !code && !this.file_tree_focus.is_focused(window) {
                             this.focus.focus(window, cx);
                         }
                         this.status = if this.navigation.is_some() {
@@ -1928,79 +1917,6 @@ impl Pokarak {
         cx.notify();
     }
 
-    fn file_rows(&self) -> Vec<FileRow> {
-        let Some(session) = self.session() else {
-            return vec![];
-        };
-        let Some(snapshot) = &session.snapshot else {
-            return vec![];
-        };
-        let query = if self.text_search {
-            String::new()
-        } else {
-            self.filter.to_lowercase()
-        };
-        let paths = if session.saved.all_files {
-            snapshot.files.clone()
-        } else {
-            snapshot.changes.iter().map(|f| f.path.clone()).collect()
-        };
-        let mut rows = vec![];
-        let mut folders = HashSet::new();
-        for path in paths {
-            if !query.is_empty() && !path.to_string_lossy().to_lowercase().contains(&query) {
-                continue;
-            }
-            if session.saved.all_files && query.is_empty() {
-                let components: Vec<_> = path.components().collect();
-                let mut dir = PathBuf::new();
-                let mut hidden = false;
-                for (depth, part) in components
-                    .iter()
-                    .take(components.len().saturating_sub(1))
-                    .enumerate()
-                {
-                    dir.push(part.as_os_str());
-                    if folders.insert(dir.clone()) && !hidden {
-                        rows.push(FileRow {
-                            path: dir.clone(),
-                            label: part.as_os_str().to_string_lossy().into(),
-                            depth,
-                            directory: true,
-                            change: None,
-                        });
-                    }
-                    if session.collapsed.contains(&dir) {
-                        hidden = true;
-                    }
-                }
-                if hidden {
-                    continue;
-                }
-            }
-            let change = snapshot.changes.iter().find(|f| f.path == path).cloned();
-            rows.push(FileRow {
-                label: if session.saved.all_files && query.is_empty() {
-                    path.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into()
-                } else {
-                    path.to_string_lossy().into()
-                },
-                depth: if session.saved.all_files && query.is_empty() {
-                    path.components().count().saturating_sub(1)
-                } else {
-                    0
-                },
-                path,
-                directory: false,
-                change,
-            });
-        }
-        rows
-    }
-
     fn render_sidebar_header(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .h(ui_px(44.))
@@ -2359,211 +2275,6 @@ impl Pokarak {
         }
         panel = panel.child(list);
         panel.into_any_element()
-    }
-
-    fn render_files(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let palette = Palette::new(cx);
-        let all = self.session().map(|s| s.saved.all_files).unwrap_or(false);
-        let selected = self.selected();
-        let keyboard_index = if self.search_input.focus_handle(cx).is_focused(window) {
-            Some(self.file_cursor)
-        } else {
-            None
-        };
-        let rows = Arc::new(self.file_rows());
-        let count = rows.iter().filter(|r| !r.directory).count();
-        let weak = cx.entity().downgrade();
-        div()
-            .size_full()
-            .v_flex()
-            .bg(palette.rgb(BG))
-            .overflow_hidden()
-            .child(
-                div()
-                    .h(ui_px(44.))
-                    .flex_none()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        Button::new("changes")
-                            .label("변경 파일")
-                            .ghost()
-                            .small()
-                            .selected(!all)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(root) = &this.current {
-                                    this.sessions.get_mut(root).unwrap().saved.all_files = false;
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("all-files")
-                            .label("전체 파일")
-                            .ghost()
-                            .small()
-                            .selected(all)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(root) = &this.current {
-                                    this.sessions.get_mut(root).unwrap().saved.all_files = true;
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(ui_text(11.))
-                            .text_color(palette.rgb(MUTED))
-                            .child(count.to_string()),
-                    ),
-            )
-            .child(
-                div()
-                    .px_2()
-                    .pb_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        Input::new(&self.search_input)
-                            .small()
-                            .prefix(IconName::Search),
-                    )
-                    .child(
-                        Button::new("text-search")
-                            .icon(IconName::TextSearch)
-                            .ghost()
-                            .small()
-                            .tooltip("본문 검색  ⌘⇧F")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.focus_search(true, window, cx)
-                            })),
-                    ),
-            )
-            .child(if count == 0 {
-                div()
-                    .p_4()
-                    .text_color(palette.rgb(MUTED))
-                    .child(if self.filter.is_empty() {
-                        "변경된 파일이 없습니다. 전체 파일에서 코드를 읽을 수 있습니다."
-                    } else {
-                        "일치하는 파일이 없습니다."
-                    })
-                    .into_any_element()
-            } else {
-                uniform_list("files", rows.len(), move |range, _, cx| {
-                    range
-                        .map(|ix| {
-                            let row = rows[ix].clone();
-                            let target = weak.clone();
-                            let path = row.path.clone();
-                            let a11y_target = weak.clone();
-                            let a11y_path = path.clone();
-                            let directory = row.directory;
-                            let selected = if let Some(index) = keyboard_index {
-                                ix == index
-                            } else {
-                                selected.as_ref() == Some(&path)
-                            };
-                            let status = row.change.as_ref().map(|c| file_status(&c.status));
-                            div()
-                                .id(("file", ix))
-                                .w_full()
-                                .role(accesskit::Role::Button)
-                                .aria_label(row.path.to_string_lossy().to_string())
-                                .on_a11y_action(accesskit::Action::Click, move |_, window, cx| {
-                                    let _ = a11y_target.update(cx, |this, cx| {
-                                        if directory {
-                                            if let Some(root) = &this.current {
-                                                let collapsed = &mut this
-                                                    .sessions
-                                                    .get_mut(root)
-                                                    .unwrap()
-                                                    .collapsed;
-                                                if !collapsed.remove(&a11y_path) {
-                                                    collapsed.insert(a11y_path.clone());
-                                                }
-                                            }
-                                            cx.notify();
-                                        } else {
-                                            this.open_file(
-                                                a11y_path.clone(),
-                                                true,
-                                                None,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    });
-                                })
-                                .h(ui_px(29.))
-                                .px_2()
-                                .pl(ui_px(10. + row.depth as f32 * 13.))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .cursor_pointer()
-                                .bg(if selected {
-                                    palette.selected()
-                                } else {
-                                    palette.rgb(BG)
-                                })
-                                .hover(|s| {
-                                    s.bg(if selected {
-                                        palette.selected_hover()
-                                    } else {
-                                        palette.hover()
-                                    })
-                                })
-                                .child(if row.directory {
-                                    Icon::new(IconName::Folder)
-                                        .size(ui_px(14.))
-                                        .text_color(palette.rgb(MUTED))
-                                        .into_any_element()
-                                } else {
-                                    file_icons::icon_for_path(&row.path, cx).into_any_element()
-                                })
-                                .child(div().flex_1().min_w_0().text_ellipsis().child(row.label))
-                                .when_some(status, |d, (label, color)| {
-                                    d.child(
-                                        div()
-                                            .text_size(ui_text(10.))
-                                            .text_color(palette.rgb(color))
-                                            .child(label),
-                                    )
-                                })
-                                .on_click(move |_, window, cx| {
-                                    let _ = target.update(cx, |this, cx| {
-                                        if row.directory {
-                                            if let Some(root) = &this.current {
-                                                let dirs = &mut this
-                                                    .sessions
-                                                    .get_mut(root)
-                                                    .unwrap()
-                                                    .collapsed;
-                                                if !dirs.remove(&path) {
-                                                    dirs.insert(path.clone());
-                                                }
-                                            }
-                                            cx.notify();
-                                        } else {
-                                            this.open_file(path.clone(), true, None, window, cx);
-                                        }
-                                    });
-                                })
-                                .into_any_element()
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .track_scroll(&self.file_scroll)
-                .h_full()
-                .flex_1()
-                .into_any_element()
-            })
-            .into_any_element()
     }
 
     fn render_comparison(&self, cx: &mut Context<Self>) -> AnyElement {

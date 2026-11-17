@@ -1,0 +1,102 @@
+{
+  "captured_at_utc": "2026-11-17T17:31:23.010589+00:00",
+  "source": {
+    "repo": "/private/tmp/forkarak-rc1/editor-comparison/demo/order-service",
+    "file": "src/order-service.ts",
+    "source_sha256": "5cfddd14ebb26f77b26e9fccc6205f002590bb5a04107d47d6f27c6ed7fac34d",
+    "authored": true,
+    "remotes": []
+  },
+  "forkarak_build": {
+    "revision": "c6509b7",
+    "binary_source": "/Users/taehyun/Desktop/pokarak/dist/Forkarak.app/Contents/MacOS/forkarak",
+    "binary_sha256": "53dd58e97da9d5ceb69319b61686d18c2e0e89f414f016ee048880246561f66d",
+    "app": "/tmp/forkarak-rc1/editor-comparison/apps/Forkarak Editor Comparison.app",
+    "resources_copied_from_final_package": true,
+    "unique_bundle_id": "dev.forkarak.qa.editor-comparison.t11b",
+    "version": "0.4.0",
+    "note": "Temporary unique app, not a new published release."
+  },
+  "official_apps": {
+    "vscode": {
+      "app": "/tmp/forkarak-rc1/editor-comparison/apps/Visual Studio Code.app",
+      "version": "1.146.0",
+      "sha256": "6e8d27ee0c5a8f2aa3c43e373407eecd11c270c3fe7f46100ef682aac14bb648",
+      "source": "https://code.visualstudio.com/Download"
+    },
+    "zed": {
+      "app": "/tmp/forkarak-rc1/editor-comparison/apps/Zed.app",
+      "version": "1.28.1",
+      "sha256": "0ca1a4f1e89e3825f49af26fa31afcf0cc3e50da1f4ba9889f0735f5f0beffe4",
+      "source": "https://zed.dev/download"
+    }
+  },
+  "frontmost_before": [
+    {
+      "active": true,
+      "bundle_id": "com.teamviewer.TeamViewer",
+      "name": "TeamViewer",
+      "pid": 8474,
+      "running": true
+    }
+  ],
+  "frontmost_after": [
+    {
+      "active": true,
+      "bundle_id": "com.teamviewer.TeamViewer",
+      "name": "TeamViewer",
+      "pid": 8474,
+      "running": true
+    }
+  ],
+  "images": {
+    "vscode": {
+      "path": "vscode-native.png",
+      "bounds": {
+        "height": 900,
+        "width": 1440,
+        "x": 560,
+        "y": 270
+      },
+      "sha256": "e41197c5607bd57112a92579784779dbf1b5e8ed5e81ed56f2c444b71c3b9231"
+    },
+    "zed": {
+      "path": "zed-native.png",
+      "bounds": {
+        "height": 1096,
+        "width": 1536,
+        "x": 537,
+        "y": 198
+      },
+      "sha256": "29ed5c13810caf86b17d0c5bac98c3f8d03ba09df06ad4a184d878f287932bb8"
+    },
+    "forkarak": {
+      "path": "forkarak-native.png",
+      "bounds": {
+        "height": 900,
+        "width": 1440,
+        "x": 560,
+        "y": 240
+      },
+      "sha256": "5eb5120bb426de3317726884ff9a708489c54d9609177bf10db553a8c14f6b96"
+    }
+  },
+  "conditions": [
+    "Actual native screenshots via cua-driver; no synthetic UI or image generation.",
+    "One authored clean Git fixture, same src/order-service.ts at top of file, no remote.",
+    "Fresh app profiles; default theme and font retained in each app.",
+    "Forkarak: directory startup Git screen captured separately; comparison explicitly chose Code, All files, then source. Both default panels retained; file remained read-only.",
+    "VS Code: welcome closed without login; default Chat secondary sidebar closed for requested standard editor layout. CUA-induced screen-reader prompt answered No. Restricted Mode retained.",
+    "Zed: Restricted Mode retained; official workspace: use classic layout executed. System/default light appearance retained. No sign-in/provider/plugin setup.",
+    "All captured with terminal/AI panels closed; no language analysis/import granted.",
+    "Forkarak and VS Code actual windows1440x900 logical. Zed actual1536x1096 logical. No resizing/fullscreen/activation/mouse warp used; unequal viewports prevent precise area-percentage claims.",
+    "Composite only scales/pads real full-window captures and adds captions; originals retained.",
+    "Optional Forkarak sidebar-hidden capture is a user layout change after the default comparison; not the default."
+  ],
+  "official_docs": [
+    "https://code.visualstudio.com/docs/configure/command-line",
+    "https://zed.dev/docs/reference/cli",
+    "https://zed.dev/docs/"
+  ],
+  "fixture_clean_after": true
+}

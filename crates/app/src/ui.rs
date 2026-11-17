@@ -5,6 +5,7 @@ mod git_actions;
 mod git_commit;
 mod git_history;
 mod git_workflow;
+mod patch;
 mod reader_navigation;
 mod split_diff;
 mod toolbar;
@@ -383,14 +384,14 @@ impl Pokarak {
                                     .child(
                                         div()
                                             .px_2()
-                                            .bg(palette.rgb(0x3c2a30))
+                                            .bg(palette.rgb(patch::DELETE_BG))
                                             .text_color(palette.rgb(RED))
                                             .child("− val count = 1"),
                                     )
                                     .child(
                                         div()
                                             .px_2()
-                                            .bg(palette.rgb(0x24382f))
+                                            .bg(palette.rgb(patch::ADD_BG))
                                             .text_color(palette.rgb(GREEN))
                                             .child("+ val count = 2"),
                                     ),
@@ -2881,8 +2882,8 @@ impl Pokarak {
                     .map(|ix| {
                         let line = lines[ix].clone();
                         let (background, color, sign) = match line.kind {
-                            DiffKind::Addition => (0x24382f, GREEN, "+"),
-                            DiffKind::Deletion => (0x3c2a30, RED, "−"),
+                            DiffKind::Addition => (patch::ADD_BG, GREEN, "+"),
+                            DiffKind::Deletion => (patch::DELETE_BG, RED, "−"),
                             DiffKind::Header => (0x283744, BLUE, ""),
                             DiffKind::Context => (BG, TEXT, ""),
                         };

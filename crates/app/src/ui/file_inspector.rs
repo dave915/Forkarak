@@ -145,13 +145,7 @@ impl Inspector {
                 }
                 this.page = match result {
                     Ok((patch, label)) => {
-                        let editor = cx.new(|cx| {
-                            EditorState::new(window, cx)
-                                .language("diff")
-                                .soft_wrap(false)
-                                .default_value(patch)
-                        });
-                        editor.update(cx, |e, cx| e.set_readonly(true, cx));
+                        let editor = patch::editor(patch, false, window, cx);
                         Page::Patch(editor, label)
                     }
                     Err(e) => Page::Error(format!("{e:#}")),

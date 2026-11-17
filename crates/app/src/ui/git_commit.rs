@@ -139,7 +139,12 @@ impl Pokarak {
         window.close_all_dialogs(cx);
         self.commit_ui.close();
         if !self.commit_ui.messages.contains_key(&root) {
-            let editor = commit_editor("", false, window, cx);
+            let editor = cx.new(|cx| {
+                EditorState::new(window, cx)
+                    .language("plaintext")
+                    .line_number(false)
+                    .soft_wrap(true)
+            });
             self.commit_ui.messages.insert(root.clone(), editor);
         }
         self.commit_ui.surface = surface;
@@ -261,7 +266,7 @@ impl Pokarak {
                 match result {
                     Ok(preview) => app.commit_ui.partial = Some(Arc::new(preview)),
                     Err(text) => {
-                        app.commit_ui.preview = Some(commit_editor(&text, true, window, cx))
+                        app.commit_ui.preview = Some(patch::editor(text, false, window, cx))
                     }
                 }
                 cx.notify();
@@ -490,23 +495,6 @@ fn commit_button(
 fn commit_note(text: impl Into<String>) -> Div {
     div().text_size(px(12.)).child(text.into())
 }
-fn commit_editor(
-    text: &str,
-    readonly: bool,
-    window: &mut Window,
-    cx: &mut Context<Pokarak>,
-) -> Entity<EditorState> {
-    let editor = cx.new(|cx| {
-        EditorState::new(window, cx)
-            .language(if readonly { "diff" } else { "plaintext" })
-            .line_number(false)
-            .soft_wrap(!readonly)
-            .default_value(text.to_owned())
-    });
-    editor.update(cx, |editor, cx| editor.set_readonly(readonly, cx));
-    editor
-}
-
 #[cfg(test)]
 mod tests {
     use super::{ChangedFile, CommitUi, Side, Surface, preview_is_current};

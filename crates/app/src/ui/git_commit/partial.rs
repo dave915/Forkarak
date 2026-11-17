@@ -123,6 +123,12 @@ impl Pokarak {
                         },
                     )
                     .ghost()
+                    .when(line.kind == DiffKind::Addition, |row| {
+                        row.bg(palette.rgb(patch::ADD_BG))
+                    })
+                    .when(line.kind == DiffKind::Deletion, |row| {
+                        row.bg(palette.rgb(patch::DELETE_BG))
+                    })
                     .selected(checked)
                     .h(theme::code_row_height(font_size))
                     .min_w_full()

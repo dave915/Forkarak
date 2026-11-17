@@ -259,7 +259,7 @@ impl Pokarak {
                 ""
             }
         );
-        let preview = workflow_editor(text, Path::new("stash.diff"), true, window, cx);
+        let preview = patch::editor(text, true, window, cx);
         let path =
             cx.new(|cx| InputState::new(window, cx).placeholder("내용을 볼 저장소 상대 파일 경로"));
         let weak = cx.entity().downgrade();
@@ -601,6 +601,4 @@ fn editor_view(editor: &Entity<EditorState>, readonly: bool, height: f32) -> imp
         .readonly(readonly)
         .bordered(true)
         .h(px(height))
-        .font_family("JetBrains Mono")
-        .text_size(px(12.))
 }

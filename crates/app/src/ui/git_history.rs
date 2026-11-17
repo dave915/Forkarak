@@ -276,24 +276,19 @@ impl Pokarak {
         let Some(doc) = &self.git_history.document else {
             return;
         };
-        let text = if self.git_history.code && !doc.binary {
-            doc.new_text.clone()
+        let editor = if self.git_history.code && !doc.binary {
+            cx.new(|cx| {
+                let mut editor = EditorState::new(window, cx)
+                    .language(language(&doc.path))
+                    .line_number(true)
+                    .soft_wrap(false)
+                    .default_value(doc.new_text.clone());
+                editor.set_readonly(true, cx);
+                editor
+            })
         } else {
-            doc.patch.clone()
+            patch::editor(doc.patch.clone(), true, window, cx)
         };
-        let lang = if self.git_history.code {
-            language(&doc.path)
-        } else {
-            "diff"
-        };
-        let editor = cx.new(|cx| {
-            EditorState::new(window, cx)
-                .language(lang)
-                .line_number(true)
-                .soft_wrap(false)
-                .default_value(text)
-        });
-        editor.update(cx, |editor, cx| editor.set_readonly(true, cx));
         self.git_history.editor = Some(editor);
         cx.notify();
     }

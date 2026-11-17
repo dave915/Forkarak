@@ -240,12 +240,17 @@ impl SplitDiff {
 
 fn cell(line: Option<&DiffLine>, left: bool, offset: f32, gutter: Pixels, palette: Palette) -> Div {
     let (bg, ink) = match line.map(|l| &l.kind) {
-        Some(DiffKind::Deletion) => (0x3c2a30, RED),
-        Some(DiffKind::Addition) => (0x24382f, GREEN),
+        Some(DiffKind::Deletion) => (patch::DELETE_BG, RED),
+        Some(DiffKind::Addition) => (patch::ADD_BG, GREEN),
         None => (SIDE, MUTED),
         _ => (BG, TEXT),
     };
     let number = line.and_then(|l| if left { l.old_line } else { l.new_line });
+    let sign = match line.map(|l| &l.kind) {
+        Some(DiffKind::Deletion) => " −",
+        Some(DiffKind::Addition) => " +",
+        _ => "  ",
+    };
     div()
         .min_w_0()
         .h_full()
@@ -260,7 +265,8 @@ fn cell(line: Option<&DiffLine>, left: bool, offset: f32, gutter: Pixels, palett
                 .pr_2()
                 .text_right()
                 .text_color(palette.rgb(MUTED))
-                .child(number.map(|n| n.to_string()).unwrap_or_default()),
+                .whitespace_nowrap()
+                .child(number.map(|n| format!("{n}{sign}")).unwrap_or_default()),
         )
         .child(
             div().flex_1().min_w_0().overflow_hidden().child(
@@ -294,7 +300,7 @@ impl Render for SplitDiff {
             .ok()
             .filter(|w| *w > 0.)
             .unwrap_or(f32::from(font_size) * 0.61);
-        let gutter = self.number_digits.max(4) as f32 * advance + 10.;
+        let gutter = (self.number_digits + 2).max(4) as f32 * advance + 10.;
         let min_pane = gutter + 7. * advance;
         let row_height = theme::code_row_height(font_size);
         let ratio = split_ratio(self.preferred_ratio(cx), self.panel_width, min_pane);

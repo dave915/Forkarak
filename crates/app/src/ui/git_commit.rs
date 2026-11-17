@@ -241,17 +241,16 @@ impl Pokarak {
             match partial_index::preview(&snapshot, &path, side) {
                 Ok(preview) => Ok(partial::PartialDiff::new(&path, preview)),
                 Err(error) => {
-                    let patch = if side == Side::Staged {
-                        index::diff(&snapshot, &path)
-                            .ok()
-                            .map(|doc| doc.patch)
-                            .unwrap_or_default()
+                    let mut message = format!("부분 선택을 사용할 수 없습니다. {error:#}\n");
+                    let source = if side == Side::Staged {
+                        index::diff(&snapshot, &path).ok().map(|doc| {
+                            message.push_str(&doc.patch);
+                            Arc::new(split_diff::DiffSyntax::new(&doc))
+                        })
                     } else {
-                        String::new()
+                        None
                     };
-                    Err(format!(
-                        "부분 선택을 사용할 수 없습니다. {error:#}\n{patch}"
-                    ))
+                    Err(patch::Prepared::new(message, source))
                 }
             }
         });
@@ -265,8 +264,8 @@ impl Pokarak {
                 }
                 match result {
                     Ok(preview) => app.commit_ui.partial = Some(preview),
-                    Err(text) => {
-                        app.commit_ui.preview = Some(patch::editor(text, false, window, cx))
+                    Err(patch) => {
+                        app.commit_ui.preview = Some(patch::editor(patch, false, window, cx))
                     }
                 }
                 cx.notify();

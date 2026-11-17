@@ -337,7 +337,12 @@ impl Pokarak {
                 editor
             })
         } else {
-            patch::editor(doc.patch.clone(), true, window, cx)
+            patch::editor(
+                patch::Prepared::new(doc.patch.clone(), Some(doc.syntax.clone())),
+                true,
+                window,
+                cx,
+            )
         };
         self.git_history.editor = Some(editor);
         cx.notify();

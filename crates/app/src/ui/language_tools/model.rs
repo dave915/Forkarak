@@ -25,7 +25,7 @@ impl Identity {
     }
 }
 
-pub(super) fn configs(
+pub(in crate::ui) fn configs(
     value: Option<&serde_json::Value>,
 ) -> Result<Vec<pokarak_navigation::ServerConfig>, String> {
     let Some(value) = value else {

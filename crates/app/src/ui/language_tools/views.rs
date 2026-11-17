@@ -680,6 +680,13 @@ impl Pokarak {
     }
     pub(in crate::ui) fn language_retry(&self, cx: &mut Context<Self>) -> Option<Button> {
         let tool = self.language_tools.retry.clone()?;
+        if !self
+            .error
+            .as_deref()?
+            .starts_with(&format!("{}:", tool.title()))
+        {
+            return None;
+        }
         Some(
             Button::new("retry-language-tool")
                 .label("분석 다시 시도")

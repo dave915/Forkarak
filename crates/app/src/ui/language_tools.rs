@@ -7,8 +7,8 @@ mod views;
 use super::*;
 use code_edit::FileKey;
 use gpui_kit::component::input::{GutterDecoration, GutterDecorationCollection};
-pub(super) use model::Identity as RequestIdentity;
 use model::*;
+pub(super) use model::{Identity as RequestIdentity, configs as formatter_configs};
 use pokarak_navigation::{
     CompletionItem, Diagnostic, DocumentSnapshot, DocumentSymbol, FormattingOptions, HoverResult,
     Position as LspPosition, SignatureHelp, TextEdit, TextRange,
@@ -117,9 +117,12 @@ pub(super) fn actions(
 
 impl Pokarak {
     fn language_settings(&self) -> serde_json::Value {
-        serde_json::Value::Array(
+        let preferences = serde_json::Value::Array(
             [
                 "language.servers",
+                "language.enabled",
+                "extensions.enabled",
+                "extensions.installed",
                 "language.completion",
                 "language.diagnostics",
                 "language.unsaved",
@@ -136,7 +139,12 @@ impl Pokarak {
                     .unwrap_or(serde_json::Value::Null)
             })
             .collect(),
-        )
+        );
+        serde_json::json!([
+            preferences,
+            self.registered_extension_language_servers(),
+            self.registered_extension_formatters()
+        ])
     }
     fn language_trusted(&self) -> bool {
         self.current
@@ -344,8 +352,7 @@ impl Pokarak {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Result<Identity, String> {
-        self.sync_language_tools(cx);
-        self.language_identity(cx)
+        self.language_request_identity(cx)
     }
     pub(super) fn accepts_external_format(&mut self, identity: &Identity, cx: &App) -> bool {
         self.accepts_language(identity, true, cx)
@@ -361,10 +368,43 @@ impl Pokarak {
                 .option(self.current_project.as_deref(), "language.servers"),
         )?;
         let mut all = pokarak_navigation::default_configs();
-        for config in custom {
-            all.retain(|old| old.language != config.language);
-            all.push(config);
+        // Discovery is read-only. Only the explicitly requested Navigator starts
+        // one enabled extension tool; ordinary file viewing does not start it.
+        for registration in self.registered_extension_language_servers() {
+            all.push(pokarak_navigation::ServerConfig {
+                language: registration.language,
+                program: registration.executable.to_string_lossy().into(),
+                args: registration.args,
+            });
         }
+        // Preserve the previous user configuration, then apply project/app UI
+        // overrides last. Navigator receives None to avoid reapplying the file.
+        if let Some(path) = pokarak_navigation::NavigatorOptions::default().config_file {
+            match std::fs::read_to_string(&path) {
+                Ok(text) => {
+                    let value: serde_json::Value = serde_json::from_str(&text)
+                        .map_err(|e| format!("언어 서버 설정 {}: {e}", path.display()))?;
+                    if let Some(servers) = value.get("servers") {
+                        all.extend(
+                            serde_json::from_value::<Vec<pokarak_navigation::ServerConfig>>(
+                                servers.clone(),
+                            )
+                            .map_err(|e| format!("언어 서버 설정 {}: {e}", path.display()))?,
+                        );
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("언어 서버 설정 {}: {error}", path.display())),
+            }
+        }
+        all.extend(custom);
+        all.retain(|config| {
+            self.prefs
+                .option(self.current_project.as_deref(), "language.enabled")
+                .and_then(|v| v.get(&config.language))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true)
+        });
         Ok(all)
     }
     pub(super) fn request_language(
@@ -374,7 +414,8 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if window.has_active_dialog(cx) || self.git_is_busy() || self.active_worktree_has_git_job() {
+        if window.has_active_dialog(cx) || self.git_is_busy() || self.active_worktree_has_git_job()
+        {
             return;
         }
         self.sync_language_tools(cx);
@@ -399,9 +440,24 @@ impl Pokarak {
             return;
         }
         let (key, _) = self.language_target(cx).unwrap();
+        let language =
+            pokarak_navigation::language_for_path(&key.path).unwrap_or_else(|| language(&key.path));
+        let family = pokarak_navigation::language_family(language);
+        if self
+            .prefs
+            .option(project, "language.enabled")
+            .and_then(|v| v.get(language).or_else(|| v.get(family)))
+            .and_then(|v| v.as_bool())
+            == Some(false)
+        {
+            self.status =
+                format!("{language} 언어 지원이 꺼져 있습니다. 언어 도구 관리에서 켜세요.");
+            cx.notify();
+            return;
+        }
         if !matches!(tool, Tool::Format { .. })
             && !self.prefs.option_bool(project, "language.unsaved", true)
-            && self.code_edits.dirty(&key.root, &key.path)
+            && !self.code_edits.analysis_drafts(&key.root).is_empty()
         {
             self.status="미저장 코드 분석이 꺼져 있습니다. 저장하거나 언어 분석 설정에서 허용하세요. 디스크 코드로 대신 분석하지 않습니다.".into();
             cx.notify();
@@ -535,7 +591,9 @@ impl Pokarak {
                 }
                 a.language_tools.pending = None;
                 a.navigating = false;
-                if a.navigation_request != navigation_token || !a.accepts_language(&identity, true, cx) {
+                if a.navigation_request != navigation_token
+                    || !a.accepts_language(&identity, true, cx)
+                {
                     a.status =
                         "선택 또는 소스가 변경되어 오래된 분석 결과를 적용하지 않았습니다.".into();
                     cx.notify();

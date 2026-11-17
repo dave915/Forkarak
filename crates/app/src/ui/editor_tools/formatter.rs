@@ -133,6 +133,41 @@ fn run_controlled(
     }
     String::from_utf8(output).map_err(|_| "포맷터 출력이 UTF-8이 아닙니다.".into())
 }
+fn resolve_formatter(
+    value: Option<&serde_json::Value>,
+    path: &Path,
+    registrations: Vec<crate::extension_host::ToolRegistration>,
+) -> Result<Option<Formatter>, String> {
+    let language = pokarak_navigation::language_for_path(path).unwrap_or_else(|| language(path));
+    let family = pokarak_navigation::language_family(language);
+    let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let configured = language_tools::formatter_configs(value)?;
+    if let Some(config) = configured
+        .iter()
+        .rev()
+        .find(|c| c.language == language || c.language == extension)
+        .or_else(|| configured.iter().rev().find(|c| c.language == family))
+    {
+        return Ok(Some(Formatter {
+            path: config.program.clone(),
+            args: config.args.clone(),
+        }));
+    }
+    Ok(registrations
+        .into_iter()
+        .rev()
+        .find(|r| {
+            r.language == language
+                || r.language == family
+                || r.file_extensions
+                    .iter()
+                    .any(|e| e.trim_start_matches('.') == extension)
+        })
+        .map(|r| Formatter {
+            path: r.executable.to_string_lossy().into(),
+            args: r.args,
+        }))
+}
 impl Pokarak {
     pub(in crate::ui) fn format_code_file(
         &mut self,
@@ -168,29 +203,34 @@ impl Pokarak {
             cx.notify();
             return;
         }
-        let language = language(&path);
-        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        let configured = self
+        let language =
+            pokarak_navigation::language_for_path(&path).unwrap_or_else(|| language(&path));
+        if self
             .prefs
-            .option(project, "formatters.config")
-            .and_then(|v| v.get(language).or_else(|| v.get(extension)));
-        let config = configured.and_then(|v| {
-            let path = v.get("path")?.as_str()?.to_owned();
-            if path.trim().is_empty() {
-                return None;
+            .option(project, "language.enabled")
+            .and_then(|v| {
+                v.get(language)
+                    .or_else(|| v.get(pokarak_navigation::language_family(language)))
+            })
+            .and_then(|v| v.as_bool())
+            == Some(false)
+        {
+            self.status = format!("{language} 언어 지원이 꺼져 있습니다.");
+            cx.notify();
+            return;
+        }
+        let config = match resolve_formatter(
+            self.prefs.option(project, "formatters.config"),
+            &path,
+            self.registered_extension_formatters(),
+        ) {
+            Ok(config) => config,
+            Err(error) => {
+                self.error = Some(error);
+                cx.notify();
+                return;
             }
-            let args = v
-                .get("args")
-                .and_then(|v| v.as_array())
-                .map(|values| {
-                    values
-                        .iter()
-                        .map(|v| v.as_str().map(str::to_owned))
-                        .collect::<Option<Vec<_>>>()
-                })
-                .unwrap_or(Some(vec![]))?;
-            Some(Formatter { path, args })
-        });
+        };
         let Some(config) = config else {
             self.request_language(
                 language_tools::Tool::Format { save_after, commit },
@@ -271,6 +311,72 @@ mod tests {
     use super::{Formatter, run, run_with_timeout};
     use std::path::Path;
     use std::time::{Duration, Instant};
+    #[test]
+    fn invalidated_snapshot_cancels_a_running_external_formatter() {
+        let root = tempfile::tempdir().unwrap();
+        let source = pokarak_navigation::DocumentSnapshot::new(
+            root.path().canonicalize().unwrap(),
+            "x.ts".into(),
+            "draft".into(),
+            1,
+        )
+        .unwrap();
+        let cancel = source.clone();
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(35));
+            cancel.invalidate();
+        });
+        let started = Instant::now();
+        let result = super::run_controlled(
+            Formatter {
+                path: "/bin/sleep".into(),
+                args: vec!["30".into()],
+            },
+            root.path(),
+            Path::new("x.ts"),
+            "draft",
+            Duration::from_secs(15),
+            Some(source),
+        );
+        thread.join().unwrap();
+        assert!(result.unwrap_err().contains("취소"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    fn configured_formatter_overrides_enabled_extension_and_family_handles_react() {
+        let extension = crate::extension_host::ToolRegistration {
+            extension_id: "fixture".into(),
+            language: "typescript".into(),
+            executable: "/tmp/extension formatter".into(),
+            args: vec!["--stdin".into()],
+            file_extensions: vec!["tsx".into()],
+        };
+        let config = serde_json::json!({"typescript":{"path":"/tmp/custom formatter","args":["{path}","$(literal)"]}});
+        let selected = super::resolve_formatter(
+            Some(&config),
+            Path::new("src/Component.tsx"),
+            vec![extension.clone()],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(selected.path, "/tmp/custom formatter");
+        assert_eq!(selected.args[1], "$(literal)");
+        assert_eq!(
+            super::resolve_formatter(None, Path::new("src/Component.tsx"), vec![extension])
+                .unwrap()
+                .unwrap()
+                .path,
+            "/tmp/extension formatter"
+        );
+        assert!(
+            super::resolve_formatter(
+                Some(&serde_json::json!({"rust":{"path":"rustfmt","args":[8]}})),
+                Path::new("a.rs"),
+                vec![]
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn formatter_reads_stdin_and_returns_output_without_writing_file() {
         let root = tempfile::tempdir().unwrap();

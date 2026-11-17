@@ -537,6 +537,55 @@ impl Pokarak {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn semantic_excerpts_use_retained_source_and_never_fall_back_to_disk_for_it() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let path = root.join("draft.ts");
+        std::fs::write(&path, "const disk = 0;\ndisk();").unwrap();
+        let snapshot = pokarak_navigation::DocumentSnapshot::new(
+            root.clone(),
+            path.clone(),
+            "// retained context\nconst dirty = 1;\ndirty();".into(),
+            1,
+        )
+        .unwrap();
+        let hit = super::SourceLocation {
+            path: path.clone(),
+            line: 2,
+            column: 0,
+            preview: "dirty();".into(),
+        };
+        let sources = std::collections::HashMap::from([(path.clone(), snapshot.clone())]);
+        let revisions = super::result_revisions(std::slice::from_ref(&hit));
+        let rows = super::prepare_rows_with_sources(
+            std::slice::from_ref(&hit),
+            &revisions,
+            None,
+            true,
+            &sources,
+        );
+        let text = rows
+            .iter()
+            .filter_map(|r| {
+                if let super::Row::Line { text, .. } = r {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("retained context"));
+        assert!(text.contains("const dirty"));
+        assert!(!text.contains("disk"));
+        snapshot.invalidate();
+        let rows = super::prepare_rows_with_sources(&[hit], &revisions, None, true, &sources);
+        assert!(
+            rows.iter()
+                .all(|r| !matches!(r,super::Row::Line{text,..} if text.contains("disk")))
+        );
+    }
     use super::{HashMap, Row, SourceLocation, Surface, match_range, prepare_rows};
     #[test]
     fn grouped_excerpts_merge_nearby_context_and_mark_matches() {

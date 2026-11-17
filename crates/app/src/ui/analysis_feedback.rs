@@ -153,6 +153,11 @@ impl Pokarak {
                     && self.session().is_some_and(|s| s.saved.code)
             })
             .cloned();
+        let language_retry = if retry.is_none() {
+            self.language_retry(cx)
+        } else {
+            None
+        };
         div()
             .h(ui_px(32.))
             .flex_none()
@@ -174,15 +179,13 @@ impl Pokarak {
             )
             .when(missing_kotlin_server(error), |row| {
                 row.child(
-                    Button::new("kotlin-install-guide")
-                        .label("설치 안내")
+                    Button::new("language-tool-settings")
+                        .label("언어 도구 설정…")
                         .ghost()
                         .small()
-                        .on_click(|_, _, cx| {
-                            cx.open_url(
-                                "https://github.com/Kotlin/kotlin-lsp#install-kotlin-lsp-cli",
-                            )
-                        }),
+                        .on_click(
+                            cx.listener(|a, _, w, cx| a.open_settings_section("language", w, cx)),
+                        ),
                 )
             })
             .child(
@@ -218,7 +221,7 @@ impl Pokarak {
                         })),
                 )
             })
-            .when_some(self.language_retry(cx), |row, button| row.child(button))
+            .when_some(language_retry, |row, button| row.child(button))
             .child(
                 Button::new("dismiss-error")
                     .icon(IconName::X)

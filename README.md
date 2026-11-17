@@ -48,4 +48,30 @@ v0.2.4 이하에서는 앱을 종료하고 `~/.local/bin/pokarak update`를 한 
 
 **Stage / 커밋**에서 파일 전체, 변경 블록 또는 개별 줄을 골라 커밋하세요. 상단 툴바에서 Fetch·Pull·Push와 Stash를 실행하고, 브랜치 메뉴에서 Merge·Rebase를 시작할 수 있습니다.
 
+브랜치 이름을 우클릭하면 **Merge 선택 브랜치 → 현재 브랜치**를 실행할 수 있습니다. 그래프의 **브랜치 / 태그** 열을 넓히면 표시되는 배지가 늘어나고, **+N**을 누르면 생략된 참조를 모두 볼 수 있습니다. 펼친 목록에서도 마우스를 올려 그래프를 강조하거나 브랜치를 우클릭할 수 있습니다.
+
+### 파일 트리와 간단한 코드 수정
+
+현재 소스 빌드의 코드 보기에서는 폴더를 접고 펼치고, **편집 → 저장** 또는 **⌘S**로 현재 작업 파일을 수정할 수 있습니다. **저장 + 커밋…**은 저장 후 기존 스테이징 화면을 엽니다. 커밋할 파일이나 줄은 직접 선택하세요. 과거 커밋의 파일은 읽기 전용입니다.
+
+미저장 초안은 워크트리·파일별로 저장소 밖에 보관됩니다. 외부 편집으로 디스크 내용이 달라지면 저장을 거부하고 초안을 유지합니다.
+
+### Claude·Codex에서 CLI 사용하기
+
+현재 소스 빌드의 **설정 → Claude · Codex CLI**에서 Claude 또는 Codex 실행 명령과 안내 프롬프트를 복사할 수 있습니다. `ctl` 명령은 앱 창을 열지 않고 JSON을 출력합니다.
+
+```sh
+pokarak ctl status --repo .
+pokarak ctl files --repo . --changed
+pokarak ctl read --repo . --path src/main.rs
+pokarak ctl instructions --agent codex
+pokarak ctl stage --repo . --path src/main.rs --yes
+pokarak ctl commit --repo . --message "Update example" --yes
+pokarak ctl merge --repo . --branch feature/example --yes
+```
+
+저장·스테이징·커밋·머지는 명시적인 `--yes`가 필요합니다. 파일 저장에는 원본과 수정본을 각각 `--expected-file`과 `--content-file`로 전달합니다. 커밋은 이미 스테이징한 변경만 사용합니다.
+
+`pokarak ctl sessions`로 실행 중인 앱의 소켓을 찾고, `pokarak ctl gui status --session SOCKET`으로 상태를 확인할 수 있습니다. GUI의 프로젝트·워크트리·파일·뷰 이동과 새로고침도 제어할 수 있습니다. 전체 명령은 `pokarak ctl --help`를 참고하세요.
+
 [설치 옵션](docs/distribution.md) · [코드 탐색 설정](docs/language-analysis.md) · [MIT 라이선스](LICENSE)

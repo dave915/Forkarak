@@ -13,6 +13,16 @@ Python 3, curl, and tar are needed for setup. The script uses official release m
 
 The script writes `installed.json` (versions, source URLs, checksums, executable argv), `language-servers.example.json`, and an experimental `language-servers.kotlin-jvm.example.json` inside the tools directory. It does not write `~/.config/pokarak/language-servers.json`, shell profiles, global `JAVA_HOME`, or inspected projects. The Kotlin/JVM example is for reproducing capability probes, **not** a claim of Java-source navigation support.
 
+### Java만 설치하기
+
+```sh
+brew install jdtls
+```
+
+Bare `jdtls` is discovered from absolute PATH entries, Homebrew, user install directories, and absolute `JDTLS_HOME`/`JDTLS_DIR` distributions even when Finder supplies a short PATH. Explicit custom programs and argv in `~/.config/pokarak/language-servers.json` remain authoritative. Discovery never installs or starts a server. After installing, retry language analysis in the app.
+
+On this Mac, JDT LS 1.63.0 was installed on 2026-11-17 and initialized and shut down successfully using the existing OpenJDK 26 and a GUI-like PATH in an authored temporary project. This confirms executable startup, not full project semantic navigation.
+
 ### Kotlin만 설치하기
 
 Kotlin 정의·사용처 탐색에 필요한 서버는 Homebrew로 설치할 수 있습니다. 설치한 뒤 포카락의 오류 행에서 **다시 시도**를 누르세요.

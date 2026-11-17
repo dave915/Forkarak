@@ -513,14 +513,14 @@ pub fn resolve_stack_location(root: &Path, text: &str) -> Option<StackLocation> 
             if file.is_empty() {
                 continue;
             }
-            if let Ok(path) = root.join(file).canonicalize() {
-                if path.is_file() && path.starts_with(&root) {
-                    return Some(StackLocation {
-                        path,
-                        line: line - 1,
-                        column: column.saturating_sub(1),
-                    });
-                }
+            if let Ok(path) = root.join(file).canonicalize()
+                && path.is_file() && path.starts_with(&root)
+            {
+                return Some(StackLocation {
+                    path,
+                    line: line - 1,
+                    column: column.saturating_sub(1),
+                });
             }
             // JVM traces omit the source path; derive only the exact package
             // under standard source roots. Never guess a different worktree.
@@ -542,14 +542,14 @@ pub fn resolve_stack_location(root: &Path, text: &str) -> Option<StackLocation> 
                     "src/main/kotlin",
                     "src/test/kotlin",
                 ] {
-                    if let Ok(path) = root.join(source).join(&package).join(file).canonicalize() {
-                        if path.is_file() && path.starts_with(&root) {
-                            return Some(StackLocation {
-                                path,
-                                line: line - 1,
-                                column: 0,
-                            });
-                        }
+                    if let Ok(path) = root.join(source).join(&package).join(file).canonicalize()
+                        && path.is_file() && path.starts_with(&root)
+                    {
+                        return Some(StackLocation {
+                            path,
+                            line: line - 1,
+                            column: 0,
+                        });
                     }
                 }
             }

@@ -292,16 +292,15 @@ impl Pokarak {
         if session.saved.tabs.iter().any(|p| p == path) {
             return;
         }
-        if let Some(previous) = self.code_edits.tools.preview.remove(root) {
-            if !self.code_edits.dirty(root, &previous)
-                && !self.code_edits.editing(root, &previous)
-                && let Some(session) = self.sessions.get_mut(root)
-            {
-                // Positions/history are retained; only the reusable tab is replaced.
-                session.saved.tabs.retain(|p| p != &previous);
-                session.documents.remove(&previous);
-                session.diffs.remove(&previous);
-            }
+        if let Some(previous) = self.code_edits.tools.preview.remove(root)
+            && !self.code_edits.dirty(root, &previous)
+            && !self.code_edits.editing(root, &previous)
+            && let Some(session) = self.sessions.get_mut(root)
+        {
+            // Positions/history are retained; only the reusable tab is replaced.
+            session.saved.tabs.retain(|p| p != &previous);
+            session.documents.remove(&previous);
+            session.diffs.remove(&previous);
         }
         let _ = cx;
         self.code_edits
@@ -399,6 +398,7 @@ impl Pokarak {
 
     /// Shared formatter/LSP adapter: exact worktree, file, entity and source snapshot
     /// are checked before replacing the retained draft. Disk remains untouched.
+    #[allow(clippy::too_many_arguments)] // Preserve the shared formatter/LSP draft adapter contract.
     pub(super) fn apply_editor_draft(
         &mut self,
         root: &Path,

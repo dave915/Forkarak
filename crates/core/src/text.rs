@@ -67,7 +67,7 @@ pub(crate) fn render(document: &mut DiffDocument, old: (Vec<u8>, bool), new: (Ve
     document.lines = parse_patch(&document.patch);
 }
 
-fn parse_patch(patch: &str) -> Vec<DiffLine> {
+pub(crate) fn parse_patch(patch: &str) -> Vec<DiffLine> {
     let mut old = 0;
     let mut new = 0;
     let mut in_hunk = false;

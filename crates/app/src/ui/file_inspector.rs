@@ -119,9 +119,8 @@ impl Inspector {
         self.page = Page::Loading;
         let root = self.root.clone();
         let task = cx.background_spawn(async move {
-            let detail = pokarak_core::history::commit_detail(&root, &file.oid, 0)?;
-            let patch = pokarak_core::history::historical_diff(&root, &detail, &file.path)?;
-            let parent = detail
+            let patch = file_history::revision_diff(&root, &file)?;
+            let parent = file
                 .parent
                 .as_deref()
                 .map(|oid| &oid[..8])
@@ -228,72 +227,64 @@ impl Render for Inspector {
                 .p_3()
                 .child("표시할 줄이 없습니다.")
                 .into_any_element(),
-            Page::Blame(_) => {
+            Page::Blame(lines) => {
                 let this = cx.entity().downgrade();
-                uniform_list(
-                    "file-blame-rows",
-                    match &self.page {
-                        Page::Blame(lines) => lines.len(),
-                        _ => 0,
-                    },
-                    move |range, _, cx| {
-                        let mut rows = vec![];
-                        if let Some(reader) = this.upgrade()
-                            && let Page::Blame(lines) = &reader.read(cx).page
-                        {
-                            for i in range {
-                                let line = &lines[i];
-                                let hash =
-                                    line.oid.as_deref().map(|s| &s[..8]).unwrap_or("작업 파일");
-                                rows.push(
-                                    div()
-                                        .flex()
-                                        .h(px(23.))
-                                        .min_w_full()
-                                        .items_center()
-                                        .gap_2()
-                                        .text_size(px(12.))
-                                        .font_family("JetBrains Mono")
-                                        .child(
-                                            div()
-                                                .w(px(78.))
-                                                .flex_none()
-                                                .text_color(palette.rgb(BLUE))
-                                                .child(hash.to_owned()),
-                                        )
-                                        .child(
-                                            div()
-                                                .w(px(104.))
-                                                .flex_none()
-                                                .text_ellipsis()
-                                                .child(line.author.clone()),
-                                        )
-                                        .child(
-                                            div()
-                                                .w(px(88.))
-                                                .flex_none()
-                                                .text_color(palette.rgb(MUTED))
-                                                .child(
-                                                    line.date
-                                                        .get(..10)
-                                                        .unwrap_or(&line.date)
-                                                        .to_owned(),
-                                                ),
-                                        )
-                                        .child(
-                                            div()
-                                                .w(px(39.))
-                                                .flex_none()
-                                                .text_right()
-                                                .child(line.line.to_string()),
-                                        )
-                                        .child(div().whitespace_nowrap().child(line.text.clone())),
-                                );
-                            }
+                uniform_list("file-blame-rows", lines.len(), move |range, _, cx| {
+                    let mut rows = vec![];
+                    if let Some(reader) = this.upgrade()
+                        && let Page::Blame(lines) = &reader.read(cx).page
+                    {
+                        for i in range {
+                            let line = &lines[i];
+                            let hash = line.oid.as_deref().map(|s| &s[..8]).unwrap_or("작업 파일");
+                            rows.push(
+                                div()
+                                    .flex()
+                                    .h(px(23.))
+                                    .min_w_full()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_size(px(12.))
+                                    .font_family("JetBrains Mono")
+                                    .child(
+                                        div()
+                                            .w(px(78.))
+                                            .flex_none()
+                                            .text_color(palette.rgb(BLUE))
+                                            .child(hash.to_owned()),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(104.))
+                                            .flex_none()
+                                            .text_ellipsis()
+                                            .child(line.author.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(88.))
+                                            .flex_none()
+                                            .text_color(palette.rgb(MUTED))
+                                            .child(
+                                                line.date
+                                                    .get(..10)
+                                                    .unwrap_or(&line.date)
+                                                    .to_owned(),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(39.))
+                                            .flex_none()
+                                            .text_right()
+                                            .child(line.line.to_string()),
+                                    )
+                                    .child(div().whitespace_nowrap().child(line.text.clone())),
+                            );
                         }
-                        rows
-                    },
-                )
+                    }
+                    rows
+                })
                 .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
                 .size_full()
                 .into_any_element()

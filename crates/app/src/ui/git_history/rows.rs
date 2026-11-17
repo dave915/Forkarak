@@ -3,6 +3,9 @@ use super::*;
 use super::columns::Columns;
 use crate::prefs::GraphColumn;
 
+#[path = "ref_badges.rs"]
+mod ref_badges;
+
 impl Pokarak {
     pub(super) fn clear_graph_hover(&mut self) {
         self.git_history.hovered_tip = None;
@@ -101,6 +104,7 @@ impl Pokarak {
                 .unwrap_or_default()
         });
         let weak = cx.entity().downgrade();
+        let ref_badges = ref_badges::RefBadges::new(self, weak.clone());
         let can_prefetch = !self.loading
             && !self.git_is_busy()
             && ui.cursor.is_some()
@@ -138,47 +142,8 @@ impl Pokarak {
                         commit.date,
                         all_refs
                     );
-                    let badge = refs
-                        .iter()
-                        .find(|r| r.starts_with("refs/heads/"))
-                        .or_else(|| refs.first());
-                    let refs_cell = div()
-                        .w(ui_px(columns.width(GraphColumn::Refs)))
-                        .min_w_0()
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .when_some(badge, |cell, reference| {
-                            let target = weak.clone();
-                            let tip = oid.clone();
-                            cell.child(
-                                div()
-                                    .id(("graph-ref", index))
-                                    .min_w_0()
-                                    .px_1()
-                                    .rounded(ui_px(3.))
-                                    .bg(color.opacity(0.15))
-                                    .text_color(color)
-                                    .text_size(ui_text(11.))
-                                    .text_ellipsis()
-                                    .child(visible(reference_name(reference)))
-                                    .on_hover(move |hovered, _, cx| {
-                                        let _ = target.update(cx, |app, cx| {
-                                            app.hover_graph_branch(&tip, *hovered, cx)
-                                        });
-                                    }),
-                            )
-                            .when(refs.len() > 1, |cell| {
-                                cell.child(
-                                    div()
-                                        .flex_none()
-                                        .text_color(palette.rgb(MUTED))
-                                        .text_size(ui_text(10.))
-                                        .child(format!("+{}", refs.len() - 1)),
-                                )
-                            })
-                        });
+                    let refs_cell =
+                        ref_badges.cell(commit, columns.width(GraphColumn::Refs), color, w, cx);
                     let target = weak.clone();
                     let related = trace.as_ref().is_none_or(|path| path.row(index).node);
                     let button = Button::new(("history-row", index))

@@ -1,4 +1,5 @@
 mod analysis_feedback;
+mod cli_control;
 mod code_edit;
 mod file_icons;
 mod file_inspector;
@@ -293,6 +294,7 @@ pub struct Pokarak {
     changed: Arc<AtomicBool>,
     external_change: bool,
     checking_changes: bool,
+    cli_control: Option<crate::control::Server>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -639,10 +641,12 @@ impl Pokarak {
             changed: Arc::new(AtomicBool::new(false)),
             external_change: false,
             checking_changes: false,
+            cli_control: None,
             _subscriptions: subscriptions,
         };
         this.reset_git_history();
         this.install_git_lifecycle(window, cx);
+        this.install_cli_control(window, cx);
         cx.on_release(|this, cx| {
             this.cancel_git_job();
             this.persist(cx);

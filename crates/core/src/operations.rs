@@ -1007,6 +1007,11 @@ mod tests {
         include!("operations/files_tests.rs");
     }
 
+    mod exact_comparison {
+        use super::*;
+        include!("operations/comparison_tests.rs");
+    }
+
     mod progress_tests {
         use super::*;
         include!("operations/progress_tests.rs");

@@ -6,6 +6,7 @@
 //! Working files are compared as stored on disk: repository clean/textconv
 //! filters are deliberately never executed. Gitlinks are opaque index entries.
 mod backend;
+pub mod comparison;
 pub mod file_history;
 mod filesystem;
 mod git;

@@ -16,6 +16,7 @@ impl Fixture {
             timeout: Duration::from_secs(10),
             global_config: Some(global),
             cancellation: OperationCancellation::default(),
+            progress: None,
         };
         // All fixture operations inherit only a private config, never global hooks/remotes.
         ops.checked(&["init", "-b", "main"]).unwrap();

@@ -5,8 +5,12 @@
 //! inherited. Explicit Git writes honor configured Git hooks; submodule operations
 //! are not recursive.
 pub mod branches;
+pub mod errors;
+mod progress;
+pub use progress::{OperationEvent, OperationProgress, OutputStream};
 pub mod commit_actions;
 mod file_save;
+pub mod files;
 pub mod history_actions;
 pub mod integration;
 pub mod sync;
@@ -173,6 +177,7 @@ pub struct GitOperations {
     root: PathBuf,
     timeout: Duration,
     cancellation: OperationCancellation,
+    progress: Option<OperationProgress>,
     #[cfg(test)]
     global_config: Option<PathBuf>,
 }
@@ -197,6 +202,7 @@ impl GitOperations {
                 .context("The selected worktree no longer exists")?,
             timeout,
             cancellation: OperationCancellation::default(),
+            progress: None,
             #[cfg(test)]
             global_config: None,
         };
@@ -209,6 +215,11 @@ impl GitOperations {
     /// shutdown; normal UI close/quit should first guard in-flight writes.
     pub fn with_cancellation(mut self, cancellation: OperationCancellation) -> Self {
         self.cancellation = cancellation;
+        self
+    }
+
+    pub fn with_progress(mut self, progress: OperationProgress) -> Self {
+        self.progress = Some(progress);
         self
     }
 
@@ -568,7 +579,7 @@ impl GitOperations {
     }
 
     fn metadata(&self, args: &[&str]) -> Result<Vec<u8>> {
-        let output = self.checked(args)?;
+        let output = self.check_result(capture(self.command(args), self.timeout, &self.cancellation)?)?;
         ensure!(
             !output.truncated,
             "Git metadata exceeds the safety limit; use Git externally to narrow it"
@@ -577,13 +588,17 @@ impl GitOperations {
     }
 
     fn checked(&self, args: &[&str]) -> Result<Captured> {
-        let result = self.run(args)?;
+        self.check_result(self.run(args)?)
+    }
+
+    fn check_result(&self, result: Captured) -> Result<Captured> {
         ensure!(
             result.code == Some(0),
-            "Git operation failed in {}:\n{}\n{}\nFor authentication failures, configure your existing credential helper or SSH agent in a terminal, then retry. For rejected updates, fetch and review the branch first. No force or automatic stash is used.",
+            "Git operation failed in {}:\n{}\n{}\n{}",
             self.root.display(),
             String::from_utf8_lossy(&result.stderr).trim(),
-            String::from_utf8_lossy(&result.stdout).trim()
+            String::from_utf8_lossy(&result.stdout).trim(),
+            errors::guidance(errors::classify_diagnostics(&format!("{}\n{}", String::from_utf8_lossy(&result.stderr), String::from_utf8_lossy(&result.stdout))))
         );
         Ok(result)
     }
@@ -661,7 +676,7 @@ impl GitOperations {
 
     // Child operation modules use this for per-command environment changes.
     fn run_command(&self, command: Command) -> Result<Captured> {
-        capture(command, self.timeout, &self.cancellation)
+        capture_observed(command, self.timeout, &self.cancellation, OUTPUT_LIMIT, self.progress.as_ref().map(|p| (self.root.as_path(), p)))
             .with_context(|| format!("Git in {}", self.root.display()))
     }
 }
@@ -760,6 +775,7 @@ fn drain(
     kept: &mut Vec<u8>,
     limit: usize,
     truncated: &mut bool,
+    observe: Option<(&Path, &OperationProgress, OutputStream)>,
 ) -> io::Result<bool> {
     let mut buffer = [0u8; 8192];
     // Bound each polling iteration even if a child writes continuously.
@@ -767,6 +783,7 @@ fn drain(
         match stream.read(&mut buffer) {
             Ok(0) => return Ok(true),
             Ok(n) => {
+                if let Some((root, progress, channel)) = observe { progress.emit(root, channel, &buffer[..n]); }
                 let retain = n.min(limit.saturating_sub(kept.len()));
                 kept.extend_from_slice(&buffer[..retain]);
                 *truncated |= retain != n;
@@ -788,10 +805,20 @@ fn capture(
 }
 
 fn capture_with_limit(
+    command: Command,
+    timeout: Duration,
+    cancellation: &OperationCancellation,
+    stdout_limit: usize,
+) -> Result<Captured> {
+    capture_observed(command, timeout, cancellation, stdout_limit, None)
+}
+
+fn capture_observed(
     mut command: Command,
     timeout: Duration,
     cancellation: &OperationCancellation,
     stdout_limit: usize,
+    progress: Option<(&Path, &OperationProgress)>,
 ) -> Result<Captured> {
     // Register the Child under the same lock used by shutdown. Cancellation can
     // never fall into a gap between checking a flag and starting a write.
@@ -837,12 +864,14 @@ fn capture_with_limit(
                 &mut output.stdout,
                 stdout_limit,
                 &mut output.truncated,
+                progress.map(|(root, p)| (root, p, OutputStream::Stdout)),
             )?;
             let err_done = drain(
                 &mut stderr,
                 &mut output.stderr,
                 ERROR_LIMIT,
                 &mut output.truncated,
+                progress.map(|(root, p)| (root, p, OutputStream::Stderr)),
             )?;
             let mut state = cancellation
                 .state
@@ -971,6 +1000,21 @@ mod tests {
                 .unwrap();
             remote
         }
+    }
+
+    mod file_actions {
+        use super::*;
+        include!("operations/files_tests.rs");
+    }
+
+    mod exact_comparison {
+        use super::*;
+        include!("operations/comparison_tests.rs");
+    }
+
+    mod progress_tests {
+        use super::*;
+        include!("operations/progress_tests.rs");
     }
 
     mod branch_integration {

@@ -15,6 +15,7 @@ impl Fixture {
             root,
             timeout: Duration::from_secs(10),
             cancellation: OperationCancellation::default(),
+            progress: None,
             global_config: Some(global),
         };
         ops.checked(&["init", "-b", "main"]).unwrap();

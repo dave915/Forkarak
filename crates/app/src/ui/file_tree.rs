@@ -180,6 +180,11 @@ impl Pokarak {
         let Some(snapshot) = &session.snapshot else {
             return FileTree::default();
         };
+        let filtered;
+        let snapshot = if session.unreviewed_only && !session.saved.all_files {
+            filtered = Snapshot { changes: snapshot.changes.iter().filter(|f| self.file_review_state(&f.path) != reviewed_files::ReviewState::Reviewed).cloned().collect(), ..snapshot.clone() };
+            &filtered
+        } else { snapshot };
         build_tree(
             snapshot,
             session.saved.all_files,
@@ -332,6 +337,7 @@ impl Pokarak {
                             .child(count.to_string()),
                     ),
             )
+            .when(!all, |d|d.child(self.review_filter_controls(cx)))
             .child(
                 div()
                     .px_2()

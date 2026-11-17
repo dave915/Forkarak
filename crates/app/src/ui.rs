@@ -27,6 +27,7 @@ mod terminal_sessions;
 mod toolbar;
 mod update_workspace;
 mod updates;
+mod workspace_ux;
 use analysis_feedback::AnalysisFeedback;
 use file_tree::FileRow;
 use split_diff::ReviewDiff;
@@ -113,6 +114,7 @@ actions!(
         CloseAllProjects,
         NextWorktree,
         PreviousWorktree,
+        ChooseWorktree,
         NextProject,
         PreviousProject,
         OpenRepository,
@@ -162,6 +164,7 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("Git 작업 및 저장소 설정…", OpenGitActions),
         ]),
         Menu::new("탐색").items([
+            MenuItem::action("워크트리 선택…", ChooseWorktree),
             MenuItem::action("파일 찾기", FindFile),
             MenuItem::action("본문 검색", FindText),
             MenuItem::separator(),
@@ -198,6 +201,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-[", Back, None),
         KeyBinding::new("cmd-]", Forward, None),
         KeyBinding::new("cmd-p", FindFile, None),
+        KeyBinding::new("cmd-shift-j", ChooseWorktree, None),
         KeyBinding::new("cmd-shift-f", FindText, None),
         KeyBinding::new("alt-f7", FindReferences, None),
         KeyBinding::new("cmd-b", FindDefinition, None),
@@ -232,6 +236,8 @@ struct Session {
     history: Vec<ReadingPoint>,
     forward: Vec<ReadingPoint>,
     restoring: bool,
+    unreviewed_only: bool,
+    compact_sidebar: Option<bool>,
 }
 impl Session {
     fn new(saved: SavedView) -> Self {
@@ -250,6 +256,8 @@ impl Session {
             history: vec![],
             forward: vec![],
             restoring,
+            unreviewed_only: false,
+            compact_sidebar: None,
         }
     }
 }
@@ -789,6 +797,7 @@ impl Pokarak {
     }
 
     fn remember_view(&mut self, cx: &App) {
+        self.remember_workspace_screen();
         self.capture_positions(cx);
         if let Some(root) = &self.current
             && let Some(session) = self.sessions.get_mut(root)
@@ -934,7 +943,7 @@ impl Pokarak {
                             let view = update_view
                                 .filter(|(path, _)| *path == root)
                                 .map(|(_, view)| view);
-                            this.open_restored_view(view, window, cx);
+                            this.open_workspace_screen(view, window, cx);
                             this.refresh_branch_sync(window, cx);
                             this.restore_git_completion(cx);
                         }
@@ -1630,7 +1639,7 @@ impl Pokarak {
         };
         let position = target.position;
         let displayed_text = editor.read(cx).value().to_string();
-        let symbol_start = target.symbol_start;
+        let _symbol_start = target.symbol_start;
         let absolute = root.join(&path);
         let navigator = self.navigation.as_ref().unwrap().clone();
         let retry_kind = kind.clone();
@@ -1666,30 +1675,13 @@ impl Pokarak {
                         std::fs::read_to_string(&absolute)? == displayed_text,
                         "파일이 외부에서 변경되었습니다. 새로고침 후 다시 탐색하세요."
                     );
-                    let mut result =
-                        nav.navigate(&absolute, position.line, position.character, kind)?;
-                    let mut declaration = false;
-                    if is_definition
-                        && result.semantic
-                        && result.locations.len() == 1
-                        && result.locations[0].path == absolute
-                        && result.locations[0].line == position.line
-                        && result.locations[0].column == symbol_start.character
-                    {
-                        result = nav.navigate(
-                            &absolute,
-                            position.line,
-                            position.character,
-                            NavigationKind::References,
-                        )?;
-                        declaration = true;
-                    }
+                    let result = nav.navigate(&absolute, position.line, position.character, kind)?;
                     anyhow::ensure!(
                         std::fs::read_to_string(&absolute)? == displayed_text,
                         "탐색 중 파일이 변경되었습니다. 새로고침 후 다시 탐색하세요."
                     );
                     let revisions = result_revisions(&result.locations);
-                    anyhow::Ok((result, declaration, revisions))
+                    anyhow::Ok((result, revisions))
                 })();
                 output = format!("{}\n{}", nav.server_messages(), nav.stderr());
                 result
@@ -1715,23 +1707,18 @@ impl Pokarak {
                 this.observe_feedback();
                 this.analysis_feedback.append(&output);
                 match result {
-                    Ok((result, declaration, revisions)) => {
+                    Ok((result, revisions)) => {
                         this.error = None;
                         this.result_revisions = revisions;
                         this.status = result.status.clone();
                         if is_definition
-                            && !declaration
                             && result.semantic
                             && result.locations.len() == 1
                         {
                             this.open_location(result.locations[0].clone(), window, cx);
                         } else {
                             this.show_results(
-                                if declaration {
-                                    "사용처".into()
-                                } else {
-                                    title
-                                },
+                                title,
                                 result,
                                 window,
                                 cx,
@@ -1850,6 +1837,8 @@ impl Pokarak {
                 match result {
                     Ok((locations, revisions)) => {
                         this.result_revisions = revisions;
+                        this.error = None;
+                        this.status = if locations.len() >= 300 { "본문 검색 완료 · 최대 300개 결과".into() } else { format!("본문 검색 완료 · {}개", locations.len()) };
                         this.show_results(
                             format!("본문 검색: {expected_query}"),
                             NavigationResult {
@@ -1861,9 +1850,14 @@ impl Pokarak {
                             cx,
                         );
                     }
-                    Err(error) => this.error = Some(error.to_string()),
+                    Err(error) => {
+                        this.error = Some(format!("본문 검색 실패 · {error:#}"));
+                        this.status = "본문 검색 실패 · 검색창에서 Enter로 다시 시도".into();
+                        this.result_title = "본문 검색 실패".into();
+                        this.results = Arc::from([]);
+                        this.results_open = true;
+                    }
                 }
-                this.status = "본문 검색 완료".into();
                 cx.notify();
             });
         })
@@ -1876,6 +1870,9 @@ impl Pokarak {
         }
         self.show_code_view(window, cx);
         self.text_search = text;
+        if let Some(root) = &self.current {
+            if let Some(session) = self.sessions.get_mut(root) { session.saved.hide_files = false; }
+        }
         if !text && let Some(root) = &self.current {
             self.sessions.get_mut(root).unwrap().saved.all_files = true;
         }
@@ -1984,7 +1981,7 @@ impl Pokarak {
                                 } else {
                                     ""
                                 },
-                                tab.file_name().unwrap_or_default().to_string_lossy()
+                                workspace_ux::tab_label(tab, &session.saved.tabs)
                             ),
                             cx,
                         )
@@ -2010,8 +2007,8 @@ impl Pokarak {
         }
         let head = div()
             .id("reader-controls")
-            .overflow_x_scroll()
-            .h(ui_px(40.))
+            .flex_wrap()
+            .min_h(ui_px(34.))
             .flex_none()
             .px_3()
             .flex()
@@ -2019,15 +2016,6 @@ impl Pokarak {
             .gap_2()
             .border_b_1()
             .border_color(palette.rgb(LINE))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_ellipsis()
-                    .font_family("JetBrains Mono")
-                    .text_size(ui_text(11.))
-                    .child(path.to_string_lossy().to_string()),
-            )
             .child(self.code_analysis_control(cx))
             .child(self.reviewed_file_button(cx))
             .child(
@@ -2171,6 +2159,7 @@ impl Pokarak {
             .v_flex()
             .overflow_hidden()
             .child(tabs)
+            .child(div().id("reader-file-path").flex_none().min_h(ui_px(28.)).px_3().py_1().text_size(ui_text(11.)).font_family("JetBrains Mono").child(path.to_string_lossy().to_string()))
             .child(head)
             .when(!code, |reader| {
                 reader.children(diff.and_then(|doc| self.diff_reading_controls(doc, false, cx)))
@@ -2497,9 +2486,10 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&OpenGitActions,w,cx|this.open_git_actions(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitCommit,w,cx|this.open_git_commit(w,cx)))
             .on_action(cx.listener(|this,_:&OpenRepository,w,cx|this.choose_repository(w,cx)))
-            .on_action(cx.listener(|this,_:&CloseFile,w,cx|{if !this.git_history.active && let Some(path)=this.selected(){this.close_file(path,w,cx)}else if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
+            .on_action(cx.listener(|this,_:&CloseFile,w,cx|{if !w.has_active_dialog(cx) { this.close_active_file(w,cx) }}))
             .on_action(cx.listener(|this,_:&CloseProject,w,cx|{if let Some(project)=this.current_project.clone(){this.close_project(project,w,cx)}}))
             .on_action(cx.listener(|this,_:&CloseAllProjects,w,cx|this.close_all_projects(w,cx)))
+            .on_action(cx.listener(|this,_:&ChooseWorktree,w,cx|this.open_worktree_picker(w,cx)))
             .on_action(cx.listener(|this,_:&NextWorktree,w,cx|this.cycle_worktree(true,w,cx)))
             .on_action(cx.listener(|this,_:&PreviousWorktree,w,cx|this.cycle_worktree(false,w,cx)))
             .on_action(cx.listener(|this,_:&NextProject,w,cx|this.cycle_project(true,w,cx)))
@@ -2516,6 +2506,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&FindDefinition,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::Definition,None,w,cx)}}))
             .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.select_reader_mode(code,w,cx)}}))
             .child(self.render_toolbar(window, cx))
+            .children(self.workspace_context(cx))
             .children(self.branch_review_controls(cx))
             .children(self.update_banner(cx))
             .children(self.code_drafts_banner(cx))

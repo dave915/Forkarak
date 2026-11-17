@@ -35,6 +35,24 @@ impl Group {
 }
 
 impl Pokarak {
+    pub(in crate::ui) fn comparison_branch_choices(&self) -> Option<Vec<workspace_ux::Choice>> {
+        Some(
+            self.git_history
+                .nav
+                .catalog
+                .as_ref()?
+                .refs
+                .iter()
+                .filter(|r| matches!(r.group, RefGroup::Local | RefGroup::Remote))
+                .map(|r| workspace_ux::Choice {
+                    label: r.label.clone(),
+                    detail: format!("{} · {}", r.name, r.oid),
+                    action: workspace_ux::ChoiceAction::Compare(r.name.clone()),
+                })
+                .collect(),
+        )
+    }
+
     /// The same catalog backs both sidebars. Loading it does not activate the
     /// graph, start language analysis, or delay the working-file reader.
     pub(in crate::ui) fn load_code_sidebar(&mut self, cx: &mut Context<Self>) {
@@ -418,16 +436,26 @@ impl Pokarak {
                         } else {
                             selected.as_ref() == Some(&oid)
                         };
+                        let open_worktree = tree.filter(|t| !t.is_prunable).map(|t| t.path.clone());
+                        let is_active = tree.is_some_and(|t| t.path == scope);
                         let button = Button::new(("graph-reference", index))
                             .ghost()
                             .small()
                             .w_full()
                             .h(ui_px(29.))
                             .justify_start()
-                            .accessibility_label(format!("{} {label} 커밋으로 이동", group.title()))
+                            .accessibility_label(if tree.is_some() {
+                                format!("워크트리 열기 · {label}")
+                            } else {
+                                format!("{} {label} 커밋으로 이동", group.title())
+                            })
                             .tooltip(tip)
-                            .disabled(oid.is_empty() || catalog.is_none())
-                            .selected(selected)
+                            .disabled(if tree.is_some() {
+                                open_worktree.is_none()
+                            } else {
+                                oid.is_empty() || catalog.is_none()
+                            })
+                            .selected(if tree.is_some() { is_active } else { selected })
                             .child(
                                 div()
                                     .w_full()
@@ -444,7 +472,11 @@ impl Pokarak {
                             .on_click(move |_, w, cx| {
                                 let _ = target.update(cx, |app, cx| {
                                     if app.current.as_ref() == Some(&select_scope) {
-                                        app.jump_to_graph_oid(jump.clone(), w, cx);
+                                        if let Some(path) = &open_worktree {
+                                            app.open_repository(path.clone(), w, cx);
+                                        } else {
+                                            app.jump_to_graph_oid(jump.clone(), w, cx);
+                                        }
                                     }
                                 });
                             });

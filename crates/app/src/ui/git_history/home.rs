@@ -2,6 +2,30 @@ use super::*;
 use gpui_kit::component::resizable::v_resizable;
 
 impl Pokarak {
+    pub(in crate::ui) fn open_review_history_file(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.load_history_file(path, window, cx);
+    }
+
+    pub(in crate::ui) fn close_history_file(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.leave_inline_commit();
+        self.git_history.request += 1;
+        self.git_history.loading = false;
+        self.git_history.selected = None;
+        self.git_history.document = None;
+        self.git_history.editor = None;
+        self.set_graph_detail_collapsed(true, cx);
+        self.focus.focus(window, cx);
+    }
+
     pub(in crate::ui) fn history_diff_active(&self) -> bool {
         self.git_history.active
             && !self.inline_commit_active()
@@ -293,10 +317,12 @@ impl Pokarak {
         if collapsed {
             return graph.into_any_element();
         }
+        let staging = self.inline_commit_active();
         let graph_height = saved
             .and_then(|s| s.graph_height)
+            .filter(|_| !staging)
             .map(ui_px)
-            .unwrap_or(window.viewport_size().height * 0.38)
+            .unwrap_or(window.viewport_size().height * if staging { 0.22 } else { 0.38 })
             .clamp(
                 ui_px(150.),
                 (window.viewport_size().height - ui_px(245.)).max(ui_px(150.)),
@@ -304,11 +330,11 @@ impl Pokarak {
         let resize = weak.clone();
         let resize_root = self.current.clone();
         v_resizable(SharedString::from(format!(
-            "graph-detail-panes:{resize_root:?}:{}",
+            "graph-detail-panes:{resize_root:?}:{staging}:{}",
             self.prefs.display.ui_zoom_percent
         )))
         .on_resize(move |state, _, cx| {
-            if let Some(height) = state.read(cx).sizes().first().copied() {
+            if !staging && let Some(height) = state.read(cx).sizes().first().copied() {
                 let _ = resize.update(cx, |app, _| {
                     if let Some(session) =
                         resize_root.as_ref().and_then(|r| app.sessions.get_mut(r))
@@ -392,7 +418,15 @@ impl Pokarak {
                 );
             }
         }
-        let changed_files = detail.files.clone();
+        let changed_files: Vec<_> = detail
+            .files
+            .iter()
+            .filter(|f| {
+                !self.show_unreviewed_only()
+                    || self.file_review_state(&f.path) != reviewed_files::ReviewState::Reviewed
+            })
+            .cloned()
+            .collect();
         let reviewed = changed_files
             .iter()
             .map(|file| (file.path.clone(), self.file_review_state(&file.path)))
@@ -460,6 +494,7 @@ impl Pokarak {
                         self.review_counts()
                     )),
             )
+            .child(self.review_filter_controls(cx))
             .child(files);
         let preview = if let Some(doc) = ui
             .document
@@ -498,6 +533,20 @@ impl Pokarak {
             .size_full()
             .v_flex()
             .overflow_hidden()
+            .child(
+                div()
+                    .flex_none()
+                    .min_h(ui_px(28.))
+                    .px_2()
+                    .py_1()
+                    .text_size(ui_text(11.))
+                    .child(
+                        ui.selected
+                            .as_ref()
+                            .map(|p| visible(&p.to_string_lossy()))
+                            .unwrap_or_default(),
+                    ),
+            )
             .child(
                 div()
                     .id("history-file-controls")
@@ -568,21 +617,7 @@ impl Pokarak {
                             },
                             cx,
                         ))
-                    })
-                    .child(
-                        div()
-                            .ml_2()
-                            .flex_1()
-                            .min_w_0()
-                            .text_size(ui_text(11.))
-                            .text_ellipsis()
-                            .child(
-                                ui.selected
-                                    .as_ref()
-                                    .map(|path| visible(&path.to_string_lossy()))
-                                    .unwrap_or_default(),
-                            ),
-                    ),
+                    }),
             )
             .when(!ui.code, |reader| {
                 reader.children(

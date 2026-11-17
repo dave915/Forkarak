@@ -57,7 +57,7 @@ impl Pokarak {
                         .flex_1()
                         .text_size(ui_text(11.))
                         .text_ellipsis()
-                        .child(format!("코드 비교 · {}", self.applied_comparison_label())),
+                        .child(self.visible_comparison_label()),
                 )
                 .child(
                     Button::new("compare-branch")
@@ -105,64 +105,22 @@ impl Pokarak {
         let Some(root) = self.current.clone() else {
             return;
         };
-        let initial = self.session().and_then(|session| {
-            if let CompareMode::Branch(base) = &session.saved.comparison {
-                Some(base.clone())
-            } else {
-                None
-            }
-        });
-        let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("기준 브랜치 · 예: main, origin/main")
-                .default_value(initial.unwrap_or_default())
-        });
-        let owner = cx.weak_entity();
-        let scope = root.clone();
-        let field = input.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let submit = owner.clone();
-            let target = scope.clone();
-            let value = field.clone();
-            let submit_button = owner.clone();
-            let button_root = scope.clone();
-            let button_input = field.clone();
-            dialog
-                .title("브랜치 전체 변경 비교")
-                .width(ui_px(580.))
-                .child(
-                    div()
-                        .v_flex()
-                        .gap_2()
-                        .child(div().text_size(ui_text(11.)).child(scope.display().to_string()))
-                        .child("기준 브랜치와 현재 HEAD의 공통 조상부터 작업 파일까지 비교합니다. 커밋된 변경과 미커밋 변경을 함께 표시합니다.")
-                        .child(Input::new(&field).id("branch-review-base"))
-                        .child(div().text_size(ui_text(11.)).child("브랜치를 전환하거나 파일을 변경하지 않습니다. 그래프의 브랜치 필터와 별개입니다.")),
-                )
-                .on_ok(move |_, window, cx| {
-                    submit_review(&submit, &target, &value, window, cx)
-                })
-                .footer(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap_2()
-                        .child(Button::new("cancel-branch-review").label("취소").ghost().on_click(
-                            |_, window, cx| window.close_dialog(cx),
-                        ))
-                        .child(Button::new("apply-branch-review").label("비교 적용").on_click(
-                            move |_, window, cx| {
-                                if submit_review(&submit_button, &button_root, &button_input, window, cx) {
-                                    window.close_dialog(cx);
-                                }
-                            },
-                        )),
-                )
-        });
-        input.update(cx, |input, cx| input.focus(window, cx));
+        let Some(rows) = self.comparison_branch_choices() else {
+            self.status = "브랜치 목록을 읽는 중입니다. 잠시 후 다시 시도하세요.".into();
+            cx.notify();
+            return;
+        };
+        let _ = root;
+        self.open_workspace_choices(
+            "브랜치 전체 변경 비교",
+            "로컬·원격 브랜치 검색",
+            rows,
+            window,
+            cx,
+        );
     }
 
-    fn apply_branch_review(
+    pub(super) fn apply_branch_review(
         &mut self,
         root: PathBuf,
         compare: CompareMode,
@@ -227,29 +185,6 @@ impl Pokarak {
         .detach();
         cx.notify();
     }
-}
-
-fn submit_review(
-    owner: &WeakEntity<Pokarak>,
-    root: &Path,
-    input: &Entity<InputState>,
-    window: &mut Window,
-    cx: &mut App,
-) -> bool {
-    let base = input.read(cx).value().trim().to_owned();
-    if base.is_empty() {
-        input.update(cx, |input, cx| input.focus(window, cx));
-        return false;
-    }
-    owner
-        .update(cx, |app, cx| {
-            if app.current.as_deref() != Some(root) || app.loading || app.git_is_busy() {
-                return false;
-            }
-            app.apply_branch_review(root.to_path_buf(), CompareMode::Branch(base), window, cx);
-            true
-        })
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

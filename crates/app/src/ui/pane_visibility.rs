@@ -64,6 +64,24 @@ impl PaneLayout {
 }
 
 impl Pokarak {
+    fn effective_pane_layout(&self, window: &Window, saved: &SavedView) -> PaneLayout {
+        let mut layout = PaneLayout::new(self.git_history.active, saved);
+        if theme::logical_px(window.viewport_size().width) < 1100.
+            && self.prefs.option_bool(
+                self.current_project.as_deref(),
+                "layout.auto_collapse",
+                true,
+            )
+        {
+            layout.sidebar = self
+                .session()
+                .and_then(|s| s.compact_sidebar)
+                .unwrap_or(false)
+                && !saved.hide_sidebar;
+        }
+        layout
+    }
+
     pub(super) fn toggle_pane(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
         if self.opening_path.is_some()
             || window.has_active_dialog(cx)
@@ -78,7 +96,19 @@ impl Pokarak {
         else {
             return;
         };
-        pane.toggle(&mut session.saved);
+        if matches!(pane, Pane::Sidebar)
+            && theme::logical_px(window.viewport_size().width) < 1100.
+            && self.prefs.option_bool(
+                self.current_project.as_deref(),
+                "layout.auto_collapse",
+                true,
+            )
+        {
+            session.compact_sidebar = Some(!session.compact_sidebar.unwrap_or(false));
+            session.saved.hide_sidebar = false;
+        } else {
+            pane.toggle(&mut session.saved);
+        }
         // The hidden tree may own keyboard focus. Keep toolbar/menu shortcuts
         // reachable without reopening a file or changing its reading position.
         self.focus.focus(window, cx);
@@ -143,12 +173,12 @@ impl Pokarak {
             .session()
             .map(|session| &session.saved)
             .unwrap_or(&defaults);
-        let layout = PaneLayout::new(self.git_history.active, saved);
+        let layout = self.effective_pane_layout(window, saved);
         let zoom = self.prefs.display.ui_zoom_percent;
         let target = root.to_path_buf();
         let view = cx.weak_entity();
         let mut panels =
-            h_resizable(layout.group_id(root, zoom, saved)).on_resize(move |state, _, cx| {
+            h_resizable(layout.group_id(root, zoom, saved)).on_resize(move |state, window, cx| {
                 let sizes: Vec<_> = state
                     .read(cx)
                     .sizes()
@@ -164,12 +194,15 @@ impl Pokarak {
                     {
                         return;
                     }
+                    let valid = app
+                        .session()
+                        .is_some_and(|s| app.effective_pane_layout(window, &s.saved) == layout);
+                    if !valid {
+                        return;
+                    }
                     let Some(session) = app.sessions.get_mut(&target) else {
                         return;
                     };
-                    if PaneLayout::new(app.git_history.active, &session.saved) != layout {
-                        return;
-                    }
                     layout.remember_widths(&mut session.saved, &sizes);
                     app.persist(cx);
                     cx.notify();
@@ -179,7 +212,7 @@ impl Pokarak {
             panels = panels.child(
                 resizable_panel()
                     .size(ui_px(saved.sidebar_width.unwrap_or(210.)))
-                    .size_range(ui_px(160.)..ui_px(420.))
+                    .size_range(ui_px(130.)..ui_px(420.))
                     .fixed()
                     .child(self.render_worktrees(cx)),
             );
@@ -188,7 +221,7 @@ impl Pokarak {
             panels = panels.child(
                 resizable_panel()
                     .size(ui_px(saved.code_files_width.unwrap_or(285.)))
-                    .size_range(ui_px(200.)..ui_px(600.))
+                    .size_range(ui_px(160.)..ui_px(600.))
                     .fixed()
                     .child(self.render_files(window, cx)),
             );

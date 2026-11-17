@@ -478,7 +478,7 @@ impl Pokarak {
         }
     }
 
-    fn toggle_reviewed_file(&mut self, cx: &mut Context<Self>) {
+    fn toggle_reviewed_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((key, expected)) = self.selected_review() else {
             return;
         };
@@ -493,9 +493,9 @@ impl Pokarak {
         let serial = self.reviewed_files.begin(key.context.clone());
         let target = key.clone();
         let task = cx.background_spawn(async move { source.stamp(&target.root, &target.path) });
-        cx.spawn(async move |view, cx| {
+        cx.spawn_in(window, async move |view, cx| {
             let result = task.await;
-            let _ = view.update(cx, |app, cx| {
+            let _ = view.update_in(cx, |app, window, cx| {
                 if app.reviewed_files.serial != serial {
                     return;
                 }
@@ -506,7 +506,15 @@ impl Pokarak {
                 }
                 match result {
                     Ok(Some(stamp)) if stamp == expected => {
-                        let _ = app.reviewed_files.set(key, Some(stamp));
+                        if app.reviewed_files.set(key, Some(stamp)).is_ok()
+                            && app.prefs.option_bool(
+                                app.current_project.as_deref(),
+                                "review.advance",
+                                false,
+                            )
+                        {
+                            app.next_unreviewed_file(window, cx);
+                        }
                     }
                     Ok(_) => {
                         app.reviewed_files.error = Some(
@@ -538,25 +546,178 @@ impl Pokarak {
             || self.reviewed_files.checking
             || self.reviewed_files.unreadable;
         Button::new("toggle-file-reviewed")
-            .label(if self.reviewed_files.checking || state == ReviewState::Pending { "검토 확인 중…" }
-                else if state == ReviewState::Reviewed { "✓ 검토 완료" } else { "검토 완료" })
+            .label(
+                if self.reviewed_files.checking || state == ReviewState::Pending {
+                    "검토 확인 중…"
+                } else if state == ReviewState::Reviewed {
+                    "✓ 검토 완료"
+                } else {
+                    "검토 완료"
+                },
+            )
             .accessibility_label("파일 검토 완료 표시 전환")
-            .tooltip("현재 파일과 비교 내용이 바뀌면 완료 표시가 해제됩니다. 미저장 초안·미리보기 제한 파일은 표시할 수 없습니다.")
-            .ghost().small().selected(state == ReviewState::Reviewed).disabled(busy || target.is_none())
-            .on_click(cx.listener(|app, _, _, cx| app.toggle_reviewed_file(cx)))
+            .tooltip(
+                self.review_disabled_reason()
+                    .unwrap_or("현재 파일과 비교 내용이 바뀌면 완료 표시가 해제됩니다."),
+            )
+            .ghost()
+            .small()
+            .selected(state == ReviewState::Reviewed)
+            .disabled(busy || target.is_none())
+            .on_click(cx.listener(|app, _, w, cx| app.toggle_reviewed_file(w, cx)))
+    }
+
+    fn review_disabled_reason(&self) -> Option<&'static str> {
+        if self.reviewed_files.unreadable {
+            return Some(
+                "검토 기록을 읽을 수 없습니다. 설정 폴더의 접근 권한과 기록 파일을 확인하세요.",
+            );
+        }
+        if self.reviewed_files.checking {
+            return Some(
+                "파일 내용과 이전 검토 기록을 확인하고 있습니다. 완료 후 다시 시도하세요.",
+            );
+        }
+        if self.loading || self.file_loading || self.git_history.read_pending() {
+            return Some("파일을 읽고 있습니다. 로딩이 끝난 뒤 검토하세요.");
+        }
+        if self.git_is_busy() {
+            return Some("Git 작업이 끝난 뒤 파일을 다시 확인하세요.");
+        }
+        let path = if self.git_history.active {
+            self.git_history
+                .review_data()
+                .and_then(|(_, doc)| doc.map(|d| d.path.clone()))
+        } else {
+            self.selected()
+        };
+        let Some(path) = path else {
+            return Some("비교할 변경 파일을 선택하세요.");
+        };
+        if !self.git_history.active
+            && let Some(root) = &self.current
+        {
+            if self.code_edits.stale(root, &path) {
+                return Some(
+                    "디스크와 다른 초안입니다. 디스크와 비교하고 저장한 뒤 다시 검토하세요.",
+                );
+            }
+            if self.code_edits.dirty(root, &path) {
+                return Some("미저장 초안입니다. 파일을 저장한 뒤 검토 완료를 표시하세요.");
+            }
+        }
+        let doc = if self.git_history.active {
+            self.git_history.review_data().and_then(|(_, d)| d)
+        } else {
+            self.session()
+                .and_then(|s| s.diffs.get(&path))
+                .map(|d| &d.document)
+        };
+        if let Some(doc) = doc {
+            if doc.binary {
+                return Some(
+                    "바이너리 파일은 텍스트 검토 표시를 지원하지 않습니다. 외부 뷰어에서 확인하세요.",
+                );
+            }
+            if doc.truncated {
+                return Some(
+                    "일부만 표시한 파일입니다. 전체 내용을 확인할 수 있는 파일만 검토 완료로 표시할 수 있습니다.",
+                );
+            }
+        }
+        if self.selected_review().is_none() {
+            return Some("비교할 변경사항이 없습니다. 변경 파일 목록에서 파일을 선택하세요.");
+        }
+        None
+    }
+
+    pub(super) fn show_unreviewed_only(&self) -> bool {
+        self.session().is_some_and(|s| s.unreviewed_only)
+    }
+
+    pub(super) fn next_unreviewed_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source) = self.current_review_source() else {
+            return;
+        };
+        let selected = if self.git_history.active {
+            self.git_history
+                .review_data()
+                .and_then(|(_, doc)| doc.map(|d| d.path.clone()))
+        } else {
+            self.selected()
+        };
+        let files = source.files();
+        let start = files
+            .iter()
+            .position(|f| Some(&f.path) == selected.as_ref())
+            .map_or(0, |i| i + 1);
+        let target = (0..files.len())
+            .map(|i| &files[(start + i) % files.len()].path)
+            .find(|p| self.file_review_state(p) != ReviewState::Reviewed)
+            .cloned();
+        if let Some(path) = target {
+            if self.git_history.active {
+                self.open_review_history_file(path, window, cx);
+            } else {
+                self.open_file(path, true, None, window, cx);
+            }
+        } else {
+            self.status = "모든 변경 파일의 검토가 완료되었습니다.".into();
+            cx.notify();
+        }
+    }
+
+    pub(super) fn review_filter_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let only = self.show_unreviewed_only();
+        div()
+            .flex_none()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .child(
+                Button::new("unreviewed-only")
+                    .label("미검토만")
+                    .ghost()
+                    .small()
+                    .selected(only)
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        if let Some(root) = &app.current
+                            && let Some(s) = app.sessions.get_mut(root)
+                        {
+                            s.unreviewed_only = !s.unreviewed_only;
+                        }
+                        app.file_cursor = 0;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("next-unreviewed")
+                    .label("다음 미검토")
+                    .ghost()
+                    .small()
+                    .disabled(self.loading || self.file_loading || self.git_is_busy())
+                    .on_click(cx.listener(|app, _, w, cx| app.next_unreviewed_file(w, cx))),
+            )
+            .into_any_element()
     }
 
     pub(super) fn reviewed_files_notice(&self, cx: &App) -> Option<AnyElement> {
-        self.reviewed_files.error.as_ref().map(|error| {
-            div()
-                .px_3()
-                .py_1()
-                .flex_none()
-                .text_size(ui_text(11.))
-                .text_color(Palette::new(cx).rgb(RED))
-                .child(error.clone())
-                .into_any_element()
-        })
+        self.reviewed_files
+            .error
+            .as_deref()
+            .or_else(|| self.review_disabled_reason())
+            .map(|error| {
+                div()
+                    .px_3()
+                    .py_1()
+                    .flex_none()
+                    .text_size(ui_text(11.))
+                    .text_color(Palette::new(cx).rgb(RED))
+                    .child(error.to_owned())
+                    .into_any_element()
+            })
     }
 }
 

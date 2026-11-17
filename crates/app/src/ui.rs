@@ -14,6 +14,7 @@ mod syntax;
 mod terminal_dock;
 mod toolbar;
 mod update_workspace;
+mod updates;
 use analysis_feedback::AnalysisFeedback;
 use split_diff::ReviewDiff;
 
@@ -264,6 +265,7 @@ pub struct Pokarak {
     navigation_request: u64,
     git_ui: git_actions::GitUi,
     commit_ui: git_commit::CommitUi,
+    updates: updates::Updates,
     error: Option<String>,
     analysis_feedback: AnalysisFeedback,
     status: String,
@@ -599,6 +601,7 @@ impl Pokarak {
             git_ui: git_actions::GitUi::default(),
             commit_ui,
             update_view,
+            updates: updates::Updates::new(cx),
             error: None,
             analysis_feedback: AnalysisFeedback::default(),
             status: "저장소를 열어 시작하세요".into(),
@@ -3247,6 +3250,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&FindDefinition,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::Definition,None,w,cx)}}))
             .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}}))
             .child(self.render_toolbar(window, cx))
+            .children(self.update_banner(cx))
             .when(self.opening_path.is_none() && self.current.is_some() && !self.git_history.active,|d|d.child(self.render_comparison(cx)))
             .when(self.opening_path.is_none() && self.external_change,|d|d.child(div().h(ui_px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(ui_text(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")

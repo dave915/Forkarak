@@ -194,7 +194,9 @@ impl Pokarak {
                                 .line_height(theme::code_row_height(font))
                                 .children(preview),
                         )
-                        .child(
+                        .children(weak.read_with(cx, |app, cx| app.update_settings(weak.clone(), cx)).ok())
+                )
+                .footer(
                             div()
                                 .flex()
                                 .justify_between()
@@ -215,7 +217,6 @@ impl Pokarak {
                                         .label("닫기")
                                         .on_click(|_, window, cx| window.close_dialog(cx)),
                                 ),
-                        ),
                 )
         });
     }

@@ -281,6 +281,9 @@ impl Pokarak {
     }
 
     pub(super) fn workspace_context(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.git_history.active && !self.inline_commit_active() {
+            return None;
+        }
         let root = self.current.as_ref()?;
         Some(
             div()

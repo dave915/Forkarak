@@ -87,7 +87,7 @@ impl Pokarak {
         )
     }
 
-    fn open_branch_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_branch_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.loading || self.git_is_busy() || window.has_active_dialog(cx) {
             return;
         }

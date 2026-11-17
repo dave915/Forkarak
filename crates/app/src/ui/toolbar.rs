@@ -131,8 +131,14 @@ impl Pokarak {
     fn show_compact_git_menu(&self, window: &mut Window, cx: &mut Context<Self>) {
         use gpui_kit::component::native_menu::NativeMenu;
         let busy = self.loading || self.git_is_busy();
+        let branch = self
+            .session()
+            .is_some_and(|s| matches!(s.saved.comparison, CompareMode::Branch(_)));
         let mut menu = NativeMenu::new();
         for (label, command) in [
+            ("워크트리 선택…  ⌘⇧J", "worktree"),
+            ("브랜치 전체 변경 비교…", "compare"),
+            ("HEAD로 돌아가기", "head"),
             ("브랜치 만들기…", "create"),
             ("체크아웃…", "checkout"),
             ("Merge…", "merge"),
@@ -147,9 +153,10 @@ impl Pokarak {
         ] {
             menu = menu.menu_with_disabled(
                 label,
-                busy && command != "log",
+                (busy && command != "log") || (command == "head" && !branch),
                 Box::new(RunToolbar {
                     root: self.current.clone(),
+                    generation: self.request,
                     command: command.into(),
                 }),
             );
@@ -163,10 +170,24 @@ impl Pokarak {
         w: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.current != action.root || self.opening_path.is_some() {
+        if self.current != action.root
+            || self.request != action.generation
+            || self.opening_path.is_some()
+        {
             return;
         }
         match action.command.as_str() {
+            "worktree" => self.open_worktree_picker(w, cx),
+            "compare" => self.open_branch_review(w, cx),
+            "head" => {
+                if self
+                    .session()
+                    .is_some_and(|s| matches!(s.saved.comparison, CompareMode::Branch(_)))
+                    && let Some(root) = self.current.clone()
+                {
+                    self.apply_branch_review(root, CompareMode::Uncommitted, w, cx);
+                }
+            }
             "create" => self.load_git_page(Some(Page::Create), w, cx),
             "checkout" => self.load_git_page(Some(Page::Checkout), w, cx),
             "merge" => self.load_git_page(Some(Page::Merge), w, cx),
@@ -184,8 +205,12 @@ impl Pokarak {
 
     fn git_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.loading || self.git_is_busy();
+        let branch = self
+            .session()
+            .is_some_and(|s| matches!(s.saved.comparison, CompareMode::Branch(_)));
         let weak = cx.entity().downgrade();
         let root = self.current.clone();
+        let generation = self.request;
         let palette = Palette::new(cx);
         let log_weak = weak.clone();
         let log_root = root.clone();
@@ -230,6 +255,27 @@ impl Pokarak {
                                         }
                                     });
                                 }));
+                        }
+                        for (label, command) in [
+                            ("워크트리 선택…  ⌘⇧J", "worktree"),
+                            ("브랜치 전체 변경 비교…", "compare"),
+                            ("HEAD로 돌아가기", "head"),
+                        ] {
+                            let weak = weak.clone();
+                            let action = RunToolbar {
+                                root: root.clone(),
+                                generation,
+                                command: command.into(),
+                            };
+                            menu = menu.item(
+                                PopupMenuItem::new(label)
+                                    .disabled(command == "head" && !branch)
+                                    .on_click(move |_, w, cx| {
+                                        let _ = weak.update(cx, |app, cx| {
+                                            app.run_toolbar_command(&action, w, cx);
+                                        });
+                                    }),
+                            );
                         }
                         menu
                     }),
@@ -477,5 +523,6 @@ pub(super) fn toolbar_icon(id: &'static str, icon: IconName, name: &'static str)
 #[action(namespace = forkarak_toolbar, no_json)]
 pub(super) struct RunToolbar {
     root: Option<PathBuf>,
+    generation: u64,
     command: String,
 }

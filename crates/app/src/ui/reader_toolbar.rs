@@ -67,6 +67,9 @@ pub(super) enum Command {
     CompareDraft,
     DiscardDraft,
     CopyPath,
+    Worktree,
+    CompareBranch,
+    CompareHead,
 }
 #[derive(Action, Clone, Debug, PartialEq, Deserialize)]
 #[action(namespace = forkarak_reader, no_json)]
@@ -212,6 +215,14 @@ impl Pokarak {
                     .display()
                     .to_string(),
             )),
+            Worktree => self.open_worktree_picker(window, cx),
+            CompareBranch => self.open_branch_review(window, cx),
+            CompareHead => self.apply_branch_review(
+                action.identity.root.clone(),
+                CompareMode::Uncommitted,
+                window,
+                cx,
+            ),
         }
     }
 
@@ -395,6 +406,31 @@ impl Pokarak {
             self.selected_review_status() == "reviewed",
         );
         if !view.history {
+            let branch = self
+                .session()
+                .is_some_and(|s| matches!(s.saved.comparison, CompareMode::Branch(_)));
+            let mut workspace = identity.item(
+                NativeMenu::new(),
+                "워크트리 선택…  ⌘⇧J",
+                Command::Worktree,
+                busy,
+                false,
+            );
+            workspace = identity.item(
+                workspace,
+                "브랜치 전체 변경 비교…",
+                Command::CompareBranch,
+                busy,
+                branch,
+            );
+            workspace = identity.item(
+                workspace,
+                "HEAD로 돌아가기",
+                Command::CompareHead,
+                busy || !branch,
+                false,
+            );
+            menu = menu.submenu("워크트리 · 비교", workspace);
             menu = menu.submenu("코드 지원", self.code_support_menu(&identity, cx));
             menu = menu.submenu(
                 "편집 · 파일",
@@ -520,7 +556,38 @@ impl Pokarak {
                     .and_then(|d| self.diff_reading_controls(d, view.history, cx)),
             );
         }
-        bar = bar.child(div().flex_1().min_w_0());
+        let comparison = !view.history
+            && (!view.code
+                || self
+                    .session()
+                    .is_some_and(|s| matches!(s.saved.comparison, CompareMode::Branch(_))));
+        // This flexible slot gives controls priority even in a 160px reader.
+        // The full applied baseline stays available on hover when truncated.
+        bar = bar.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .when(comparison, |slot| {
+                    let label = self.applied_comparison_label();
+                    slot.child(
+                        div()
+                            .id("reader-comparison-label")
+                            .min_w_0()
+                            .text_size(ui_text(11.))
+                            .text_color(Palette::new(cx).rgb(MUTED))
+                            .text_ellipsis()
+                            .tooltip({
+                                let label = label.clone();
+                                move |w, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(label.clone())
+                                        .build(w, cx)
+                                }
+                            })
+                            .child(label),
+                    )
+                }),
+        );
         if view.code
             && !view.history
             && (!view.deleted
@@ -539,13 +606,17 @@ impl Pokarak {
             }
             bar = bar.children(self.inline_blame_controls(cx));
         }
+        let mut more_tooltip = if !view.code && self.hides_diff_whitespace() {
+            "파일 명령 더 보기 · 공백 변경 숨김 적용 중".to_string()
+        } else {
+            "파일 명령 더 보기 · 보기, 이력, 코드 지원, 편집, 파일 관리".to_string()
+        };
+        if comparison {
+            more_tooltip.push_str(&format!(" · {}", self.applied_comparison_label()));
+        }
         bar.child(
             toolbar::toolbar_icon("reader-more", IconName::Ellipsis, "파일 명령 더 보기")
-                .tooltip(if !view.code && self.hides_diff_whitespace() {
-                    "파일 명령 더 보기 · 공백 변경 숨김 적용 중"
-                } else {
-                    "파일 명령 더 보기 · 보기, 이력, 코드 지원, 편집, 파일 관리"
-                })
+                .tooltip(more_tooltip)
                 .selected(!view.code && self.hides_diff_whitespace())
                 .disabled(!menu_available)
                 .on_click(cx.listener(move |app, _, w, cx| open_more(app, w, cx))),

@@ -12,6 +12,7 @@ pub mod commit_actions;
 mod file_save;
 pub mod files;
 pub mod history_actions;
+pub mod ignore;
 pub mod integration;
 pub mod preview;
 pub mod recovery;
@@ -1068,6 +1069,10 @@ mod tests {
         include!("operations/tags_tests.rs");
     }
 
+    mod ignore_actions {
+        use super::*;
+        include!("operations/ignore_tests.rs");
+    }
     mod repository_actions {
         use super::*;
         include!("operations/repository_tests.rs");

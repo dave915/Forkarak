@@ -473,6 +473,16 @@ fn worktree_inventory_handles_linked_detached_locked_and_prunable() {
     ]);
     fs::write(linked.join("untracked.rs"), "linked\n").unwrap();
     fs::write(detached.join("src/code.rs"), "detached\n").unwrap();
+    let inventory = pokarak_core::worktree_inventory(&linked).unwrap();
+    assert_eq!(inventory.len(), 3);
+    assert!(
+        inventory
+            .iter()
+            .any(|tree| tree.is_locked && tree.branch == "linked")
+    );
+    assert_eq!(pokarak_core::worktree_change_count(&repo.root).unwrap(), 0);
+    assert_eq!(pokarak_core::worktree_change_count(&linked).unwrap(), 1);
+    assert_eq!(pokarak_core::worktree_change_count(&detached).unwrap(), 1);
     let snap = snapshot(&linked, &CompareMode::Uncommitted).unwrap();
     assert_eq!(snap.worktrees.len(), 3);
     assert!(!snap.worktree.is_main);

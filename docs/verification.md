@@ -183,3 +183,37 @@ Validated the Apple Silicon debug bundle built from `9233125`. The packaged exec
 - The native 940×580 window showed the active project name, close button, Graph/Code selector, Stage and Git actions on one line. At 1440×900 the packaged app opened the project in the graph. A compact-window check caught an icon-only project tab and prompted a fix before final packaging.
 - Native fixture checks opened split diff, file history and line blame. Clicking one added line in Stage placed only that line in the Git index while preserving the working file. Native Merge produced the two confirmed parents. Native Rebase replayed the current branch onto the chosen target and left a clean worktree with both sets of edits.
 - A GPUI test window also exercised line and hunk staging/unstaging, index and working-file split views, historical diff selection, and creating/removing a linked worktree while retaining its branch. Git write checks used temporary local fixture repositories.
+
+## Automatic refresh and review workflow — 2026-11-17
+
+The integrated application source checked in this pass is `cd275512c968e92a2d5de8eeff65d34dd0d4a2fc`. The documentation commit adds no application code. Tests and builds used the existing shared target cache without removing it; long commands ran through `hc run --bg` and `hc wait`.
+
+| Final automated check | Result |
+| --- | --- |
+| App unit/fixture tests, including CLI and actual PTY fixtures | 120 passed |
+| Core unit tests | 87 passed |
+| Core real Git backend fixtures | 26 passed |
+| Navigation unit tests | 10 passed |
+| Navigation mock stdio fixtures | 26 passed |
+| **Workspace total** | **269 passed, zero failures** |
+| Opt-in real language servers | 7 JVM and 1 TypeScript test ignored; not claimed in this pass |
+| Workspace Clippy, all targets, mock-server feature, `-D warnings` | Passed |
+| Optimized Apple Silicon application build | Passed |
+
+Commands used the workspace manifest explicitly and `/tmp` as the test process working directory. Final local logs are `/tmp/forkarak-improvements/workspace-tests.log`, `workspace-clippy.log`, `native-release-build.log` and `final-verification.json`. They are ephemeral receipts; the counts and source revision above are the durable record. A terminal fixture readiness race found during verification was fixed by waiting for a complete numeric PID matching the owned shell; production terminal behavior and wait intervals were unchanged. The final workspace rerun passed.
+
+Real authored repositories verify unreadable-sibling error isolation, available versus unknown dirty counts, canonical linked-worktree Git/common watch paths, active-only snapshots, and unchanged read-only/filter guards. The graph refresh fixture adds 120 commits and verifies that an old visible anchor moves from row 40 to row 160 while remaining in the selected branch scope. State tests cover queued events, quiet/burst debounce, stale requests, failed-install retries on a later event, and pending split restoration at the actual font row height. File-review tests change bytes while restoring file size/mtime and verify content-based invalidation, worktree/baseline isolation and persistence failures.
+
+Native checks used isolated debug bundles, a separate bundle identifier and session directory, and authored temporary repositories only. The final source was exercised at 1440×900 and 940×580; the compact window retained the two-row primary toolbar and Diff controls. Earlier integrated builds exercised the unchanged branch and draft features before the final combined smoke checks.
+
+- An external metadata-only commit in a linked worktree refreshed the registered HEAD automatically while retaining the selected immutable historical commit/file. External working-file edits refreshed the reader with the same selected file, cursor and scroll: line 39, column 0 and vertical offset `-151.5` remained exact.
+- Typing into file search after an external refresh continued in search (`invoice` became `invoicex`), establishing that background reload did not move keyboard focus into the editor.
+- An explicit `main` comparison included committed branch changes. An invalid base retained the existing applied comparison and selected file; returning to HEAD restored the default comparison without checkout.
+- A stale Save was rejected, preserving both the external disk bytes and the retained draft. The original/draft/disk dialog applied an edited result only to the draft, rebased its expected bytes to the freshly validated disk, and left the file unchanged until explicit Save. Save then wrote the result and cleared the retained draft.
+- A reviewed file remained reviewed after an unrelated file edit and after a real application restart. Changing that reviewed file removed its mark after verification. Marks were persisted outside the repository.
+- Unified and synchronized split diffs displayed stronger word-level tints. Previous/next buttons moved unified rows `2 → 45 → 2`. After an explicit Code-to-Diff switch, Option-Down reached row 45 and Option-Up returned to row 2.
+- A whitespace-only file showed the explicit filtered-empty message with hunk buttons disabled. The packaged/raw CLI diff and working bytes still contained the complete whitespace change. Unit fixtures verify that filtered review rows do not change raw patches or partial-stage coordinates; this pass did not repeat native staging writes.
+
+The native smoke run caught a graph badge that combined a custom hover listener with its managed tooltip on one Button. The custom listener now belongs to the existing context wrapper, and subsequent graph startup/reference rendering passed. It also caught the transient 32px refresh notice resizing the reader and explicit Diff switches leaving focus in a hidden editor; both were fixed and retested before the final build.
+
+The local deliverable is `dist/Forkarak.app`, packaged from the optimized executable. Strict deep code-signature verification passed, architecture is `arm64`, dynamic dependencies are system libraries/frameworks only, and the packaged icon matches the existing icon asset. The packaged executable SHA-256 is `dec20fa5d718063dcbd026e429becaa7e64d69f7bbc3584e530c764c08e840e8`. Packaging uses the existing ad-hoc signing path. No release was published, no user repository was used for write/network-operation tests, and no language-analysis trust was granted by refresh or review.

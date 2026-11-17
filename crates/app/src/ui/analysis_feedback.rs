@@ -70,6 +70,8 @@ fn error_summary(raw: &str) -> String {
     let text = raw.to_lowercase();
     let summary = if missing_kotlin_server(raw) {
         "Kotlin 언어 서버를 찾지 못했습니다. 설치하거나 실행 경로를 설정한 뒤 다시 시도하세요."
+    } else if text.contains("cannot run program \"mvn\"") && text.contains("no such file") {
+        "Maven 프로젝트를 분석하려면 mvn이 필요합니다. Maven 설치와 실행 경로를 확인하세요."
     } else if text.contains("nobuildsystemfound") {
         "Maven/Gradle 프로젝트 설정이 없습니다. 소스 상위 폴더의 pom.xml 또는 Gradle 설정을 확인하세요."
     } else if [
@@ -349,6 +351,9 @@ mod tests {
         assert!(error_summary(raw).contains("Maven/Gradle"));
         assert!(!error_summary(raw).contains("JDK"));
         assert!(!error_summary("Project import failed: dependencies").contains("JDK"));
+        assert!(
+            error_summary(r#"Cannot run program "mvn": No such file or directory"#).contains("mvn")
+        );
         assert!(
             !error_summary("Project import failed: source class file version 61").contains("JDK")
         );

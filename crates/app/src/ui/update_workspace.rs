@@ -3,6 +3,9 @@ use crate::prefs::{UpdateView, UpdateWorkspace};
 
 impl Pokarak {
     pub(super) fn remember_update_workspace(&mut self, cx: &App) -> Result<(), String> {
+        if !self.retain_code_drafts(cx) {
+            return Err("편집 초안을 보관할 수 없어 재시작을 중단했습니다.".into());
+        }
         self.remember_view(cx);
         self.prefs.last_root = self.current.clone();
         self.prefs.open_projects = self.projects.clone();

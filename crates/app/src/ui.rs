@@ -1,5 +1,6 @@
 mod analysis_feedback;
 mod cli_control;
+mod code_edit;
 mod file_icons;
 mod file_inspector;
 mod git_actions;
@@ -112,7 +113,8 @@ actions!(
         FindText,
         FindReferences,
         FindDefinition,
-        ToggleCode
+        ToggleCode,
+        SaveCodeFile
     ]
 );
 
@@ -131,6 +133,7 @@ pub fn bind_keys(cx: &mut App) {
             #[cfg(target_os = "macos")]
             MenuItem::action("워크트리 터미널 표시 / 숨기기", OpenWorktreeTerminal),
             MenuItem::action("새로고침", Refresh),
+            MenuItem::action("파일 저장", SaveCodeFile),
             MenuItem::action("Stash / 충돌 해결…", OpenGitWorkflow),
             MenuItem::separator(),
             MenuItem::action("파일 닫기", CloseFile),
@@ -172,6 +175,7 @@ pub fn bind_keys(cx: &mut App) {
         #[cfg(target_os = "macos")]
         KeyBinding::new("ctrl-`", OpenWorktreeTerminal, None),
         KeyBinding::new("cmd-r", Refresh, None),
+        KeyBinding::new("cmd-s", SaveCodeFile, None),
         KeyBinding::new("cmd-[", Back, None),
         KeyBinding::new("cmd-]", Forward, None),
         KeyBinding::new("cmd-p", FindFile, None),
@@ -239,6 +243,7 @@ struct FileRow {
 }
 
 pub struct Pokarak {
+    code_edits: code_edit::CodeEdits,
     git_history: git_history::HistoryUi,
     workflow: git_workflow::WorkflowUi,
     focus: FocusHandle,
@@ -409,6 +414,9 @@ impl Pokarak {
     }
 
     fn close_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.block_code_close(cx) {
+            return;
+        }
         self.capture_positions(cx);
         self.file_request += 1;
         self.navigation_request += 1;
@@ -439,6 +447,9 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.block_code_close(cx) {
+            return;
+        }
         self.persist(cx);
         let Some(index) = self.projects.iter().position(|p| p.root == project_root) else {
             return;
@@ -503,6 +514,9 @@ impl Pokarak {
     }
 
     fn close_all_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.block_code_close(cx) {
+            return;
+        }
         self.persist(cx);
         self.reset_active(cx);
         self.projects.clear();
@@ -576,6 +590,7 @@ impl Pokarak {
             }
         }));
         let mut this = Self {
+            code_edits: code_edit::CodeEdits::load(),
             workflow: git_workflow::WorkflowUi::default(),
             git_history: git_history::HistoryUi::default(),
             focus: cx.focus_handle(),
@@ -660,6 +675,7 @@ impl Pokarak {
                             && !this.count_pending
                             && this.changed.swap(false, Ordering::Relaxed)
                         {
+                            this.check_code_disk_changes(cx);
                             this.check_changes(cx);
                         }
                     })
@@ -773,6 +789,7 @@ impl Pokarak {
     }
 
     fn persist(&mut self, cx: &App) {
+        self.retain_code_drafts(cx);
         self.remember_view(cx);
         if self.current.is_some() || self.opening_path.is_none() {
             self.prefs.last_root = self.current.clone();
@@ -1167,18 +1184,21 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.capture_code_buffers(cx);
         self.inventory = snapshot.worktrees.clone();
         self.change_count = Some(snapshot.worktree.changed_files);
         self.graph_fingerprint = None;
         self.count_pending = false;
         let root = self.current.clone().unwrap();
         let session = self.sessions.get_mut(&root).unwrap();
+        let code_edits = &self.code_edits;
         let selection = session
             .saved
             .selected
             .clone()
             .filter(|p| {
                 p.is_absolute()
+                    || code_edits.dirty(&root, p)
                     || snapshot.files.contains(p)
                     || snapshot.changes.iter().any(|f| &f.path == p)
             })
@@ -1190,7 +1210,9 @@ impl Pokarak {
         }
         session.saved.selected = selection.clone();
         session.saved.tabs.retain(|path| {
-            if path.is_absolute() {
+            if code_edits.dirty(&root, path) {
+                true
+            } else if path.is_absolute() {
                 path.is_file()
             } else {
                 snapshot.files.contains(path) || snapshot.changes.iter().any(|f| &f.path == path)
@@ -1210,6 +1232,7 @@ impl Pokarak {
         }
         self.sync_git_history(window, cx);
         self.restore_git_completion(cx);
+        self.finish_code_save_commit(window, cx);
     }
 
     fn open_file(
@@ -1295,44 +1318,59 @@ impl Pokarak {
         self.error = None;
         let load_root = root.clone();
         let load_path = path.clone();
+        self.capture_code_buffers(cx);
+        let retained = self.code_edits.retained_text(&root, &path);
+        let live = retained.is_some()
+            || !matches!(file.as_ref().map(|f| &f.status), Some(FileStatus::Deleted));
         let task = cx.background_spawn(async move {
-            if let Some(expected) = target_revision {
-                anyhow::ensure!(
-                    file_revision(&load_root.join(&load_path)) == Some(expected),
-                    "탐색 결과의 파일이 변경되었습니다. 다시 검색하세요."
-                );
-            }
-            let diff = file
-                .as_ref()
-                .map(|file| pokarak_core::diff(&load_root, file, &mode))
-                .transpose()?;
-            let text = if let Some(diff) = &diff {
-                if diff.binary {
-                    String::new()
-                } else if diff.new_text.is_empty()
-                    && matches!(file.as_ref().map(|f| &f.status), Some(FileStatus::Deleted))
-                {
-                    diff.old_text.clone()
-                } else {
-                    diff.new_text.clone()
+            let result = (|| {
+                if let Some(expected) = target_revision {
+                    anyhow::ensure!(
+                        file_revision(&load_root.join(&load_path)) == Some(expected),
+                        "탐색 결과의 파일이 변경되었습니다. 다시 검색하세요."
+                    );
                 }
-            } else if load_path.is_absolute() && !load_path.starts_with(&load_root) {
-                let metadata = std::fs::metadata(&load_path)?;
-                anyhow::ensure!(
-                    metadata.len() < 4 * 1024 * 1024,
-                    "외부 소스가 4MB를 초과합니다"
-                );
-                std::fs::read_to_string(&load_path)?
-            } else {
-                pokarak_core::read_file(&load_root, &load_path)?
-            };
-            if let Some(expected) = target_revision {
-                anyhow::ensure!(
-                    file_revision(&load_root.join(&load_path)) == Some(expected),
-                    "파일을 여는 중 내용이 변경되었습니다. 다시 검색하세요."
-                );
-            }
-            anyhow::Ok((text, diff.map(split_diff::PreparedDiff::new)))
+                let diff = file
+                    .as_ref()
+                    .map(|file| pokarak_core::diff(&load_root, file, &mode))
+                    .transpose()?;
+                let deleted = matches!(file.as_ref().map(|f| &f.status), Some(FileStatus::Deleted));
+                let binary = diff.as_ref().is_some_and(|diff| diff.binary);
+                let text = if let Some(diff) = &diff {
+                    if diff.binary {
+                        String::new()
+                    } else if deleted {
+                        diff.old_text.clone()
+                    } else {
+                        pokarak_core::read_file(&load_root, &load_path)?
+                    }
+                } else if load_path.is_absolute() && !load_path.starts_with(&load_root) {
+                    let metadata = std::fs::metadata(&load_path)?;
+                    anyhow::ensure!(
+                        metadata.len() < 4 * 1024 * 1024,
+                        "외부 소스가 4MB를 초과합니다"
+                    );
+                    std::fs::read_to_string(&load_path)?
+                } else {
+                    pokarak_core::read_file(&load_root, &load_path)?
+                };
+                if let Some(expected) = target_revision {
+                    anyhow::ensure!(
+                        file_revision(&load_root.join(&load_path)) == Some(expected),
+                        "파일을 여는 중 내용이 변경되었습니다. 다시 검색하세요."
+                    );
+                }
+                anyhow::Ok((
+                    text,
+                    diff.map(split_diff::PreparedDiff::new),
+                    !deleted,
+                    !binary,
+                ))
+            })();
+            result.or_else(|error| match retained {
+                Some(text) => Ok((text, None, false, true)),
+                None => Err(error),
+            })
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
@@ -1341,8 +1379,25 @@ impl Pokarak {
                     return;
                 }
                 this.file_loading = false;
+                this.capture_code_buffers(cx);
+                // A user may have typed after this request began, including
+                // after a refresh that now finds the file missing/unreadable.
+                let result =
+                    result.or_else(|error| match this.code_edits.retained_text(&root, &path) {
+                        Some(text) => Ok((text, None, false, true)),
+                        None => Err(error),
+                    });
                 match result {
-                    Ok((text, diff)) => {
+                    Ok((text, diff, available, text_file)) => {
+                        let has_draft = this.code_edits.dirty(&root, &path);
+                        let text = this.prepare_code_buffer(
+                            &root,
+                            &path,
+                            text,
+                            available,
+                            (live && text_file) || has_draft,
+                        );
+                        let editing = this.code_edits.editing(&root, &path);
                         let session = this.sessions.get_mut(&root).unwrap();
                         if let Some(diff) = diff {
                             session.diffs.insert(path.clone(), diff.into());
@@ -1361,7 +1416,7 @@ impl Pokarak {
                             })
                             .clone();
                         editor.update(cx, |editor, cx| {
-                            editor.set_readonly(true, cx);
+                            editor.set_readonly(!editing, cx);
                             if editor.value().as_ref() != text {
                                 editor.set_value(text, window, cx);
                             }
@@ -1406,7 +1461,9 @@ impl Pokarak {
                         session
                             .scroll
                             .scroll_to_item_strict(diff_row, ScrollStrategy::Top);
-                        if !session.saved.code {
+                        let code = session.saved.code;
+                        this.bind_code_editor(&root, &path, &editor, cx);
+                        if !code {
                             this.focus.focus(window, cx);
                         }
                         this.status = if this.navigation.is_some() {
@@ -1567,6 +1624,13 @@ impl Pokarak {
         let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
             return;
         };
+        if self.code_edits.dirty(&root, &path) {
+            self.status =
+                "심볼 탐색 전에 파일을 저장하세요. 미저장 초안을 디스크 소스로 탐색하지 않습니다."
+                    .into();
+            cx.notify();
+            return;
+        }
         let current_source = self.session().map(|s| s.saved.code).unwrap_or(false)
             && !self
                 .snapshot()
@@ -2597,6 +2661,15 @@ impl Pokarak {
             .and_then(|s| s.changes.iter().find(|f| &f.path == path))
             .map(|f| f.status == FileStatus::Deleted)
             .unwrap_or(false);
+        let dirty = self
+            .current
+            .as_ref()
+            .is_some_and(|root| self.code_edits.dirty(root, path));
+        let editing = self
+            .current
+            .as_ref()
+            .is_some_and(|root| self.code_edits.editing(root, path))
+            && (!deleted || dirty);
         let mut tabs = div()
             .id("file-tabs")
             .flex()
@@ -2617,10 +2690,19 @@ impl Pokarak {
                         file_icons::file_button(
                             ("tab", i),
                             tab,
-                            tab.file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string(),
+                            format!(
+                                "{}{}",
+                                if self
+                                    .current
+                                    .as_ref()
+                                    .is_some_and(|root| self.code_edits.dirty(root, tab))
+                                {
+                                    "● "
+                                } else {
+                                    ""
+                                },
+                                tab.file_name().unwrap_or_default().to_string_lossy()
+                            ),
                             cx,
                         )
                         .ghost()
@@ -2722,7 +2804,7 @@ impl Pokarak {
                         .label("사용처")
                         .ghost()
                         .small()
-                        .disabled(!code || deleted || self.navigating)
+                        .disabled(!code || deleted || dirty || self.navigating)
                         .tooltip("선택한 심볼의 사용처  ⌥F7")
                         .on_click(cx.listener(|this, _, w, cx| {
                             this.request_navigation(NavigationKind::References, None, w, cx)
@@ -2735,13 +2817,13 @@ impl Pokarak {
                         .label("구현체")
                         .ghost()
                         .small()
-                        .disabled(!code || deleted || self.navigating)
+                        .disabled(!code || deleted || dirty || self.navigating)
                         .on_click(cx.listener(|this, _, w, cx| {
                             this.request_navigation(NavigationKind::Implementation, None, w, cx)
                         })),
                 )
             });
-        let content = if diff.map(|d| d.binary).unwrap_or(false) {
+        let content = if diff.map(|d| d.binary).unwrap_or(false) && !dirty {
             div()
                 .p_6()
                 .text_color(palette.rgb(MUTED))
@@ -2755,7 +2837,7 @@ impl Pokarak {
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseUpEvent, window, cx| {
-                            if event.modifiers.platform && !deleted {
+                            if event.modifiers.platform && !deleted && !dirty {
                                 this.request_clicked_definition(
                                     &clicked_editor,
                                     event.position,
@@ -2767,7 +2849,7 @@ impl Pokarak {
                     )
                     .child(
                         Editor::new(&editor)
-                            .readonly(true)
+                            .readonly(!editing)
                             .bordered(false)
                             .h(relative(1.)),
                     )
@@ -2897,7 +2979,9 @@ impl Pokarak {
             .overflow_hidden()
             .child(tabs)
             .child(head)
-            .when(deleted && code, |d| {
+            .when(code, |d| d.child(self.code_edit_controls(path, cx)))
+            .children(self.code_draft_notice(path, cx))
+            .when(deleted && code && !dirty, |d| {
                 d.child(
                     div()
                         .px_3()
@@ -3246,6 +3330,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&NextProject,w,cx|this.cycle_project(true,w,cx)))
             .on_action(cx.listener(|this,_:&PreviousProject,w,cx|this.cycle_project(false,w,cx)))
             .on_action(cx.listener(|this,_:&Refresh,w,cx|this.refresh(w,cx)))
+            .on_action(cx.listener(|this,_:&SaveCodeFile,w,cx|this.save_code_file(false,w,cx)))
             .on_action(cx.listener(|this,_:&Back,w,cx|{if !this.git_history.active {this.navigate_history(true,w,cx)}}))
             .on_action(cx.listener(|this,_:&Forward,w,cx|{if !this.git_history.active {this.navigate_history(false,w,cx)}}))
             .on_action(cx.listener(|this,_:&FindFile,w,cx|this.focus_search(false,w,cx)))
@@ -3255,6 +3340,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}}))
             .child(self.render_toolbar(window, cx))
             .children(self.update_banner(cx))
+            .children(self.code_drafts_banner(cx))
             .when(self.opening_path.is_none() && self.current.is_some() && !self.git_history.active,|d|d.child(self.render_comparison(cx)))
             .when(self.opening_path.is_none() && self.external_change,|d|d.child(div().h(ui_px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(ui_text(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")

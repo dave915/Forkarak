@@ -55,125 +55,11 @@ impl Pokarak {
         let ui = &self.git_history;
         let busy = history_disabled(self);
         let weak = cx.entity().downgrade();
-        let graph_width = (ui
-            .entries
-            .iter()
-            .map(|entry| entry.graph.columns)
-            .max()
-            .unwrap_or(1)
-            * 14
-            + 20)
-            .max(72) as f32;
-        let entries = ui.entries.clone();
-        let selected = ui.detail.as_ref().map(|detail| detail.commit.oid.clone());
-        let row_target = weak.clone();
-        let list = uniform_list("history-commits", entries.len(), move |range, _, _| {
-            range
-                .map(|index| {
-                    let entry = &entries[index];
-                    let commit = &entry.commit;
-                    let oid = commit.oid.clone();
-                    let target = row_target.clone();
-                    let label = format!(
-                        "{}  {}  {}  {}  {}",
-                        short(&oid),
-                        visible(&commit.subject),
-                        visible(&commit.author),
-                        commit.date,
-                        commit.refs.join(", ")
-                    );
-                    let mut message = div().flex_1().min_w_0().flex().items_center().gap_2();
-                    for reference in commit.refs.iter().take(2) {
-                        let name = reference
-                            .strip_prefix("refs/heads/")
-                            .or_else(|| reference.strip_prefix("refs/remotes/"))
-                            .or_else(|| reference.strip_prefix("refs/tags/"))
-                            .unwrap_or(reference)
-                            .to_owned();
-                        message = message.child(
-                            div()
-                                .flex_none()
-                                .max_w(px(175.))
-                                .px_1()
-                                .rounded(px(3.))
-                                .text_size(px(10.))
-                                .bg(palette.rgb(0x314353))
-                                .text_color(palette.rgb(BLUE))
-                                .text_ellipsis()
-                                .child(name),
-                        );
-                    }
-                    message = message.child(
-                        div()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .child(visible(&commit.subject)),
-                    );
-                    Button::new(("history-row", index))
-                        .ghost()
-                        .small()
-                        .w_full()
-                        .h(px(30.))
-                        .px_0()
-                        .justify_start()
-                        .selected(selected.as_ref() == Some(&oid))
-                        .disabled(busy)
-                        .tooltip(label.clone())
-                        .accessibility_label(label)
-                        .child(
-                            div()
-                                .w_full()
-                                .min_w_0()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(graph_view(entry.graph.clone(), graph_width, palette))
-                                .child(message)
-                                .child(
-                                    div()
-                                        .w(px(110.))
-                                        .flex_none()
-                                        .text_size(px(11.))
-                                        .text_color(palette.rgb(MUTED))
-                                        .text_ellipsis()
-                                        .child(visible(&commit.author)),
-                                )
-                                .child(
-                                    div()
-                                        .w(px(85.))
-                                        .flex_none()
-                                        .text_size(px(11.))
-                                        .text_color(palette.rgb(MUTED))
-                                        .child(
-                                            commit
-                                                .date
-                                                .get(..10)
-                                                .unwrap_or(&commit.date)
-                                                .to_owned(),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .w(px(98.))
-                                        .flex_none()
-                                        .text_size(px(11.))
-                                        .font_family("JetBrains Mono")
-                                        .text_color(palette.rgb(MUTED))
-                                        .child(short(&oid).to_owned()),
-                                ),
-                        )
-                        .on_click(move |_, window, cx| {
-                            let _ = target.update(cx, |app, cx| {
-                                app.load_history_detail(oid.clone(), 0, window, cx)
-                            });
-                        })
-                })
-                .collect::<Vec<_>>()
-        })
-        .track_scroll(&ui.scroll)
-        .flex_1()
-        .min_h_0()
-        .w_full();
+        let columns = super::rows::Columns::new(&ui.entries, window);
+        let header = columns.header(palette);
+        let list = self.commit_rows(columns, cx);
+        let saved = self.session().map(|session| &session.saved);
+        let collapsed = saved.is_some_and(|view| view.graph_detail_collapsed);
         let count = self
             .snapshot()
             .map(|snapshot| snapshot.worktree.changed_files)
@@ -214,6 +100,20 @@ impl Pokarak {
                     .child(
                         history_button(
                             &weak,
+                            "toggle-graph-detail",
+                            if collapsed {
+                                "상세 펼치기"
+                            } else {
+                                "상세 접기"
+                            },
+                            false,
+                            move |app, _, cx| app.set_graph_detail_collapsed(!collapsed, cx),
+                        )
+                        .ghost(),
+                    )
+                    .child(
+                        history_button(
+                            &weak,
                             "history-reload",
                             "새로고침",
                             busy,
@@ -247,23 +147,7 @@ impl Pokarak {
                         app.compare(false, window, cx);
                     })),
             )
-            .child(
-                div()
-                    .h(px(26.))
-                    .flex_none()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .bg(palette.rgb(SIDE))
-                    .text_size(px(11.))
-                    .text_color(palette.rgb(MUTED))
-                    .child(div().w(px(graph_width)).flex_none().child("그래프"))
-                    .child(div().flex_1().child("커밋 메시지 / 브랜치"))
-                    .child(div().w(px(110.)).flex_none().child("작성자"))
-                    .child(div().w(px(85.)).flex_none().child("날짜"))
-                    .child(div().w(px(98.)).flex_none().child("커밋")),
-            )
+            .child(header)
             .child(if ui.entries.is_empty() {
                 div()
                     .flex_1()
@@ -293,10 +177,33 @@ impl Pokarak {
                         .child(history_error(error)),
                 )
             });
+        if collapsed {
+            return graph.into_any_element();
+        }
+        let graph_height = saved
+            .and_then(|s| s.graph_height)
+            .map(px)
+            .unwrap_or(window.viewport_size().height * 0.38)
+            .clamp(
+                px(150.),
+                (window.viewport_size().height - px(245.)).max(px(150.)),
+            );
+        let resize = weak.clone();
         v_resizable("graph-detail-panes")
+            .on_resize(move |state, _, cx| {
+                if let Some(height) = state.read(cx).sizes().first().copied() {
+                    let _ = resize.update(cx, |app, _| {
+                        if let Some(session) =
+                            app.current.as_ref().and_then(|r| app.sessions.get_mut(r))
+                        {
+                            session.saved.graph_height = Some(height.into());
+                        }
+                    });
+                }
+            })
             .child(
                 resizable_panel()
-                    .size((window.viewport_size().height * 0.38).clamp(px(185.), px(330.)))
+                    .size(graph_height)
                     .size_range(px(150.)..px(1200.))
                     .child(graph),
             )
@@ -306,6 +213,13 @@ impl Pokarak {
                     .child(self.render_graph_detail(cx)),
             )
             .into_any_element()
+    }
+
+    pub(super) fn set_graph_detail_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if let Some(session) = self.current.as_ref().and_then(|r| self.sessions.get_mut(r)) {
+            session.saved.graph_detail_collapsed = collapsed;
+        }
+        cx.notify();
     }
 
     fn render_graph_detail(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -326,8 +240,14 @@ impl Pokarak {
                 })
                 .into_any_element();
         };
+        let files_width = self
+            .session()
+            .and_then(|s| s.saved.graph_files_width)
+            .map(px)
+            .unwrap_or(px(230.));
         let busy = history_disabled(self);
         let weak = cx.entity().downgrade();
+        let resize = weak.clone();
         let binary = ui.document.as_ref().is_some_and(|doc| doc.binary);
         let merge = detail.commit.parents.len() > 1;
         let mut parents = div().flex().items_center().gap_1();
@@ -527,7 +447,16 @@ impl Pokarak {
             .child(div().h(px(26.)).flex_none().px_3().flex().items_center().text_size(px(11.)).text_color(palette.rgb(MUTED))
                 .child(format!("{}  ·  {}  ·  {}", short(&detail.commit.oid), visible(&detail.commit.author), detail.commit.date)))
             .child(div().flex_1().min_h_0().child(h_resizable("history-file-panes")
-                .child(resizable_panel().size(px(230.)).size_range(px(170.)..px(500.)).child(file_pane))
+                .on_resize(move |state,_,cx| {
+                    if let Some(width) = state.read(cx).sizes().first().copied() {
+                        let _=resize.update(cx, |app,_| {
+                            if let Some(session)=app.current.as_ref().and_then(|r|app.sessions.get_mut(r)) {
+                                session.saved.graph_files_width=Some(width.into());
+                            }
+                        });
+                    }
+                })
+                .child(resizable_panel().size(files_width).size_range(px(170.)..px(500.)).child(file_pane))
                 .child(resizable_panel().child(reader))))
             .child(div().h(px(24.)).flex_none().px_3().flex().items_center().text_size(px(10.)).text_color(palette.rgb(MUTED))
                 .child(if ui.document.as_ref().is_some_and(|doc| doc.truncated) { "일부 미리보기 · 2 MiB / 50,000줄 제한 · 읽기 전용" }

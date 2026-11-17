@@ -484,3 +484,14 @@ fn file_revision_uses_both_rename_paths_and_the_actual_parent_for_mode_changes()
     let different = Fixture::new();
     assert!(revision_diff(&different.root, renamed).is_err());
 }
+
+#[test]
+fn exact_copy_in_followed_history_identifies_the_copy_source() {
+    let f = Fixture::new();
+    f.commit("original", "identical lines\n");
+    f.commit("copy", "identical lines\n");
+    let list = crate::file_history::file_history(&f.root, Path::new("copy"), None).unwrap();
+    let patch = crate::file_history::revision_diff(&f.root, &list.entries[0]).unwrap();
+    assert_eq!(patch.patch, "copy from \"original\"\ncopy to \"copy\"\n");
+    assert_eq!(patch.old_text, patch.new_text);
+}

@@ -29,6 +29,7 @@ pub struct FileRevision {
     pub path: PathBuf,
     /// Path in the parent when Git follows a rename or copy.
     pub old_path: Option<PathBuf>,
+    copied: bool,
     pub deleted: bool,
 }
 
@@ -108,6 +109,7 @@ pub fn file_history(root: &Path, path: &Path, revision: Option<&str>) -> Result<
             date,
             subject,
             path,
+            copied: status.starts_with(b"C"),
             deleted: status == b"D",
         });
     }
@@ -144,7 +146,9 @@ pub fn revision_diff(root: &Path, revision: &FileRevision) -> Result<DiffDocumen
     diff_entries(
         &root,
         &path,
-        old_path.as_deref(),
+        old_path
+            .as_deref()
+            .map(|path| (path, if revision.copied { "copy" } else { "rename" })),
         before.as_ref(),
         after.as_ref(),
     )

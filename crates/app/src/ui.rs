@@ -351,6 +351,8 @@ pub struct Pokarak {
     external_change: bool,
     checking_changes: bool,
     cli_control: Option<crate::control::Server>,
+    cli_open: Option<cli_control::Opening>,
+    cli_targets: VecDeque<crate::cli::OpenTarget>,
     pending_cli_file: Option<code_workspace::PendingFile>,
     _subscriptions: Vec<Subscription>,
 }
@@ -703,6 +705,8 @@ impl Pokarak {
             external_change: false,
             checking_changes: false,
             cli_control: None,
+            cli_open: None,
+            cli_targets: VecDeque::new(),
             pending_cli_file: None,
             _subscriptions: subscriptions,
         };

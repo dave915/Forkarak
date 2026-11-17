@@ -20,7 +20,7 @@ use std::{
 };
 
 const LIMIT: usize = 64 * 1024;
-const TIMEOUT: Duration = Duration::from_secs(5);
+const TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
@@ -30,6 +30,23 @@ pub struct Request {
     #[serde(default = "first_line")]
     pub line: u32,
     pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<crate::cli::OpenTarget>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub activate: bool,
+}
+impl Request {
+    pub fn status() -> Self {
+        Self {
+            action: "status".into(),
+            repo: None,
+            path: None,
+            line: 1,
+            mode: None,
+            target: None,
+            activate: false,
+        }
+    }
 }
 fn first_line() -> u32 {
     1
@@ -113,7 +130,11 @@ pub fn call(socket: &Path, request: &Request) -> Result<Value> {
     validate_socket(socket)?;
     let mut stream = UnixStream::connect(socket)
         .context("GUI session is unavailable; run ctl sessions again")?;
-    stream.set_read_timeout(Some(TIMEOUT + Duration::from_secs(1)))?;
+    stream.set_read_timeout(Some(if request.action == "status" {
+        Duration::from_millis(750)
+    } else {
+        TIMEOUT + Duration::from_secs(1)
+    }))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
     send(&mut stream, &serde_json::to_value(request)?)?;
     let response: Value = serde_json::from_slice(&line(&mut stream)?)?;
@@ -234,6 +255,7 @@ fn validate_request(request: &mut Request) -> Result<()> {
         [
             "status",
             "open-project",
+            "open-target",
             "select-worktree",
             "open-file",
             "view",
@@ -244,6 +266,14 @@ fn validate_request(request: &mut Request) -> Result<()> {
     );
     if request.action == "status" {
         return Ok(());
+    }
+    if request.action == "open-target" {
+        return crate::cli::launch::validate_target(
+            request
+                .target
+                .as_ref()
+                .context("open-target requires target")?,
+        );
     }
     let repo = request.repo.as_ref().context("GUI action requires repo")?;
     ensure!(repo.is_absolute(), "GUI repo must be absolute");
@@ -314,6 +344,8 @@ mod tests {
                     path: None,
                     line: 1,
                     mode: None,
+                    target: None,
+                    activate: false,
                 },
             )
         });

@@ -326,6 +326,8 @@ fn gui(args: &[OsString]) -> Result<Value> {
         path,
         line: flags.number("--line", 1, u32::MAX as usize)? as u32,
         mode,
+        target: None,
+        activate: false,
     };
     crate::control::call(&flags.path("--session")?, &request)
 }

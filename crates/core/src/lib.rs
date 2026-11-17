@@ -116,6 +116,10 @@ pub fn repository_root(path: &Path) -> Result<PathBuf> {
 pub fn worktree_inventory(root: &Path) -> Result<Vec<Worktree>> {
     git::worktrees(root)
 }
+/// Count changes against HEAD in the selected worktree, including staged changes.
+pub fn worktree_change_count(root: &Path) -> Result<usize> {
+    backend::worktree_change_count(root)
+}
 /// Capture index, HEAD, working bytes, and worktree inventory without refreshing
 /// the index. Inventory counts are uncommitted counts, independent of comparison.
 pub fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {

@@ -149,6 +149,13 @@ impl Capture {
     }
 }
 
+/// Count working changes against HEAD without reading sibling worktrees or
+/// generating line-by-line diffs.
+pub(crate) fn worktree_change_count(root: &Path) -> Result<usize> {
+    let capture = Capture::read(root, &Tree::new())?;
+    Ok(capture.changes(root, &capture.head_tree, true)?.len())
+}
+
 /// Working change inventory for the independent commit dialog. No index refresh,
 /// filters, worktree inventory traversal, or disk-backed staged preview.
 pub(crate) fn commit_working_changes(root: &Path) -> Result<Vec<ChangedFile>> {

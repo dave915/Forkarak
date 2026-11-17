@@ -1,5 +1,6 @@
 //! Explicit Git actions; sidebar selection navigates without mutating Git.
 mod contextual;
+mod history;
 mod worktree_manager;
 use super::*;
 pub(in crate::ui) use contextual::branch_context_menu;
@@ -23,6 +24,9 @@ pub(super) struct GitUi {
     loading: bool,
     load_request: u64,
     completions: HashMap<PathBuf, GitCompletion>,
+    history: HashMap<PathBuf, VecDeque<history::GitRecord>>,
+    job_id: u64,
+    started: Option<std::time::Instant>,
 }
 
 #[derive(Clone)]
@@ -54,6 +58,7 @@ pub(super) fn request_app_quit(_: &Quit, cx: &mut App) {
 
 #[derive(Clone, Copy)]
 pub(super) enum Page {
+    Log,
     Worktrees,
     Create,
     Checkout,
@@ -156,9 +161,14 @@ impl Pokarak {
             .map(|s| s.saved.comparison.clone())
             .unwrap_or_default();
         self.git_ui.completions.remove(&root);
+        self.git_ui.job_id += 1;
+        let job_id = self.git_ui.job_id;
+        self.git_ui.started = Some(std::time::Instant::now());
+        history::begin(&mut self.git_ui.history, &root, job_id, &label);
         self.git_ui.busy = Some((root.clone(), label.clone()));
         self.error = None;
         self.status = format!("{label} 진행 중 — {}", root.display());
+        self.tick_git_elapsed(job_id, window, cx);
         let cancellation = OperationCancellation::default();
         self.git_ui.cancellation = Some(cancellation.clone());
         let job_root = root.clone();
@@ -182,6 +192,8 @@ impl Pokarak {
             let (result, snapshot) = task.await;
             let _ = view.update_in(cx, |this, window, cx| {
                 this.git_ui.busy = None;
+                this.git_ui.started = None;
+                history::finish(&mut this.git_ui.history, &root, job_id, &result);
                 this.git_ui.cancellation = None;
                 let succeeded = result.is_ok();
                 let mut completion = match result {
@@ -199,7 +211,7 @@ impl Pokarak {
                     },
                     Err(error) => GitCompletion {
                         status: format!("{label} 실패 — {}", root.display()),
-                        error: Some(format!("{label}\n워크트리: {}\n{error:#}", root.display())),
+                        error: Some(format!("{label}\n워크트리: {}\n{error:#}\n\n{}\nGit 작업 기록에서 전체 출력을 확인하세요.", root.display(), history::error_help(&format!("{error:#}")).message)),
                     },
                 };
                 if let Err(error) = &snapshot {
@@ -371,6 +383,7 @@ impl Pokarak {
                     ],
                 ),
                 ("워크트리", vec![("워크트리 관리…", Page::Worktrees)]),
+                ("진단", vec![("Git 작업 기록…", Page::Log)]),
                 (
                     "저장소 Git 설정",
                     vec![
@@ -419,6 +432,7 @@ impl Pokarak {
         cx: &mut Context<Self>,
     ) {
         match page {
+            Page::Log => self.open_git_log(window, cx),
             Page::Worktrees => self.show_worktree_manager(state, window, cx),
             Page::Create | Page::Checkout | Page::Delete => {
                 self.show_branch_form(state, page, window, cx)

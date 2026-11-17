@@ -2536,7 +2536,7 @@ impl Render for Pokarak {
             .child(div().h(ui_px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(palette.rgb(LINE)).bg(palette.rgb(SIDE)).text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
                 .child(div().flex_1().min_w_0().text_ellipsis().child(context))
                 .child(self.output_button("status-output", cx))
-                .child(div().max_w(ui_px(400.)).min_w_0().text_ellipsis().child(self.status.clone()))
+                .child(div().max_w(ui_px(400.)).min_w_0().text_ellipsis().child(self.git_running_status().unwrap_or_else(|| self.status.clone())))
                 .child(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의  /  ⌥F7 사용처" }))
     }
 }

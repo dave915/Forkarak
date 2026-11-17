@@ -120,6 +120,8 @@ impl Pokarak {
         let weak = cx.entity().downgrade();
         let root = self.current.clone();
         let palette = Palette::new(cx);
+        let log_weak = weak.clone();
+        let log_root = root.clone();
         div()
             .id("git-toolbar")
             .flex_none()
@@ -207,8 +209,30 @@ impl Pokarak {
             .child(
                 toolbar_icon("git-actions", IconName::Ellipsis, "Git 작업 더 보기")
                     .tooltip("Git 작업 더 보기")
-                    .disabled(busy)
-                    .on_click(cx.listener(|app, _, w, cx| app.open_git_actions(w, cx))),
+                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                        let actions = log_weak.clone();
+                        let actions_root = log_root.clone();
+                        let logs = log_weak.clone();
+                        let logs_root = log_root.clone();
+                        menu.item(PopupMenuItem::new("Git 작업…").disabled(busy).on_click(
+                            move |_, w, cx| {
+                                let _ = actions.update(cx, |app, cx| {
+                                    if app.current == actions_root {
+                                        app.open_git_actions(w, cx);
+                                    }
+                                });
+                            },
+                        ))
+                        .item(
+                            PopupMenuItem::new("Git 작업 기록…").on_click(move |_, w, cx| {
+                                let _ = logs.update(cx, |app, cx| {
+                                    if app.current == logs_root {
+                                        app.open_git_log(w, cx);
+                                    }
+                                });
+                            }),
+                        )
+                    }),
             )
     }
 

@@ -34,15 +34,15 @@ Process ownership, group signaling, and reaping share a private lifecycle guard.
 
 ## Server configuration
 
-`default_configs()` first prepares PATH fallbacks, then prefers the persistent manifest at `~/.local/share/pokarak/tools/installed.json` without executing anything. Run `scripts/setup-language-servers.sh` explicitly to create it. See [language analysis setup and verified scope](../../docs/language-analysis.md). Without managed tools, the fallbacks are:
+`default_configs()` first prepares PATH fallbacks, then prefers each available server in the persistent manifest at `~/.local/share/pokarak/tools/installed.json` without executing anything. Run `scripts/setup-language-servers.sh` explicitly to create it. See [language analysis setup and verified scope](../../docs/language-analysis.md). Without managed tools, the fallbacks are:
 
 | Family | File extensions | Default executable and argv |
 | --- | --- | --- |
 | TypeScript / JavaScript | ts, mts, cts, tsx, js, mjs, cjs, jsx | `typescript-language-server`, `['--stdio']` |
 | Java | java | `jdtls`, `['-data', '{workspace}', '-configuration', '{workspace}/configuration']` |
-| Kotlin | kt, kts | `kotlin-lsp`, `['--stdio']` |
+| Kotlin | kt, kts | `kotlin-lsp`, `['--stdio', '--system-path', '{workspace}/system', '--data-sharing', 'none']` |
 
-An unavailable executable remains in the configuration so navigation can explain what is missing. Discovery does not search project node_modules or run npx. Executables are launched with `Command::new(program).args(args)`, with no shell interpolation. Programs must be absolute paths or bare names on PATH; `~`, `$VARIABLE`, wildcards, and relative executable paths are not expanded. A GUI launch may have a smaller PATH than a terminal: use absolute paths when needed.
+An unavailable executable remains in the configuration so navigation can explain what is missing. Discovery does not search project node_modules or run npx. Executables are launched with `Command::new(program).args(args)`, with no shell interpolation. Programs must be absolute paths or bare names on PATH; `~`, `$VARIABLE`, wildcards, and relative executable paths are not expanded. On macOS, Finder can supply a smaller PATH than a terminal. For the official JetBrains Kotlin server, Pokarak also checks the native standalone launcher `intellij-server` and legacy `kotlin-lsp.sh`. Fallback locations include `$KOTLIN_LSP_DIR` (the unpacked distribution), `~/.local/bin`, `~/.local/share/kotlin-lsp`, and the Homebrew prefixes `/opt/homebrew`, `/usr/local`, and `$HOMEBREW_PREFIX`. Discovery only checks files. The [upstream installation instructions](https://github.com/Kotlin/kotlin-lsp#installation) include `brew install JetBrains/utils/kotlin-lsp`. An explicit absolute `program` always takes precedence. A missing Kotlin executable is reported before Gradle or Maven root discovery.
 
 `Navigator::new` loads `~/.config/pokarak/language-servers.json` and merges its `servers` into the supplied configurations by normalized language ID. Exact IDs override the family entry. Malformed configuration makes `status()` and navigation report a setup error; it is never silently ignored. Missing files are fine. The default configuration location intentionally uses HOME, not the inspected repository.
 

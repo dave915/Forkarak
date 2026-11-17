@@ -806,6 +806,68 @@ fn cancellation_before_first_request_prevents_server_start() {
     handle.cancel().unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn unavailable_kotlin_honors_override_and_trust_before_project_discovery() {
+    use std::os::unix::fs::symlink;
+
+    let f = Fixture::new();
+    let source = Path::new("Main.kt");
+    fs::write(f.root.join(source), "class Main\n").unwrap();
+    let launcher = f._temp.path().join("custom Kotlin launcher");
+    let config_path = f._temp.path().join("language-servers.json");
+    fs::write(
+        &config_path,
+        serde_json::to_vec(&serde_json::json!({
+            "servers": [{"language":"kotlin", "program": launcher, "args": ["--stdio"]}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut options = f.options();
+    options.config_file = Some(config_path);
+    // The real installed server, if any, must never replace an explicit broken override.
+    let mut nav = Navigator::with_options(f.root.clone(), default_configs(), options.clone());
+    assert!(
+        nav.navigate(source, 0, 6, Definition)
+            .unwrap_err()
+            .to_string()
+            .contains("allowProjectImports")
+    );
+    options.allow_project_imports = true;
+    let mut nav = Navigator::with_options(f.root.clone(), default_configs(), options);
+    let missing = nav
+        .navigate(source, 0, 6, Definition)
+        .unwrap_err()
+        .to_string();
+    assert!(missing.starts_with("Language server unavailable for kotlin"));
+    assert!(missing.contains(launcher.to_str().unwrap()));
+    assert!(missing.contains("brew install JetBrains/utils/kotlin-lsp"));
+    assert_eq!(
+        nav.navigate(source, 0, 6, References)
+            .unwrap_err()
+            .to_string(),
+        missing
+    );
+
+    // Fixing the executable allows a retry to progress to build metadata discovery.
+    symlink(env!("CARGO_BIN_EXE_pokarak-mock-lsp"), &launcher).unwrap();
+    assert!(
+        nav.navigate(source, 0, 6, Definition)
+            .unwrap_err()
+            .to_string()
+            .contains("noBuildSystemFound")
+    );
+    assert!(!f.root.join("mock.pid").exists());
+    nav.cancellation_handle().cancel().unwrap();
+    assert!(
+        nav.navigate(source, 0, 6, Definition)
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled")
+    );
+}
+
 #[test]
 fn missing_kotlin_build_is_actionable_and_does_not_launch_a_server() {
     let f = Fixture::new();

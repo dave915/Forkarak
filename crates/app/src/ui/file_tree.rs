@@ -306,11 +306,11 @@ impl Pokarak {
             .size_full()
             .min_w_0()
             .v_flex()
-            .bg(palette.rgb(BG))
+            .bg(palette.rgb(SIDE))
             .overflow_hidden()
             .child(
                 div()
-                    .h(ui_px(44.))
+                    .h(ui_px(34.))
                     .flex_none()
                     .px_2()
                     .flex()
@@ -496,7 +496,7 @@ impl Pokarak {
                                         .bg(if selected {
                                             palette.selected()
                                         } else {
-                                            palette.rgb(BG)
+                                            palette.rgb(SIDE)
                                         })
                                         .hover(|s| {
                                             s.bg(if selected {

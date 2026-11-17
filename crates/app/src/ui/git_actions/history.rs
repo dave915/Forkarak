@@ -13,7 +13,7 @@ enum Status {
 
 #[derive(Clone)]
 pub(super) struct GitRecord {
-    id: u64,
+    pub(super) id: u64,
     label: String,
     started: SystemTime,
     finished: Option<SystemTime>,
@@ -21,6 +21,10 @@ pub(super) struct GitRecord {
     stdout: String,
     stderr: String,
     truncated: bool,
+    live_stdout: Vec<u8>,
+    live_stderr: Vec<u8>,
+    dropped: usize,
+    kind: Option<pokarak_core::operations::errors::ErrorKind>,
 }
 
 pub(super) fn begin(
@@ -39,6 +43,10 @@ pub(super) fn begin(
         stdout: String::new(),
         stderr: String::new(),
         truncated: false,
+        live_stdout: vec![],
+        live_stderr: vec![],
+        dropped: 0,
+        kind: None,
     });
     records.truncate(HISTORY_LIMIT);
 }
@@ -80,7 +88,12 @@ pub(super) fn finish(
         // chain. Keep it explicitly labelled; do not invent a stdout split.
         Err(error) => {
             record.status = Status::Failed;
-            (String::new(), format!("{error:#}"), false)
+            record.kind = Some(pokarak_core::operations::errors::classify(error));
+            (
+                String::from_utf8_lossy(&record.live_stdout).into_owned(),
+                format!("{error:#}"),
+                false,
+            )
         }
     };
     let (stdout, stdout_cut) = bounded(&stdout);
@@ -96,6 +109,7 @@ enum HelpAction {
     Changes,
     Integrate,
     Terminal,
+    Workflow,
     None,
 }
 
@@ -104,29 +118,30 @@ pub(super) struct ErrorHelp {
     action: HelpAction,
 }
 
+pub(super) fn classified_help(kind: pokarak_core::operations::errors::ErrorKind) -> ErrorHelp {
+    use pokarak_core::operations::errors::ErrorKind;
+    let action = match kind {
+        ErrorKind::Authentication | ErrorKind::FilesystemPermission | ErrorKind::RepositoryLock => {
+            HelpAction::Terminal
+        }
+        ErrorKind::RejectedUpdate => HelpAction::Fetch,
+        ErrorKind::Conflict => HelpAction::Workflow,
+        ErrorKind::Cancelled | ErrorKind::Timeout | ErrorKind::Other => HelpAction::None,
+    };
+    ErrorHelp {
+        message: pokarak_core::operations::errors::guidance(kind),
+        action,
+    }
+}
+
 pub(super) fn error_help(error: &str) -> ErrorHelp {
+    let kind = pokarak_core::operations::errors::classify(&anyhow::anyhow!(error.to_owned()));
+    if kind != pokarak_core::operations::errors::ErrorKind::Other {
+        return classified_help(kind);
+    }
     let diagnostic = error.split("\nFor authentication failures, configure your existing credential helper or SSH agent in a terminal, then retry.").next().unwrap_or(error);
     let text = diagnostic.to_lowercase();
     let (message, action) = if [
-        "authentication",
-        "permission denied",
-        "could not read username",
-        "terminal prompts disabled",
-        "publickey",
-        "credential",
-        "http 401",
-        "http 403",
-        "returned error: 403",
-        "returned error: 401",
-    ]
-    .iter()
-    .any(|s| text.contains(s))
-    {
-        (
-            "인증에 실패했습니다. 워크트리 터미널에서 Git 인증 또는 SSH 키를 확인한 뒤 작업을 다시 열어 실행하세요.",
-            HelpAction::Terminal,
-        )
-    } else if [
         "diverg",
         "not possible to fast-forward",
         "fast-forward is not possible",
@@ -214,12 +229,13 @@ impl Pokarak {
     pub(super) fn tick_git_elapsed(&self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |view, cx| {
             loop {
-                smol::Timer::after(Duration::from_secs(1)).await;
+                smol::Timer::after(Duration::from_millis(100)).await;
                 let keep = view
-                    .update_in(cx, |app, _, cx| {
+                    .update_in(cx, |app, window, cx| {
                         if app.git_ui.job_id != id || app.git_ui.busy.is_none() {
                             return false;
                         }
+                        app.drain_git_progress(window, cx);
                         cx.notify();
                         true
                     })
@@ -245,7 +261,7 @@ impl Pokarak {
                 let status = match record.status { Status::Running => "실행 중 · Git 결과 대기", Status::Succeeded => "완료", Status::Failed => "실패" };
                 let elapsed = record.finished.unwrap_or_else(SystemTime::now).duration_since(record.started).unwrap_or_default().as_secs();
                 let target = weak.clone(); let root = root.clone(); let item = record.clone();
-                body = body.child(div().v_flex().gap_1().child(format!("{} · {status} · {elapsed}초", record.label)).child(note(&timestamp(record.started))).when(record.status == Status::Failed, |row| row.child(note(error_help(&record.stderr).message))).child(theme::action_button(("git-log-output", record.id as usize), record.status == Status::Running).label("출력 및 도움말…").small().on_click(move |_, w, cx| {
+                body = body.child(div().v_flex().gap_1().child(format!("{} · {status} · {elapsed}초", record.label)).child(note(&timestamp(record.started))).when(record.status == Status::Failed, |row| row.child(note(error_help(&record.stderr).message))).child(theme::action_button(("git-log-output", record.id as usize), false).label("출력 및 도움말…").small().on_click(move |_, w, cx| {
                     let _ = target.update(cx, |app, cx| { if app.current.as_ref() == Some(&root) { w.close_dialog(cx); app.show_git_output(root.clone(), item.clone(), w, cx); } });
                 })));
             }
@@ -253,40 +269,14 @@ impl Pokarak {
         });
     }
 
-    fn show_git_output(
+    pub(super) fn show_git_output(
         &mut self,
         root: PathBuf,
         record: GitRecord,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = format!(
-            "{}\n워크트리: {}\n시작: {}\n종료: {}\n\nstdout{}\n{}\n\n{}\n{}{}",
-            record.label,
-            root.display(),
-            timestamp(record.started),
-            record
-                .finished
-                .map(timestamp)
-                .unwrap_or_else(|| "실행 중".into()),
-            if record.status == Status::Failed {
-                " (실패 시 별도 제공되지 않음)"
-            } else {
-                ""
-            },
-            record.stdout,
-            if record.status == Status::Failed {
-                "Git 오류 진단 (stderr 포함)"
-            } else {
-                "stderr"
-            },
-            record.stderr,
-            if record.truncated {
-                "\n\n[출력 일부 생략]"
-            } else {
-                ""
-            }
-        );
+        let text = record.text(&root);
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language("text")
@@ -294,9 +284,26 @@ impl Pokarak {
                 .default_value(text)
         });
         editor.update(cx, |editor, cx| editor.set_readonly(true, cx));
+        self.git_ui.live_editor = Some((root.clone(), record.id, editor.clone()));
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let help = error_help(&record.stderr);
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let current = weak
+                .upgrade()
+                .and_then(|view| {
+                    view.read(cx)
+                        .git_ui
+                        .history
+                        .get(&root)
+                        .and_then(|records| records.iter().find(|r| r.id == record.id))
+                        .cloned()
+                })
+                .unwrap_or_else(|| record.clone());
+            let help = match current.kind {
+                Some(kind) if kind != pokarak_core::operations::errors::ErrorKind::Other => {
+                    classified_help(kind)
+                }
+                _ => error_help(&current.stderr),
+            };
             let mut buttons = div()
                 .flex()
                 .flex_wrap()
@@ -317,7 +324,20 @@ impl Pokarak {
                         });
                     }),
             );
-            if record.status == Status::Failed && help.action != HelpAction::None {
+            if current.status == Status::Running {
+                let target = weak.clone();
+                let root = root.clone();
+                let id = record.id;
+                buttons = buttons.child(
+                    theme::action_button("git-output-cancel", false)
+                        .label("작업 취소")
+                        .on_click(move |_, _, cx| {
+                            let _ =
+                                target.update(cx, |app, cx| app.cancel_git_action(&root, id, cx));
+                        }),
+                );
+            }
+            if current.status == Status::Failed && help.action != HelpAction::None {
                 let target = weak.clone();
                 let root = root.clone();
                 let action = help.action;
@@ -327,6 +347,7 @@ impl Pokarak {
                     HelpAction::Integrate => "브랜치 통합…",
                     HelpAction::Terminal => "워크트리 터미널",
                     HelpAction::None => "",
+                    HelpAction::Workflow => "진행 중 작업 / 충돌 해결…",
                 };
                 buttons = buttons.child(
                     theme::action_button("git-log-help", false)
@@ -342,6 +363,7 @@ impl Pokarak {
                                         app.load_git_page(Some(Page::Fetch), w, cx)
                                     }
                                     HelpAction::Changes => app.open_git_commit(w, cx),
+                                    HelpAction::Workflow => app.open_git_workflow(w, cx),
                                     HelpAction::Integrate => {
                                         app.load_git_page(Some(Page::Merge), w, cx)
                                     }
@@ -363,7 +385,7 @@ impl Pokarak {
                     div()
                         .v_flex()
                         .gap_2()
-                        .when(record.status == Status::Failed, |body| {
+                        .when(current.status == Status::Failed, |body| {
                             body.child(note(help.message))
                         })
                         .child(
@@ -383,7 +405,7 @@ mod tests {
     use super::{HelpAction, OUTPUT_LIMIT, Status, begin, bounded, error_help, finish};
     use pokarak_core::operations::OperationOutput;
     use std::{collections::HashMap, path::Path};
-    #[test]
+    #[::core::prelude::v1::test]
     fn history_is_bounded_and_worktree_scoped_and_keeps_success_output() {
         let mut history = HashMap::new();
         let a = Path::new("/fixture/a");
@@ -412,14 +434,14 @@ mod tests {
         finish(&mut history, a, 0, &Err(anyhow::anyhow!("evicted")));
         assert!(history[b][0].status == Status::Running);
     }
-    #[test]
+    #[::core::prelude::v1::test]
     fn output_limit_is_utf8_safe() {
         let (text, cut) = bounded(&"가".repeat(OUTPUT_LIMIT));
         assert!(cut);
         assert!(text.len() <= OUTPUT_LIMIT);
         assert!(text.ends_with('가'));
     }
-    #[test]
+    #[::core::prelude::v1::test]
     fn errors_offer_specific_explicit_actions() {
         assert!(error_help("Permission denied (publickey)").action == HelpAction::Terminal);
         assert!(
@@ -431,7 +453,7 @@ mod tests {
         );
         assert!(error_help("local changes would be overwritten").action == HelpAction::Changes);
     }
-    #[test]
+    #[::core::prelude::v1::test]
     fn wrapped_errors_ignore_core_generic_auth_advice() {
         let footer = "\nFor authentication failures, configure your existing credential helper or SSH agent in a terminal, then retry. For rejected updates, fetch and review the branch first. No force or automatic stash is used.";
         for (diagnostic, expected) in [
@@ -450,7 +472,7 @@ mod tests {
             assert!(error_help(&full).action == expected, "{full}");
         }
     }
-    #[test]
+    #[::core::prelude::v1::test]
     fn timestamps_are_readable_relative_ages() {
         use std::time::{Duration, SystemTime};
         let then = SystemTime::UNIX_EPOCH;
@@ -465,6 +487,161 @@ mod tests {
         assert_eq!(
             super::relative_time(then, then + Duration::from_secs(7200)),
             "2시간 전"
+        );
+    }
+}
+
+pub(super) fn append(
+    history: &mut HashMap<PathBuf, VecDeque<GitRecord>>,
+    root: &Path,
+    id: u64,
+    events: Vec<pokarak_core::operations::OperationEvent>,
+    dropped: usize,
+) {
+    let Some(record) = history.get_mut(root).and_then(|records| {
+        records
+            .iter_mut()
+            .find(|r| r.id == id && r.status == Status::Running)
+    }) else {
+        return;
+    };
+    record.dropped = dropped;
+    for event in events {
+        if event.root != root {
+            continue;
+        }
+        let buffer = match event.stream {
+            pokarak_core::operations::OutputStream::Stdout => &mut record.live_stdout,
+            pokarak_core::operations::OutputStream::Stderr => &mut record.live_stderr,
+        };
+        let retain = event
+            .bytes
+            .len()
+            .min(OUTPUT_LIMIT.saturating_sub(buffer.len()));
+        buffer.extend_from_slice(&event.bytes[..retain]);
+        record.truncated |= retain < event.bytes.len();
+    }
+}
+
+impl GitRecord {
+    pub(super) fn text(&self, root: &Path) -> String {
+        let running = self.status == Status::Running;
+        let stdout = if running {
+            String::from_utf8_lossy(&self.live_stdout).into_owned()
+        } else {
+            self.stdout.clone()
+        };
+        let stderr = if running {
+            String::from_utf8_lossy(&self.live_stderr).into_owned()
+        } else {
+            self.stderr.clone()
+        };
+        format!(
+            "{}\n워크트리: {}\n시작: {}\n상태: {}\n\nstdout\n{}\n\nstderr / Git 진단\n{}{}{}",
+            self.label,
+            root.display(),
+            timestamp(self.started),
+            if running {
+                "실행 중 · 취소 후에도 일부 단계가 완료되어 있을 수 있습니다"
+            } else if self.status == Status::Succeeded {
+                "완료"
+            } else {
+                "실패 · 현재 상태 확인 필요"
+            },
+            stdout,
+            stderr,
+            if self.truncated {
+                "\n[출력 보관 한도 32 KiB: 일부 생략]"
+            } else {
+                ""
+            },
+            if self.dropped > 0 {
+                format!("\n[실시간 큐에서 {}바이트 생략]", self.dropped)
+            } else {
+                String::new()
+            }
+        )
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    #[::core::prelude::v1::test]
+    fn live_chunks_concatenate_before_utf8_and_reject_foreign_roots() {
+        use pokarak_core::operations::{OperationEvent, OutputStream};
+        let mut history = HashMap::new();
+        let root = Path::new("/a");
+        begin(&mut history, root, 3, "Fetch");
+        let bytes = "한글\r".as_bytes();
+        for chunk in bytes.chunks(2) {
+            append(
+                &mut history,
+                root,
+                3,
+                vec![OperationEvent {
+                    root: root.into(),
+                    stream: OutputStream::Stderr,
+                    bytes: chunk.into(),
+                }],
+                0,
+            );
+        }
+        append(
+            &mut history,
+            root,
+            3,
+            vec![OperationEvent {
+                root: "/b".into(),
+                stream: OutputStream::Stderr,
+                bytes: b"wrong".into(),
+            }],
+            12,
+        );
+        append(
+            &mut history,
+            root,
+            4,
+            vec![OperationEvent {
+                root: root.into(),
+                stream: OutputStream::Stderr,
+                bytes: b"stale".into(),
+            }],
+            0,
+        );
+        let record = history[root].front().unwrap();
+        assert_eq!(record.live_stderr, bytes);
+        let text = record.text(root);
+        assert!(text.contains("한글\r"));
+        assert!(!text.contains('\u{fffd}'));
+        assert!(text.contains("12바이트"));
+        assert_eq!(
+            error_help("Unable to create '.git/index.lock': Permission denied").message,
+            pokarak_core::operations::errors::guidance(
+                pokarak_core::operations::errors::ErrorKind::FilesystemPermission
+            )
+        );
+    }
+}
+
+#[cfg(test)]
+mod classification_tests {
+    use super::{HelpAction, error_help};
+    use pokarak_core::operations::errors::{ErrorKind, guidance};
+    #[test]
+    fn local_paths_and_locks_never_invent_authentication_failures() {
+        assert!(
+            error_help("fatal: cannot read credential-cache/data: No such file or directory")
+                .action
+                == HelpAction::None
+        );
+        assert_eq!(
+            error_help("fatal: Unable to create '.git/index.lock': Permission denied").message,
+            guidance(ErrorKind::FilesystemPermission)
+        );
+        assert_eq!(
+            error_help("fatal: Unable to create '.git/index.lock': File exists").message,
+            guidance(ErrorKind::RepositoryLock)
         );
     }
 }

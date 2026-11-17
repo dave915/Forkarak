@@ -1,5 +1,7 @@
 //! Explicit Git actions; branch-sidebar selection remains comparison-only.
+mod contextual;
 mod worktree_manager;
+pub(in crate::ui) use contextual::branch_context_menu;
 use super::*;
 pub(super) mod integration;
 use gpui_kit::component::{
@@ -51,7 +53,7 @@ pub(super) fn request_app_quit(_: &Quit, cx: &mut App) {
 }
 
 #[derive(Clone, Copy)]
-enum Page {
+pub(super) enum Page {
     Worktrees,
     Create,
     Checkout,
@@ -255,7 +257,7 @@ impl Pokarak {
         self.load_git_page(None, window, cx);
     }
 
-    fn load_git_page(&mut self, page: Option<Page>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn load_git_page(&mut self, page: Option<Page>, window: &mut Window, cx: &mut Context<Self>) {
         if self.git_is_busy() || self.loading {
             return;
         }
@@ -265,6 +267,7 @@ impl Pokarak {
         self.git_ui.loading = true;
         self.git_ui.load_request += 1;
         let token = self.git_ui.load_request;
+        let generation = self.request;
         let load_root = root.clone();
         let task = cx.background_spawn(async move { GitOperations::open(&load_root)?.state() });
         cx.spawn_in(window, async move |view, cx| {
@@ -274,7 +277,7 @@ impl Pokarak {
                     return;
                 }
                 this.git_ui.loading = false;
-                if this.current.as_ref() != Some(&root) || this.opening_path.is_some() {
+                if this.current.as_ref() != Some(&root) || this.request != generation || this.opening_path.is_some() {
                     cx.notify();
                     return;
                 }
@@ -551,18 +554,29 @@ impl Pokarak {
             operation,
             destructive,
         } = confirmation;
+        let checkout_source = matches!(operation, Operation::CheckoutBranch { .. }).then(|| {
+            self.snapshot().and_then(|snapshot| (!snapshot.worktree.is_detached).then(|| snapshot.worktree.branch.clone()))
+        });
         window.close_dialog(cx);
         let weak = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, _| {
             let weak = weak.clone();
             let root_for_action = root.clone();
+            let checkout_source = checkout_source.clone();
             let operation = operation.clone();
             let label_for_action = label.clone();
             let action = Button::new("git-confirm").label(label.clone()).when(destructive, |b| b.danger()).when(!destructive, |b| b.primary()).on_click(move |_, window, cx| {
                 let _ = weak.update(cx, |app, cx| {
                     window.close_dialog(cx);
                     let operation = operation.clone();
-                    app.run_git_job(root_for_action.clone(), label_for_action.clone(), move |git| git.execute(&operation), window, cx);
+                    let checkout_source = checkout_source.clone();
+                    app.run_git_job(root_for_action.clone(), label_for_action.clone(), move |git| {
+                        if let Some(source) = checkout_source {
+                            anyhow::ensure!(git.state()?.current_branch == source, "현재 브랜치가 변경되었습니다. 체크아웃 대상을 다시 확인하세요.");
+                            anyhow::ensure!(git.in_progress()?.is_none(), "진행 중인 Git 작업을 먼저 완료하거나 중단하세요.");
+                        }
+                        git.execute(&operation)
+                    }, window, cx);
                 });
             });
             dialog.title(format!("{label} 확인")).width(px(640.)).child(div().v_flex().gap_4()

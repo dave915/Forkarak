@@ -1,12 +1,11 @@
 //! Dedicated immutable history view. Its editors never enter working-tree
 //! documents/navigation, and writes use the existing Git job lifecycle.
+mod context_actions;
 mod home;
 use super::*;
+use context_actions::commit_context_menu;
 use pokarak_core::history::{self, Commit, CommitDetail, GraphRow, HistoryCursor, HistoryEntry};
-use pokarak_core::operations::{
-    GitOperations,
-    history_actions::{HistoryAction, HistoryTarget},
-};
+use pokarak_core::operations::history_actions::{HistoryAction, HistoryTarget};
 
 #[derive(Default)]
 pub(super) struct HistoryUi {
@@ -165,6 +164,13 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.git_is_busy() || self.loading {
+            return;
+        }
+        self.git_history.detail = None;
+        self.git_history.document = None;
+        self.git_history.selected = None;
+        self.git_history.editor = None;
         self.history_read(
             move |root| history::commit_detail(root, &oid, parent),
             |app, detail, w, cx| {
@@ -240,15 +246,21 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(commit) = self.git_history.detail.as_ref().map(|d| d.commit.clone()) else {
+        if history_disabled(self) {
+            return;
+        }
+        let Some(oid) = self
+            .git_history
+            .detail
+            .as_ref()
+            .map(|d| d.commit.oid.clone())
+        else {
             return;
         };
-        self.history_read(
-            |root| GitOperations::open(root)?.history_target(),
-            move |app, target, w, cx| app.confirm_history_action(action, commit, target, w, cx),
-            window,
-            cx,
-        );
+        let Some(root) = self.git_history.root.clone() else {
+            return;
+        };
+        self.prepare_commit_by_oid(action, &root, &oid, window, cx);
     }
     fn confirm_history_action(
         &mut self,
@@ -265,7 +277,6 @@ impl Pokarak {
             let busy=weak.upgrade().is_none_or(|v|history_disabled(v.read(cx)));
             let destination=target.clone(); let source=commit.oid.clone();
             dialog.title(format!("{} 확인",action.label())).width(px(650.)).margin_top(px(20.)).overlay_closable(false).on_ok(|_,_,_|false)
-                .on_close({let weak=weak.clone();move |_,_,cx|{let _=weak.update(cx,|a,cx|{a.git_history.request+=1;a.git_history.loading=false;cx.notify();});}})
                 .child(div().v_flex().gap_3().text_size(px(13.))
                     .child(format!("원본 커밋: {}\n{}",commit.oid,visible(&commit.subject)))
                     .child(format!("대상 브랜치: {}\n대상 HEAD: {}",target.branch,target.head))
@@ -273,7 +284,7 @@ impl Pokarak {
                     .child(if action==HistoryAction::CherryPick {"이 커밋 하나의 변경을 대상 브랜치에 새 커밋으로 적용합니다."}else{"이 커밋 하나의 변경을 되돌리는 새 커밋을 대상 브랜치에 만듭니다."})
                     .child("작업 트리와 index가 깨끗해야 합니다. 충돌 발생 시 상태를 보존하며, Stash / 충돌 해결에서 계속 또는 중단할 수 있습니다. 저장소에 설정된 Git hook이 실행될 수 있습니다."))
                 .footer(div().flex().gap_2().justify_end()
-                    .child(history_button(&weak,"history-confirm-back","취소",busy,|a,w,cx|{w.close_all_dialogs(cx);a.show_history_detail(w,cx)}))
+                    .child(history_button(&weak,"history-confirm-back","취소",false,|_,w,cx| w.close_dialog(cx)))
                     .child(history_button(&weak,"history-confirm",format!("{} 실행",action.label()),busy,move |a,w,cx| {
                         a.git_history.request+=1;
                         w.close_all_dialogs(cx);

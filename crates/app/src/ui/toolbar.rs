@@ -1,4 +1,6 @@
 use super::*;
+use git_actions::Page;
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{
     TitleBar,
     tab::{Tab, TabBar},
@@ -7,7 +9,9 @@ use gpui_kit::component::{
 impl Pokarak {
     pub(super) fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::new(cx);
-        let compact = window.viewport_size().width < px(1100.);
+        let width = window.viewport_size().width;
+        let compact = width < px(1180.);
+        let overflow = width < px(1020.);
         let has_projects = !self.projects.is_empty();
         let content = div()
             .absolute()
@@ -62,42 +66,67 @@ impl Pokarak {
                             .tooltip_with_action("변경사항 스테이징 및 커밋", &OpenGitCommit, None)
                             .on_click(cx.listener(|app, _, w, cx| app.open_git_commit(w, cx))),
                     )
-                    .child(
-                        Button::new("git-actions")
-                            .label(if self.git_is_busy() {
-                                "Git 작업 중…"
-                            } else {
-                                "Git 작업"
-                            })
-                            .icon(IconName::GitBranch)
-                            .ghost()
-                            .small()
-                            .disabled(self.loading || self.git_is_busy())
-                            .tooltip("브랜치 작업·원격 동기화·저장소 설정")
-                            .on_click(cx.listener(|app, _, w, cx| app.open_git_actions(w, cx))),
-                    )
-                    .child(
-                        Button::new("refresh")
-                            .ml_1()
-                            .icon(IconName::RefreshCw)
-                            .ghost()
-                            .small()
-                            .loading(self.loading)
-                            .disabled(self.loading || self.git_is_busy())
-                            .accessibility_label("저장소 새로고침")
-                            .tooltip_with_action("저장소 새로고침", &Refresh, None)
-                            .on_click(cx.listener(|app, _, w, cx| app.refresh(w, cx))),
-                    )
+                    .child(self.sync_tools(compact, cx))
+                    .when(!overflow, |bar| {
+                        bar.child(
+                            Button::new("git-actions")
+                                .label(if self.git_is_busy() {
+                                    "Git 작업 중…"
+                                } else {
+                                    "Git 작업"
+                                })
+                                .icon(IconName::GitBranch)
+                                .ghost()
+                                .small()
+                                .disabled(self.loading || self.git_is_busy())
+                                .tooltip("브랜치·워크트리·충돌 해결·저장소 설정")
+                                .on_click(cx.listener(|app, _, w, cx| app.open_git_actions(w, cx))),
+                        )
+                        .child(
+                            Button::new("refresh")
+                                .icon(IconName::RefreshCw)
+                                .ghost()
+                                .small()
+                                .loading(self.loading)
+                                .disabled(self.loading || self.git_is_busy())
+                                .accessibility_label("저장소 새로고침")
+                                .tooltip_with_action("저장소 새로고침", &Refresh, None)
+                                .on_click(cx.listener(|app, _, w, cx| app.refresh(w, cx))),
+                        )
+                    })
+                    .when(overflow, |bar| {
+                        let busy = self.loading || self.git_is_busy();
+                        bar.child(
+                            Button::new("toolbar-more")
+                                .icon(IconName::Ellipsis)
+                                .ghost()
+                                .small()
+                                .accessibility_label("도구 더 보기")
+                                .tooltip("도구 더 보기")
+                                .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                                    menu.menu_with_disabled(
+                                        "Git 작업…",
+                                        Box::new(OpenGitActions),
+                                        busy,
+                                    )
+                                    .menu_with_disabled("저장소 새로고침", Box::new(Refresh), busy)
+                                    .separator()
+                                    .menu("설정…", Box::new(OpenSettings))
+                                }),
+                        )
+                    })
             })
-            .child(
-                Button::new("settings")
-                    .icon(IconName::Settings)
-                    .ghost()
-                    .small()
-                    .accessibility_label("설정")
-                    .tooltip_with_action("설정", &OpenSettings, None)
-                    .on_click(cx.listener(|app, _, w, cx| app.open_settings(w, cx))),
-            );
+            .when(!overflow || self.current.is_none(), |bar| {
+                bar.child(
+                    Button::new("settings")
+                        .icon(IconName::Settings)
+                        .ghost()
+                        .small()
+                        .accessibility_label("설정")
+                        .tooltip_with_action("설정", &OpenSettings, None)
+                        .on_click(cx.listener(|app, _, w, cx| app.open_settings(w, cx))),
+                )
+            });
 
         TitleBar::new()
             .h(px(36.))
@@ -110,6 +139,79 @@ impl Pokarak {
             .border_b_0()
             .child(div().relative().size_full().child(content))
             .into_any_element()
+    }
+
+    fn sync_tools(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+        let disabled = self.loading || self.git_is_busy();
+        let actions = [
+            (
+                Page::Fetch,
+                "Fetch",
+                IconName::CloudDownload,
+                "원격 브랜치 가져오기",
+            ),
+            (
+                Page::Pull,
+                "Pull",
+                IconName::ArrowDownToLine,
+                "현재 브랜치에 fast-forward로 받기",
+            ),
+            (
+                Page::Push,
+                "Push",
+                IconName::ArrowUpFromLine,
+                "로컬 브랜치를 원격에 보내기",
+            ),
+        ];
+        if compact {
+            let weak = cx.entity().downgrade();
+            let root = self.current.clone();
+            Button::new("sync-menu")
+                .label("동기화")
+                .icon(IconName::ChevronDown)
+                .ghost()
+                .small()
+                .disabled(disabled)
+                .tooltip("Fetch · Pull · Push")
+                .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+                    for (page, label, _, description) in actions {
+                        let weak = weak.clone();
+                        let root = root.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(format!("{label} · {description}…"))
+                                .disabled(disabled)
+                                .on_click(move |_, w, cx| {
+                                    let _ = weak.update(cx, |app, cx| {
+                                        if app.current == root {
+                                            app.load_git_page(Some(page), w, cx);
+                                        }
+                                    });
+                                }),
+                        );
+                    }
+                    menu
+                })
+                .into_any_element()
+        } else {
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .children(actions.map(|(page, label, icon, description)| {
+                    Button::new(label)
+                        .label(label)
+                        .icon(icon)
+                        .ghost()
+                        .compact()
+                        .small()
+                        .disabled(disabled)
+                        .tooltip(description)
+                        .on_click(
+                            cx.listener(move |app, _, w, cx| app.load_git_page(Some(page), w, cx)),
+                        )
+                }))
+                .into_any_element()
+        }
     }
 
     fn project_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> TabBar {

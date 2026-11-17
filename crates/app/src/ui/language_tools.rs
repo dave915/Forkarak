@@ -958,7 +958,10 @@ impl Pokarak {
                 cx,
             )?;
             if let Some(editor) = self.active_editor() {
-                editor.update(cx, |e, cx| e.set_selected_range(caret..caret, cx));
+                editor.update(cx, |e, cx| {
+                    let position = e.text().offset_to_position(caret);
+                    e.set_cursor_position(position, window, cx);
+                });
             }
             Ok(())
         });

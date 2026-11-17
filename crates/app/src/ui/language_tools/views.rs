@@ -88,10 +88,19 @@ impl Pokarak {
             .language_tools
             .panel
             .as_ref()
-            .is_some_and(|p| matches!(p.value, Reply::Symbols(_)))
+            .is_some_and(|p| matches!(p.value, Reply::Symbols(_) | Reply::Complete(_)))
         {
             if let Some(input) = &self.language_tools.input {
                 input.read(cx).focus_handle(cx).focus(window, cx);
+            }
+        } else if self
+            .language_tools
+            .panel
+            .as_ref()
+            .is_some_and(|p| matches!(p.value, Reply::Signature(_) | Reply::Hover(_)))
+        {
+            if let Some(editor) = self.active_editor() {
+                editor.read(cx).focus_handle(cx).focus(window, cx);
             }
         } else if let Some(focus) = &self.language_tools.focus {
             focus.focus(window, cx);
@@ -352,32 +361,43 @@ impl Pokarak {
                     )
                     .child(
                         div()
-                            .id("completion-documentation")
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .overflow_y_scroll()
-                            .p_3()
+                            .min_h_0()
                             .v_flex()
-                            .gap_2()
                             .child(
                                 div()
-                                    .font_family("JetBrains Mono")
-                                    .text_size(ui_text(12.))
-                                    .child(details),
+                                    .id("completion-documentation")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .p_3()
+                                    .v_flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .font_family("JetBrains Mono")
+                                            .text_size(ui_text(12.))
+                                            .child(details),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(ui_text(11.))
+                                            .text_color(palette.rgb(MUTED))
+                                            .child(detail_note),
+                                    ),
                             )
                             .child(
-                                div()
-                                    .text_size(ui_text(11.))
-                                    .text_color(palette.rgb(MUTED))
-                                    .child(detail_note),
-                            )
-                            .child(
-                                Button::new("apply-completion")
-                                    .label("선택한 완성 적용  ↵")
-                                    .small()
-                                    .disabled(count == 0)
-                                    .on_click(cx.listener(|a, _, w, cx| a.apply_completion(w, cx))),
+                                div().flex_none().px_3().py_1().child(
+                                    Button::new("apply-completion")
+                                        .label("선택한 완성 적용  ↵")
+                                        .small()
+                                        .disabled(count == 0)
+                                        .on_click(
+                                            cx.listener(|a, _, w, cx| a.apply_completion(w, cx)),
+                                        ),
+                                ),
                             ),
                     )
                     .into_any_element()

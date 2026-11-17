@@ -109,6 +109,9 @@ impl Pokarak {
         {
             self.git_history.code = !self.git_history.code;
             self.update_history_editor(window, cx);
+            if !self.git_history.code {
+                self.focus.focus(window, cx);
+            }
         }
     }
 
@@ -513,6 +516,7 @@ impl Pokarak {
                             app.set_split_diff(false);
                             app.git_history.code = false;
                             app.update_history_editor(window, cx);
+                            app.focus.focus(window, cx);
                         })
                         .ghost()
                         .selected(!ui.code && !self.prefs.split_diff),
@@ -523,9 +527,10 @@ impl Pokarak {
                             "history-split",
                             "좌우",
                             busy || binary,
-                            |app, _, cx| {
+                            |app, window, cx| {
                                 app.set_split_diff(true);
                                 app.git_history.code = false;
+                                app.focus.focus(window, cx);
                                 cx.notify();
                             },
                         )

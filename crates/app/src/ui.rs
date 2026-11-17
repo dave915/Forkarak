@@ -1524,6 +1524,20 @@ impl Pokarak {
         cx.notify();
     }
 
+    fn select_reader_mode(
+        &mut self,
+        code: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_code(code, cx);
+        if !code {
+            // Explicit Diff/side-by-side selection must leave the hidden code
+            // editor's focus path so DiffReview shortcuts reach the root.
+            self.focus.focus(window, cx);
+        }
+    }
+
     fn stop_analysis(&mut self, cx: &mut Context<Self>) {
         self.navigation_request += 1;
         if let Some(cancel) = self.cancellation.take() {
@@ -2025,9 +2039,9 @@ impl Pokarak {
                     .small()
                     .selected(!code && !self.prefs.split_diff)
                     .disabled(diff.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(|this, _, window, cx| {
                         this.set_split_diff(false);
-                        this.toggle_code(false, cx)
+                        this.select_reader_mode(false, window, cx)
                     })),
             )
             .child(
@@ -2038,9 +2052,9 @@ impl Pokarak {
                     .ghost()
                     .selected(!code && self.prefs.split_diff)
                     .disabled(diff.is_none_or(|d| d.binary))
-                    .on_click(cx.listener(|app, _, _, cx| {
+                    .on_click(cx.listener(|app, _, window, cx| {
                         app.set_split_diff(true);
-                        app.toggle_code(false, cx)
+                        app.select_reader_mode(false, window, cx)
                     })),
             )
             .child(
@@ -2500,7 +2514,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&FindText,w,cx|this.focus_search(true,w,cx)))
             .on_action(cx.listener(|this,_:&FindReferences,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::References,None,w,cx)}}))
             .on_action(cx.listener(|this,_:&FindDefinition,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::Definition,None,w,cx)}}))
-            .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}}))
+            .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.select_reader_mode(code,w,cx)}}))
             .child(self.render_toolbar(window, cx))
             .children(self.branch_review_controls(cx))
             .children(self.update_banner(cx))

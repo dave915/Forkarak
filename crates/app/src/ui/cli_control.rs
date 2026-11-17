@@ -1,7 +1,51 @@
 use super::*;
 use serde_json::{Value, json};
 
+pub(super) struct PendingFile {
+    root: PathBuf,
+    snapshot_request: u64,
+    file_request: u64,
+    path: PathBuf,
+    position: Position,
+}
+
 impl Pokarak {
+    fn open_cli_file(
+        &mut self,
+        path: PathBuf,
+        position: Position,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_cli_file = None;
+        if self.snapshot().is_some() {
+            self.open_file(path, true, Some(position), window, cx);
+            return;
+        }
+        // A fresh Graph view only loads its inventory. Load the Code snapshot
+        // first, retaining the explicit location instead of restoring a default.
+        self.leave_git_graph();
+        self.refresh(window, cx);
+        self.pending_cli_file = Some(PendingFile {
+            root: self.current.clone().unwrap(),
+            snapshot_request: self.request,
+            file_request: self.file_request,
+            path,
+            position,
+        });
+    }
+
+    pub(super) fn take_pending_cli_file(&mut self) -> Option<(PathBuf, Position)> {
+        let pending = self.pending_cli_file.take()?;
+        // Repository changes, a newer refresh, or another file navigation cancel
+        // this location. A late snapshot must never redirect the current reader.
+        (self.current.as_ref() == Some(&pending.root)
+            && self.request == pending.snapshot_request
+            && self.file_request == pending.file_request
+            && !self.git_history.active)
+            .then_some((pending.path, pending.position))
+    }
+
     pub(super) fn install_cli_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match crate::control::Server::start() {
             Ok(server) => self.cli_control = Some(server),
@@ -82,10 +126,9 @@ impl Pokarak {
                         if self.file_loading {
                             return Err("A file is loading; wait for gui status".into());
                         }
-                        self.open_file(
+                        self.open_cli_file(
                             request.path.ok_or("Missing file path")?,
-                            true,
-                            Some(Position::new(request.line.saturating_sub(1), 0)),
+                            Position::new(request.line.saturating_sub(1), 0),
                             window,
                             cx,
                         );

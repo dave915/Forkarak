@@ -287,6 +287,7 @@ pub struct Pokarak {
     external_change: bool,
     checking_changes: bool,
     cli_control: Option<crate::control::Server>,
+    pending_cli_file: Option<cli_control::PendingFile>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -630,6 +631,7 @@ impl Pokarak {
             external_change: false,
             checking_changes: false,
             cli_control: None,
+            pending_cli_file: None,
             _subscriptions: subscriptions,
         };
         this.reset_git_history();
@@ -1173,6 +1175,7 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let cli_file = self.take_pending_cli_file();
         self.capture_code_buffers(cx);
         self.inventory = snapshot.worktrees.clone();
         self.change_count = Some(snapshot.worktree.changed_files);
@@ -1197,7 +1200,9 @@ impl Pokarak {
             self.base_input
                 .update(cx, |input, cx| input.set_value(base.clone(), window, cx));
         }
-        session.saved.selected = selection.clone();
+        if cli_file.is_none() {
+            session.saved.selected = selection.clone();
+        }
         session.saved.tabs.retain(|path| {
             if code_edits.dirty(&root, path) {
                 true
@@ -1216,7 +1221,9 @@ impl Pokarak {
         session.snapshot = Some(snapshot);
         session.diffs.clear();
         self.status = "준비됨".into();
-        if let Some(path) = selection.filter(|_| !self.git_history.active) {
+        if let Some((path, position)) = cli_file {
+            self.open_file(path, true, Some(position), window, cx);
+        } else if let Some(path) = selection.filter(|_| !self.git_history.active) {
             self.open_file(path, false, None, window, cx);
         }
         self.sync_git_history(window, cx);

@@ -86,6 +86,43 @@ impl GitOperations {
             source,
             "--",
         ])?;
+        self.guard_ignored_paths(&affected)?;
+        // Read the confirmation target again after all preflight work. The shared
+        // UI job guard serializes Pokarak writes; Git owns the repository locks.
+        ensure!(
+            self.history_target()? == *target,
+            "The target branch or HEAD changed during validation; confirm again"
+        );
+        let mut command = self.command(&[
+            "-c",
+            "rerere.enabled=false",
+            "-c",
+            "rerere.autoupdate=false",
+            action.label(),
+            "--no-edit",
+            source,
+            "--",
+        ]);
+        command
+            .env("GIT_EDITOR", "/usr/bin/true")
+            .env("GIT_SEQUENCE_EDITOR", "/usr/bin/true")
+            .env("GIT_MERGE_AUTOEDIT", "no");
+        let result = self.run_command(command)?;
+        ensure!(
+            result.code == Some(0),
+            "{} did not complete. Any conflict/index state is retained. Open Stash / conflicts to resolve, continue or explicitly abort. No automatic cleanup was performed.\n{}\n{}",
+            action.label(),
+            String::from_utf8_lossy(&result.stderr),
+            String::from_utf8_lossy(&result.stdout)
+        );
+        Ok(OperationOutput {
+            root: self.root.clone(),
+            stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
+            truncated: result.truncated,
+        })
+    }
+    pub(super) fn guard_ignored_paths(&self, affected: &[u8]) -> Result<()> {
         let affected = affected
             .split(|b| *b == 0)
             .filter(|b| !b.is_empty())
@@ -132,49 +169,16 @@ impl GitOperations {
             let ignored = self.run_command(command)?;
             ensure!(
                 ignored.code == Some(0) && !ignored.truncated,
-                "Could not safely inspect ignored paths for this commit; no history action was started"
+                "Could not safely inspect ignored paths for these changes"
             );
             if let Some(path) = ignored.stdout.split(|b| *b == 0).find(|b| !b.is_empty()) {
                 bail!(
-                    "Ignored path {:?} overlaps a path changed by this commit. Move it explicitly before continuing; no file was discarded",
+                    "Ignored path {:?} overlaps a path changed by this operation. Move it explicitly before continuing; no file was discarded",
                     crate::git::path(path)
                 );
             }
         }
-        // Read the confirmation target again after all preflight work. The shared
-        // UI job guard serializes Pokarak writes; Git owns the repository locks.
-        ensure!(
-            self.history_target()? == *target,
-            "The target branch or HEAD changed during validation; confirm again"
-        );
-        let mut command = self.command(&[
-            "-c",
-            "rerere.enabled=false",
-            "-c",
-            "rerere.autoupdate=false",
-            action.label(),
-            "--no-edit",
-            source,
-            "--",
-        ]);
-        command
-            .env("GIT_EDITOR", "/usr/bin/true")
-            .env("GIT_SEQUENCE_EDITOR", "/usr/bin/true")
-            .env("GIT_MERGE_AUTOEDIT", "no");
-        let result = self.run_command(command)?;
-        ensure!(
-            result.code == Some(0),
-            "{} did not complete. Any conflict/index state is retained. Open Stash / conflicts to resolve, continue or explicitly abort. No automatic cleanup was performed.\n{}\n{}",
-            action.label(),
-            String::from_utf8_lossy(&result.stderr),
-            String::from_utf8_lossy(&result.stdout)
-        );
-        Ok(OperationOutput {
-            root: self.root.clone(),
-            stdout: String::from_utf8_lossy(&result.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
-            truncated: result.truncated,
-        })
+        Ok(())
     }
 }
 #[cfg(test)]

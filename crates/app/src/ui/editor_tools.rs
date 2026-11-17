@@ -5,6 +5,8 @@ mod files;
 mod formatter;
 mod indent;
 mod palette;
+mod shortcuts;
+mod wrap;
 use super::*;
 use code_edit::FileKey;
 use gpui_kit::component::input::{GutterDecoration, GutterDecorationCollection};
@@ -46,164 +48,7 @@ pub(super) struct Tools {
 }
 
 pub(super) fn bind_keys(cx: &mut App) {
-    install_bindings(&Preferences::load(), None, cx);
-}
-
-fn install_bindings(prefs: &Preferences, project: Option<&Path>, cx: &mut App) {
-    use gpui_kit::base::input::{AddCursorAbove, AddCursorBelow};
-    use gpui_kit::component::input::Replace;
-    use std::any::TypeId;
-    let managed = [
-        TypeId::of::<CommandPalette>(),
-        TypeId::of::<ToggleComment>(),
-        TypeId::of::<MoveLineUp>(),
-        TypeId::of::<MoveLineDown>(),
-        TypeId::of::<DuplicateLineUp>(),
-        TypeId::of::<DuplicateLineDown>(),
-        TypeId::of::<SelectNextWord>(),
-        TypeId::of::<ReplaceFile>(),
-        TypeId::of::<GoToLine>(),
-        TypeId::of::<ToggleWordWrap>(),
-        TypeId::of::<PinTab>(),
-        TypeId::of::<FormatFile>(),
-        TypeId::of::<FindFile>(),
-        TypeId::of::<FindText>(),
-        TypeId::of::<FindDefinition>(),
-        TypeId::of::<FindReferences>(),
-        TypeId::of::<NextWorktree>(),
-        TypeId::of::<PreviousWorktree>(),
-        TypeId::of::<SaveCodeFile>(),
-        TypeId::of::<ToggleCode>(),
-        TypeId::of::<Replace>(),
-        TypeId::of::<AddCursorAbove>(),
-        TypeId::of::<AddCursorBelow>(),
-    ];
-    let retained: Vec<_> = cx
-        .key_bindings()
-        .borrow()
-        .bindings()
-        .filter(|binding| !managed.contains(&binding.action().type_id()))
-        .cloned()
-        .collect();
-    cx.clear_key_bindings();
-    cx.bind_keys(retained);
-    let overrides = prefs
-        .option(project, "keyboard.bindings")
-        .and_then(|v| v.as_object());
-    macro_rules! bind {
-        ($id:literal,$key:literal,$action:expr,$context:expr) => {
-            let key = overrides
-                .and_then(|v| v.get($id))
-                .and_then(|v| v.as_str())
-                .unwrap_or($key);
-            let context: Option<&str> = $context;
-            let predicate = context
-                .and_then(|s| KeyBindingContextPredicate::parse(s).ok())
-                .map(Into::into);
-            if !key.trim().is_empty()
-                && let Ok(binding) =
-                    KeyBinding::load(key, Box::new($action), predicate, false, None, cx)
-            {
-                cx.bind_keys([binding]);
-            }
-        };
-    }
-    bind!("command_palette", "cmd-shift-p", CommandPalette, None);
-    bind!(
-        "toggle_comment",
-        "cmd-/",
-        ToggleComment,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "move_line_up",
-        "alt-up",
-        MoveLineUp,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "move_line_down",
-        "alt-down",
-        MoveLineDown,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "duplicate_line_up",
-        "alt-shift-up",
-        DuplicateLineUp,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "duplicate_line_down",
-        "alt-shift-down",
-        DuplicateLineDown,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "select_next_word",
-        "cmd-d",
-        SelectNextWord,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "replace_file",
-        "cmd-alt-f",
-        ReplaceFile,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "go_to_line",
-        "cmd-l",
-        GoToLine,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "word_wrap",
-        "alt-z",
-        ToggleWordWrap,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "pin_tab",
-        "cmd-shift-enter",
-        PinTab,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "format_file",
-        "alt-shift-f",
-        FormatFile,
-        Some("ForkarakCode > Input")
-    );
-    bind!("find_file", "cmd-p", FindFile, None);
-    bind!("find_text", "cmd-shift-f", FindText, None);
-    bind!("find_text", "cmd-shift-f", FindText, Some("Input"));
-    bind!("find_definition", "cmd-b", FindDefinition, None);
-    bind!("find_references", "alt-f7", FindReferences, None);
-    bind!("next_worktree", "cmd-alt-down", NextWorktree, None);
-    bind!("next_worktree", "cmd-alt-down", NextWorktree, Some("Input"));
-    bind!("previous_worktree", "cmd-alt-up", PreviousWorktree, None);
-    bind!(
-        "previous_worktree",
-        "cmd-alt-up",
-        PreviousWorktree,
-        Some("Input")
-    );
-    bind!("save_file", "cmd-s", SaveCodeFile, None);
-    bind!("toggle_code", "cmd-alt-d", ToggleCode, None);
-    // Worktree switching and multiple cursors use distinct modifier chords.
-    bind!(
-        "add_cursor_above",
-        "ctrl-alt-up",
-        AddCursorAbove,
-        Some("ForkarakCode > Input")
-    );
-    bind!(
-        "add_cursor_below",
-        "ctrl-alt-down",
-        AddCursorBelow,
-        Some("ForkarakCode > Input")
-    );
+    shortcuts::install(&Preferences::load(), None, cx);
 }
 
 pub(super) fn actions(
@@ -267,7 +112,7 @@ impl Pokarak {
             .cloned()
             .unwrap_or(serde_json::json!({}));
         if self.code_edits.tools.bindings.as_ref() != Some(&(project.clone(), value.clone())) {
-            install_bindings(&self.prefs, project.as_deref(), cx);
+            shortcuts::install(&self.prefs, project.as_deref(), cx);
             self.code_edits.tools.bindings = Some((project, value));
         }
     }
@@ -409,23 +254,7 @@ impl Pokarak {
         {
             return *value;
         }
-        let project = self.current_project.as_deref();
-        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-        self.prefs
-            .option(project, "editor.wrap_patterns")
-            .and_then(|v| {
-                if let Some(s) = v.as_str() {
-                    serde_json::from_str::<serde_json::Value>(s).ok()
-                } else {
-                    Some(v.clone())
-                }
-            })
-            .and_then(|v| {
-                v.get(extension)
-                    .or_else(|| v.get(format!(".{extension}")))
-                    .and_then(|v| v.as_bool())
-            })
-            .unwrap_or_else(|| self.prefs.option_bool(project, "editor.word_wrap", false))
+        wrap::configured(&self.prefs, self.current_project.as_deref(), path)
     }
 
     fn toggle_word_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {

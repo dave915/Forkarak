@@ -313,14 +313,6 @@ impl Pokarak {
                     .on_click(move |_, _, cx| cx.open_url(&source)),
                 );
             if let Some(tool) = installed {
-                for config in &tool.servers {
-                    row = row.child(div().text_size(ui_text(11.)).child(format!(
-                        "{} 실행: {} {}",
-                        config.language,
-                        config.program,
-                        config.args.join(" ")
-                    )));
-                }
                 for (index, artifact) in tool.artifacts.iter().enumerate() {
                     let url = artifact.source_url.clone();
                     row = row

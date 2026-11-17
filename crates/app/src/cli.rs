@@ -1,3 +1,5 @@
+pub mod ctl;
+
 use std::{ffi::OsString, path::PathBuf};
 
 pub struct Options {
@@ -79,3 +81,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod ctl_tests;

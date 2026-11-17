@@ -311,7 +311,9 @@ impl Pokarak {
         self.git_history.document = None;
         self.git_history.editor = None;
         self.history_read(
-            move |root| history::historical_diff(root, &detail, &path),
+            move |root| {
+                history::historical_diff(root, &detail, &path).map(split_diff::PreparedDiff::new)
+            },
             |app, doc, w, cx| {
                 app.git_history.document = Some(doc.into());
                 app.update_history_editor(w, cx);

@@ -1,15 +1,36 @@
 use super::*;
+use crate::ui::{split_diff::DiffSyntax, syntax::CodeSyntax};
+
+#[derive(Clone)]
+pub(super) struct PartialDiff {
+    preview: Arc<PartialPreview>,
+    syntax: Arc<DiffSyntax>,
+}
+
+impl PartialDiff {
+    pub(super) fn new(path: &Path, preview: PartialPreview) -> Self {
+        let (old, new) = preview.source_texts();
+        let syntax = Arc::new(DiffSyntax {
+            old: CodeSyntax::new(path, old),
+            new: CodeSyntax::new(path, new),
+        });
+        Self {
+            preview: Arc::new(preview),
+            syntax,
+        }
+    }
+}
 
 impl Pokarak {
     pub(super) fn toggle_partial_split(&mut self, cx: &mut Context<Self>) {
         if self.commit_ui.split.take().is_none()
-            && let Some(preview) = &self.commit_ui.partial
+            && let Some(PartialDiff { preview, syntax }) = &self.commit_ui.partial
         {
             let document = Arc::new(DiffDocument {
                 lines: preview.lines().to_vec(),
                 ..Default::default()
             });
-            self.commit_ui.split = Some(self.new_split_diff(document, cx));
+            self.commit_ui.split = Some(self.new_split_diff(document, syntax.clone(), cx));
         }
         cx.notify();
     }
@@ -18,7 +39,7 @@ impl Pokarak {
         if self.commit_disabled() || self.commit_ui.marked.is_empty() {
             return;
         }
-        let (Some(preview), Some(root)) =
+        let (Some(PartialDiff { preview, .. }), Some(root)) =
             (self.commit_ui.partial.clone(), self.commit_ui.root.clone())
         else {
             return;
@@ -57,7 +78,7 @@ impl Pokarak {
 
     pub(super) fn partial_rows(
         &self,
-        preview: Arc<PartialPreview>,
+        PartialDiff { preview, syntax }: PartialDiff,
         weak: WeakEntity<Pokarak>,
         palette: Palette,
     ) -> AnyElement {
@@ -65,81 +86,103 @@ impl Pokarak {
         let font_size = ui_px(self.prefs.display.code_font_size);
         let marked = self.commit_ui.marked.clone();
         let token = self.commit_ui.preview_request;
-        uniform_list("partial-diff", preview.lines().len(), move |range, _, _| {
-            range
-                .map(|i| {
-                    let line = &preview.lines()[i];
-                    let (prefix, color, selectable) = match line.kind {
-                        DiffKind::Addition => ("+", GREEN, true),
-                        DiffKind::Deletion => ("−", RED, true),
-                        DiffKind::Header if line.text.starts_with("@@ ") => ("블록", BLUE, true),
-                        DiffKind::Header => ("", MUTED, false),
-                        DiffKind::Context => ("", TEXT, false),
-                    };
-                    let hunk = prefix == "블록";
-                    let checked = if hunk {
-                        let rows = preview.hunk_lines(i);
-                        !rows.is_empty() && rows.iter().all(|row| marked.contains(row))
-                    } else {
-                        marked.contains(&i)
-                    };
-                    let marker = if !selectable {
-                        ""
-                    } else if checked {
-                        "☑"
-                    } else {
-                        "☐"
-                    };
-                    let label = if let Some(number) = line.new_line.or(line.old_line) {
-                        format!("{marker} {number:>4}  {prefix} {}", line.text)
-                    } else {
-                        format!("{marker} {prefix} {}", line.text)
-                    };
-                    if !selectable {
-                        return div()
-                            .h(theme::code_row_height(font_size))
-                            .px_2()
+        uniform_list(
+            "partial-diff",
+            preview.lines().len(),
+            move |range, _, cx| {
+                range
+                    .map(|i| {
+                        let line = &preview.lines()[i];
+                        let (prefix, color, selectable) = match line.kind {
+                            DiffKind::Addition => ("+", GREEN, true),
+                            DiffKind::Deletion => ("−", RED, true),
+                            DiffKind::Header if line.text.starts_with("@@ ") => {
+                                ("블록", BLUE, true)
+                            }
+                            DiffKind::Header => ("", MUTED, false),
+                            DiffKind::Context => ("", TEXT, false),
+                        };
+                        let hunk = prefix == "블록";
+                        let checked = if hunk {
+                            let rows = preview.hunk_lines(i);
+                            !rows.is_empty() && rows.iter().all(|row| marked.contains(row))
+                        } else {
+                            marked.contains(&i)
+                        };
+                        let marker = if !selectable {
+                            ""
+                        } else if checked {
+                            "☑"
+                        } else {
+                            "☐"
+                        };
+                        let gutter = if let Some(number) = line.new_line.or(line.old_line) {
+                            format!("{marker} {number:>4}  {prefix} ")
+                        } else {
+                            format!("{marker} {prefix} ")
+                        };
+                        let label = selectable.then(|| format!("{gutter}{}", line.text));
+                        let content = div()
+                            .flex()
+                            .flex_none()
+                            .items_center()
                             .whitespace_nowrap()
                             .font_family("JetBrains Mono")
                             .text_size(font_size)
+                            .child(div().text_color(palette.rgb(color)).child(gutter))
+                            .child(
+                                div()
+                                    .text_color(palette.rgb(if line.kind == DiffKind::Header {
+                                        color
+                                    } else {
+                                        TEXT
+                                    }))
+                                    .child(syntax.unified_line(line, cx)),
+                            );
+                        if !selectable {
+                            return div()
+                                .h(theme::code_row_height(font_size))
+                                .px_2()
+                                .child(content)
+                                .into_any_element();
+                        }
+                        let target = preview.clone();
+                        let weak = weak.clone();
+                        Button::new(("partial-row", i))
+                            .small()
+                            .when_some(label, |button, label| button.accessibility_label(label))
+                            .disabled(disabled)
+                            .on_click(move |_, _, cx| {
+                                let _ = weak.update(cx, |app, cx| {
+                                    if token == app.commit_ui.preview_request {
+                                        if hunk {
+                                            app.toggle_lines(&target.hunk_lines(i), cx);
+                                        } else {
+                                            app.toggle_lines(&[i], cx);
+                                        }
+                                    }
+                                });
+                            })
+                            .child(div().w_full().child(content))
+                            .ghost()
+                            .when(line.kind == DiffKind::Addition, |row| {
+                                row.bg(palette.rgb(patch::ADD_BG))
+                            })
+                            .when(line.kind == DiffKind::Deletion, |row| {
+                                row.bg(palette.rgb(patch::DELETE_BG))
+                            })
+                            .selected(checked)
+                            .h(theme::code_row_height(font_size))
+                            .min_w_full()
+                            .justify_start()
+                            .font_family("JetBrains Mono")
+                            .text_size(font_size)
                             .text_color(palette.rgb(color))
-                            .child(label)
-                            .into_any_element();
-                    }
-                    let target = preview.clone();
-                    commit_button(
-                        &weak,
-                        ("partial-row", i),
-                        label,
-                        disabled,
-                        move |app, _, cx| {
-                            if token == app.commit_ui.preview_request {
-                                if hunk {
-                                    app.toggle_lines(&target.hunk_lines(i), cx);
-                                } else {
-                                    app.toggle_lines(&[i], cx);
-                                }
-                            }
-                        },
-                    )
-                    .ghost()
-                    .when(line.kind == DiffKind::Addition, |row| {
-                        row.bg(palette.rgb(patch::ADD_BG))
+                            .into_any_element()
                     })
-                    .when(line.kind == DiffKind::Deletion, |row| {
-                        row.bg(palette.rgb(patch::DELETE_BG))
-                    })
-                    .selected(checked)
-                    .h(theme::code_row_height(font_size))
-                    .min_w_full()
-                    .justify_start()
-                    .font_family("JetBrains Mono")
-                    .text_size(font_size)
-                    .text_color(palette.rgb(color))
-                    .into_any_element()
-                })
-                .collect::<Vec<_>>()
-        })
+                    .collect::<Vec<_>>()
+            },
+        )
         .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
         .h_full()
         .w_full()

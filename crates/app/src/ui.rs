@@ -1291,7 +1291,7 @@ impl Pokarak {
                     "파일을 여는 중 내용이 변경되었습니다. 다시 검색하세요."
                 );
             }
-            anyhow::Ok((text, diff))
+            anyhow::Ok((text, diff.map(split_diff::PreparedDiff::new)))
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
@@ -2746,12 +2746,14 @@ impl Pokarak {
                 .enumerate()
                 .max_by_key(|(_, line)| line.text.len())
                 .map(|(index, _)| index);
-            let lines = Arc::new(diff.lines.clone());
+            let document = diff.document.clone();
+            let syntax = diff.syntax.clone();
             let weak = cx.entity().downgrade();
-            uniform_list("diff-lines", lines.len(), move |range, _, _| {
+            uniform_list("diff-lines", document.lines.len(), move |range, _, cx| {
                 range
                     .map(|ix| {
-                        let line = lines[ix].clone();
+                        let line = &document.lines[ix];
+                        let new_line = line.new_line;
                         let (background, color, sign) = match line.kind {
                             DiffKind::Addition => (patch::ADD_BG, GREEN, "+"),
                             DiffKind::Deletion => (patch::DELETE_BG, RED, "−"),
@@ -2792,14 +2794,17 @@ impl Pokarak {
                                     ),
                             )
                             .child(div().w(ui_px(22.)).flex_none().child(sign))
-                            .child(div().whitespace_nowrap().child(if line.text.is_empty() {
-                                " ".into()
-                            } else {
-                                line.text.clone()
-                            }))
+                            .child(
+                                div()
+                                    .whitespace_nowrap()
+                                    .when(line.kind != DiffKind::Header, |d| {
+                                        d.text_color(palette.rgb(TEXT))
+                                    })
+                                    .child(syntax.unified_line(line, cx)),
+                            )
                             .on_click(move |event, window, cx| {
                                 if event.click_count() == 2
-                                    && let Some(line_number) = line.new_line
+                                    && let Some(line_number) = new_line
                                 {
                                     let _ = target.update(cx, |this, cx| {
                                         if let Some(path) = this.selected() {

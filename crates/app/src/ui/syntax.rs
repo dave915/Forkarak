@@ -96,6 +96,9 @@ fn theme_name(scope: Scope) -> Option<&'static str> {
 
 impl CodeSyntax {
     pub(super) fn new(path: &Path, text: &str) -> Self {
+        if text.is_empty() {
+            return Self::default();
+        }
         let Some(grammar) = grammar(path) else {
             return Self::default();
         };

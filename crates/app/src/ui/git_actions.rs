@@ -4,6 +4,8 @@ mod branch_forms;
 mod contextual;
 mod history;
 mod network;
+mod recovery;
+mod review;
 mod source;
 mod worktree_manager;
 use super::*;
@@ -43,6 +45,13 @@ struct GitCompletion {
     error: Option<String>,
 }
 
+struct GitExtra {
+    root: PathBuf,
+    label: String,
+    detail: String,
+    destructive: bool,
+}
+
 struct GitConfirmation {
     root: PathBuf,
     label: String,
@@ -79,6 +88,9 @@ pub(super) enum Page {
     Merge,
     Rebase,
     Conflicts,
+    CompareRefs,
+    Reflog,
+    Undo,
 }
 
 impl Pokarak {
@@ -418,7 +430,18 @@ impl Pokarak {
                     ],
                 ),
                 ("워크트리", vec![("워크트리 관리…", Page::Worktrees)]),
+                (
+                    "이력과 비교",
+                    vec![
+                        ("두 참조 직접 비교…", Page::CompareRefs),
+                        ("Reflog / 이력 복구…", Page::Reflog),
+                        ("마지막 커밋 취소…", Page::Undo),
+                    ],
+                ),
                 ("진단", vec![("Git 작업 기록…", Page::Log)]),
+
+
+
                 (
                     "저장소 Git 설정",
                     vec![
@@ -479,6 +502,9 @@ impl Pokarak {
             Page::Conflicts => self.open_git_workflow(window, cx),
             Page::Remotes => self.show_remote_settings(state, window, cx),
             Page::Identity => self.show_identity_form(state, window, cx),
+            Page::CompareRefs => self.show_ref_comparison(state.root.clone(), window, cx),
+            Page::Reflog => self.open_reflog(state.root.clone(), window, cx),
+            Page::Undo => self.open_undo_last_commit(state.root.clone(), window, cx),
         }
     }
 

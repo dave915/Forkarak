@@ -409,6 +409,17 @@ impl Pokarak {
                     let track = *upstream.read(cx);
                     let expected_current = state.current_branch.clone(); let expected_head = head(&starts).map(str::to_owned);
                     let urls = if push { config.push_urls.join("\n") } else { config.fetch_urls.join("\n") };
+                    if push {
+                        let Some(local) = local else { return; };
+                        let Some(selected) = starts.iter().find(|s| s.reference == format!("refs/heads/{local}")).cloned() else { return; };
+                        let root = state.root.clone(); let preview_root = root.clone();
+                        let description = format!("원격: {remote_name}\nPush URL:\n{urls}\n로컬 브랜치: {local}\n원격 브랜치: {branch}\nUpstream 설정: {}\n확인한 커밋 하나의 이력만 보냅니다. 강제 Push와 태그 전송은 사용하지 않습니다. 서버의 최종 수락 여부는 실행 시 결정됩니다.", if track { "설정 / 기존 값 변경" } else { "유지" });
+                        let _ = target.update(cx, |app,cx| app.workflow_read(root, move |ops| {
+                            verify_network_target(&ops, &config, expected_current.as_deref(), expected_head.as_deref(), Some(&selected))?;
+                            ops.preview_push(&remote_name, &local, &branch)
+                        }, move |app,preview,w,cx| app.show_git_review(super::review::Review { root: preview_root, title: "Push".into(), description, source: super::review::ReviewSource::Operation(preview), write: Some(super::review::ReviewWrite::Push(track)) },w,cx), w,cx));
+                        return;
+                    }
                     let (label, detail, job): (String, String, GitJob) = if fetch {
                         let label = if prune { "Fetch + 원격 추적 정리" } else { "Fetch" }.to_owned();
                         let detail = format!("원격: {remote_name}\nFetch URL:\n{urls}\n{}", if prune { "사라진 원격 추적 참조를 정리합니다 (--prune)." } else { "원격 추적 참조를 갱신합니다. Prune은 하지 않습니다." });

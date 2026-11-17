@@ -57,7 +57,7 @@ fn fallback_ranges(old: &str, new: &str) -> [Vec<Range<usize>>; 2] {
     [old, new].map(|text| {
         let end = text.len() - suffix;
         if prefix < end {
-            vec![prefix..end]
+            std::iter::once(prefix..end).collect()
         } else {
             vec![]
         }
@@ -168,7 +168,7 @@ impl DiffAnalysis {
                     }
                     (Some(i), None) | (None, Some(i)) => {
                         if !lines[i].text.is_empty() {
-                            result.inline[i] = vec![0..lines[i].text.len()];
+                            result.inline[i] = std::iter::once(0..lines[i].text.len()).collect();
                         }
                         result.whitespace_only[i] = lines[i].text.chars().all(char::is_whitespace);
                     }
@@ -359,7 +359,13 @@ impl Pokarak {
             .child(Button::new("previous-diff-hunk").label("이전 변경").accessibility_label("이전 변경 블록").tooltip("이전 변경 블록  ⌥↑").ghost().small().disabled(empty).on_click(cx.listener(|app,_,window,cx|app.jump_diff_hunk(false,window,cx))))
             .child(Button::new("next-diff-hunk").label("다음 변경").accessibility_label("다음 변경 블록").tooltip("다음 변경 블록  ⌥↓").ghost().small().disabled(empty).on_click(cx.listener(|app,_,window,cx|app.jump_diff_hunk(true,window,cx))))
             .child(Button::new("hide-whitespace-diff").label("공백 변경 숨김").tooltip("공백만 바뀐 줄을 표시에서 제외합니다. 실제 변경과 스테이징에는 영향을 주지 않습니다.").ghost().small().selected(hidden).on_click(cx.listener(|app,_,_,cx| {
-                if let Some(root)=app.current.clone() && let Some(session)=app.sessions.get_mut(&root) { session.saved.diff_hide_whitespace=!session.saved.diff_hide_whitespace; app.persist(cx); cx.notify(); }
+                if let Some(root) = app.current.clone()
+                    && let Some(session) = app.sessions.get_mut(&root)
+                {
+                    session.saved.diff_hide_whitespace = !session.saved.diff_hide_whitespace;
+                    app.persist(cx);
+                    cx.notify();
+                }
             })))
             .when(hidden,|row|row.child(div().text_size(ui_text(11.)).text_color(Palette::new(cx).rgb(MUTED)).child("표시 필터 적용 중")))
             .into_any_element())

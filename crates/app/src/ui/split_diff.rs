@@ -607,9 +607,13 @@ impl SplitDiff {
     }
 }
 
+struct CellContent<'a> {
+    line: Option<&'a DiffLine>,
+    changed: &'a [Range<usize>],
+}
+
 fn cell(
-    line: Option<&DiffLine>,
-    changed: &[Range<usize>],
+    content: CellContent<'_>,
     before: bool,
     syntax: &DiffSyntax,
     offset: f32,
@@ -617,6 +621,7 @@ fn cell(
     palette: Palette,
     cx: &App,
 ) -> Div {
+    let CellContent { line, changed } = content;
     let (bg, ink) = match line.map(|l| &l.kind) {
         Some(DiffKind::Deletion) => (patch::DELETE_BG, RED),
         Some(DiffKind::Addition) => (patch::ADD_BG, GREEN),
@@ -780,9 +785,12 @@ impl Render for SplitDiff {
                                 Row::Sides(l, r) => row
                                     .child(
                                         cell(
-                                            l.map(|i| &doc.lines[i]),
-                                            l.map(|i| analysis.inline[i].as_slice())
-                                                .unwrap_or_default(),
+                                            CellContent {
+                                                line: l.map(|i| &doc.lines[i]),
+                                                changed: l
+                                                    .map(|i| analysis.inline[i].as_slice())
+                                                    .unwrap_or_default(),
+                                            },
                                             true,
                                             &syntax,
                                             offset,
@@ -795,9 +803,12 @@ impl Render for SplitDiff {
                                     )
                                     .child(
                                         cell(
-                                            r.map(|i| &doc.lines[i]),
-                                            r.map(|i| analysis.inline[i].as_slice())
-                                                .unwrap_or_default(),
+                                            CellContent {
+                                                line: r.map(|i| &doc.lines[i]),
+                                                changed: r
+                                                    .map(|i| analysis.inline[i].as_slice())
+                                                    .unwrap_or_default(),
+                                            },
                                             false,
                                             &syntax,
                                             offset,

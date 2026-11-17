@@ -228,6 +228,34 @@ else:
         self.assertEqual(result.returncode, 1)
         self.assertIn("workspace version", result.stderr)
 
+    def test_release_builds_without_binary_on_system_bash(self):
+        cargo_bin = self.case / "cargo-bin"
+        cargo_bin.mkdir()
+        target = self.case / "authored-target"
+        executable = target / "aarch64-apple-darwin/release/pokarak"
+        executable.parent.mkdir(parents=True)
+        shutil.copy2(self.binary, executable)
+        log = self.case / "cargo-arguments.jsonl"
+        cargo = cargo_bin / "cargo"
+        cargo.write_text("#!/usr/bin/env python3\n" + '''import json,os,sys
+with open(os.environ['POKARAK_CARGO_LOG'],'a') as f:
+    f.write(json.dumps(sys.argv[1:])+'\\n')
+if sys.argv[1] == 'metadata':
+    print(json.dumps({'target_directory':os.environ['POKARAK_CARGO_TARGET']}))
+elif sys.argv[1] != 'build':
+    sys.exit(2)
+''')
+        cargo.chmod(0o755)
+        env = {**self.env, "PATH": str(cargo_bin) + ":" + self.env["PATH"], "POKARAK_CARGO_LOG": str(log), "POKARAK_CARGO_TARGET": str(target), "SIGNING_IDENTITY": "", "NOTARY_KEYCHAIN_PROFILE": ""}
+        result = subprocess.run(["/bin/bash", str(self.source / "scripts/release-macos.sh"), "--version", "v0.1.0"], capture_output=True, text=True, env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        commands = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual([cmd[0] for cmd in commands], ["build", "metadata"])
+        self.assertIn("--locked", commands[0])
+        self.assertIn("--release", commands[0])
+        self.assertIn("aarch64-apple-darwin", commands[0])
+        self.assertTrue((self.source / "dist/release/pokarak-macos-arm64.tar.gz").is_file())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -14,6 +14,7 @@ impl Pokarak {
             .flex_none()
             .h(ui_px(28.))
             .when(!full, |b| b.w(ui_px(28.)))
+            .loading(self.language_tools.pending.is_some())
             .disabled(!self.code_support_available(cx))
             .on_click(cx.listener(|app, _, w, cx| app.show_code_support_menu(w, cx)))
             .into_any_element()

@@ -43,6 +43,52 @@ impl Columns {
 }
 
 impl Pokarak {
+    pub(super) fn clear_graph_hover(&mut self) {
+        self.git_history.hovered_tip = None;
+        self.git_history.hover_anchor = None;
+        self.git_history.hover_lookup = None;
+    }
+
+    pub(super) fn refresh_graph_hover(&mut self, cx: &mut Context<Self>) {
+        let ui = &mut self.git_history;
+        ui.hover_lookup = None;
+        ui.hover_anchor = None;
+        let Some(tip) = ui.hovered_tip.clone() else {
+            return;
+        };
+        if ui.entries.iter().any(|row| row.commit.oid == tip) {
+            ui.hover_anchor = Some(tip);
+            return;
+        }
+        if !ui.in_neighborhood {
+            return;
+        }
+        let Some(root) = ui.root.clone() else { return };
+        let entries = ui.entries.clone();
+        let executor = cx.background_executor().clone();
+        ui.hover_lookup = Some(cx.spawn(async move |view, cx| {
+            executor.timer(Duration::from_millis(150)).await;
+            let expected_tip = tip.clone();
+            let expected_root = root.clone();
+            let anchor =
+                executor
+                    .spawn(async move {
+                        history::navigation::first_visible_ancestor(&root, &tip, &entries)
+                    })
+                    .await;
+            let _ = view.update(cx, |app, cx| {
+                let ui = &mut app.git_history;
+                if ui.active
+                    && ui.root.as_ref() == Some(&expected_root)
+                    && ui.hovered_tip.as_ref() == Some(&expected_tip)
+                {
+                    ui.hover_anchor = anchor.ok().flatten();
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
     pub(in crate::ui) fn hover_graph_branch(
         &mut self,
         oid: &str,
@@ -52,8 +98,9 @@ impl Pokarak {
         let current = self.git_history.hovered_tip.as_deref();
         if hovered && current != Some(oid) {
             self.git_history.hovered_tip = Some(oid.to_owned());
+            self.refresh_graph_hover(cx);
         } else if !hovered && current == Some(oid) {
-            self.git_history.hovered_tip = None;
+            self.clear_graph_hover();
         } else {
             return;
         }
@@ -86,10 +133,12 @@ impl Pokarak {
             .filter(|_| !self.inline_commit_active())
             .map(|detail| detail.commit.oid.clone());
         let menu_root = ui.root.clone();
-        let trace = ui
-            .hovered_tip
-            .as_deref()
-            .and_then(|tip| BranchTrace::from_tip(&entries, tip));
+        let trace = ui.hovered_tip.as_ref().map(|_| {
+            ui.hover_anchor
+                .as_deref()
+                .and_then(|oid| BranchTrace::from_tip(&entries, oid))
+                .unwrap_or_default()
+        });
         let weak = cx.entity().downgrade();
         uniform_list("history-commits", entries.len(), move |range, _, _| {
             range

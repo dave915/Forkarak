@@ -20,6 +20,9 @@ pub(super) struct HistoryUi {
     loading: bool,
     entries: Arc<Vec<HistoryEntry>>,
     hovered_tip: Option<String>,
+    hover_anchor: Option<String>,
+    hover_lookup: Option<Task<()>>,
+    in_neighborhood: bool,
     cursor: Option<HistoryCursor>,
     limit_reached: bool,
     shallow: bool,
@@ -105,7 +108,8 @@ impl Pokarak {
         self.git_history.request += 1;
         self.git_history.root = Some(root);
         self.git_history.entries = Arc::default();
-        self.git_history.hovered_tip = None;
+        self.clear_graph_hover();
+        self.git_history.in_neighborhood = false;
         self.git_history.nav.catalog = None;
         self.git_history.cursor = None;
         self.git_history.detail = None;
@@ -143,6 +147,7 @@ impl Pokarak {
                     app.git_history.nav.catalog = Some(Arc::new(catalog));
                 }
                 Arc::make_mut(&mut app.git_history.entries).extend(page.entries);
+                app.refresh_graph_hover(cx);
                 app.git_history.cursor = page.next;
                 app.git_history.limit_reached = page.limit_reached;
                 app.git_history.shallow = page.shallow;

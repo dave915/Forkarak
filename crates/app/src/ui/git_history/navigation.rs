@@ -123,6 +123,8 @@ impl Pokarak {
             move |root| catalog.around(root, &target),
             move |app, (page, i), w, cx| {
                 app.git_history.entries = page.entries.into();
+                app.git_history.in_neighborhood = true;
+                app.refresh_graph_hover(cx);
                 app.git_history.cursor = page.next;
                 app.git_history.limit_reached = page.limit_reached;
                 app.git_history.shallow = page.shallow;

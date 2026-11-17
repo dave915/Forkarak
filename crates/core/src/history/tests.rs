@@ -541,6 +541,21 @@ fn graph_search_and_neighborhood_follow_pinned_commits_past_first_page() {
     assert_eq!(&neighborhood.entries[ix].commit.oid, oid);
     assert_eq!(neighborhood.entries[ix - 1].commit.subject, "Revision 43");
     assert_eq!(neighborhood.entries[ix + 1].commit.subject, "Revision 41");
+    assert_eq!(
+        navigation::first_visible_ancestor(
+            &fixture.root,
+            &first.entries[0].commit.oid,
+            &neighborhood.entries
+        )
+        .unwrap()
+        .as_deref(),
+        Some(neighborhood.entries[0].commit.oid.as_str())
+    );
+    assert!(
+        navigation::first_visible_ancestor(&fixture.root, oid, &first.entries)
+            .unwrap()
+            .is_none()
+    );
     let other = Fixture::new();
     assert!(catalog.around(&other.root, oid).is_err());
 }

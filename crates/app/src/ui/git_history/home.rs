@@ -4,7 +4,7 @@ use gpui_kit::component::resizable::v_resizable;
 impl Pokarak {
     pub(in crate::ui) fn leave_git_graph(&mut self) {
         self.leave_inline_commit();
-        self.git_history.hovered_tip = None;
+        self.clear_graph_hover();
         self.git_history.active = false;
         self.git_history.request += 1;
         self.git_history.loading = false;

@@ -100,6 +100,25 @@ pub fn open(root: &Path, size: usize) -> Result<(HistoryPage, Catalog)> {
     ))
 }
 
+/// Locate the start of a branch's first-parent route in a graph neighborhood
+/// that starts below its tip. Stop reading as soon as the route is visible.
+pub fn first_visible_ancestor(
+    root: &Path,
+    tip: &str,
+    entries: &[HistoryEntry],
+) -> Result<Option<String>> {
+    validate_oid(tip)?;
+    let visible: HashSet<_> = entries.iter().map(|e| e.commit.oid.as_str()).collect();
+    let mut anchor = None;
+    git::visit_oids(root, &["rev-list", "--first-parent", tip, "--"], |oid| {
+        if visible.contains(oid) {
+            anchor = Some(oid.to_owned());
+        }
+        anchor.is_none()
+    })?;
+    Ok(anchor)
+}
+
 impl Catalog {
     /// The catalog is ordered by group, then refname (stash in reflog order).
     pub fn group(&self, group: RefGroup) -> &[GraphRef] {

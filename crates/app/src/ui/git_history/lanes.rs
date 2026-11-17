@@ -9,6 +9,7 @@ pub(super) struct Route {
     pub node: bool,
 }
 
+#[derive(Default)]
 pub(super) struct BranchTrace {
     track: usize,
     start: usize,

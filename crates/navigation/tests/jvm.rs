@@ -376,3 +376,167 @@ fn real_jdt_nested_maven_java17() {
     assert!(result.status.contains("Kotlin callers may be missing"));
     nav.shutdown();
 }
+
+/// POKARAK_GRADLE_FIXTURE_DIR contains the official Gradle 9.3.0 bin ZIP and
+/// gradle-wrapper.jar from the v9.3.0 Gradle tag. Published digests are at
+/// <https://gradle.org/release-checksums/>. The first import fetches the Kotlin
+/// JVM plugin and stdlib into this fixture's temporary Gradle user home.
+#[test]
+#[ignore = "requires JetBrains kotlin-lsp, a compatible JDK, Gradle fixture artifacts and Maven Central"]
+fn real_official_kotlin_gradle_modules_after_trust() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::time::Instant;
+
+    const ZIP: &str = "gradle-9.3.0-bin.zip";
+    const ZIP_SHA: &str = "0d585f69da091fc5b2beced877feab55a3064d43b8a1d46aeb07996b0915e0e0";
+    const JAR_SHA: &str = "b3a875ddc1f044746e1b1a55f645584505f4a10438c1afea9f15e92a7c42ec13";
+    const CALLER: &str = "backend/app/src/main/kotlin/client/Caller.kt";
+    const API: &str = "backend/library/contracts/protocol/Greeter.kt";
+
+    let artifacts = PathBuf::from(std::env::var_os("POKARAK_GRADLE_FIXTURE_DIR").expect(
+        "set POKARAK_GRADLE_FIXTURE_DIR to the directory containing the official Gradle 9.3.0 bin ZIP and wrapper JAR",
+    ));
+    let dist = artifacts.join(ZIP).canonicalize().unwrap();
+    let wrapper = artifacts.join("gradle-wrapper.jar");
+    for (file, sha) in [(&dist, ZIP_SHA), (&wrapper, JAR_SHA)] {
+        let sum = Command::new("/usr/bin/shasum")
+            .args(["-a", "256", "--"])
+            .arg(file)
+            .output()
+            .unwrap();
+        assert!(sum.status.success(), "could not hash {}", file.display());
+        assert_eq!(
+            String::from_utf8(sum.stdout)
+                .unwrap()
+                .split_whitespace()
+                .next(),
+            Some(sha)
+        );
+    }
+
+    let f = Fixture::new();
+    let build = f.root.join("backend");
+    f.write("backend/settings.gradle.kts", r#"
+pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+dependencyResolutionManagement { repositories { mavenCentral() } }
+rootProject.name = "navigation-fixture"
+include(":app", ":library")
+file("settings-evaluated").writeText("${gradle.gradleVersion} / ${System.getProperty("java.version")}")
+"#);
+    f.write(
+        "backend/build.gradle.kts",
+        "plugins { kotlin(\"jvm\") version \"2.3.21\" apply false }\n",
+    );
+    f.write(
+        "backend/library/build.gradle.kts",
+        "plugins { kotlin(\"jvm\") }\nkotlin.sourceSets.main { kotlin.srcDir(\"contracts\") }\n",
+    );
+    f.write(
+        "backend/app/build.gradle.kts",
+        "plugins { kotlin(\"jvm\") }\ndependencies { implementation(project(\":library\")) }\n",
+    );
+    f.write(
+        CALLER,
+        "package client\nimport protocol.Greeter\nfun call() = Greeter().greeting()\n",
+    );
+    f.write(
+        API,
+        "package protocol\nclass Greeter {\n    fun greeting() = \"hello\"\n}\n",
+    );
+
+    let dist_url = url::Url::from_file_path(dist).unwrap();
+    f.write("backend/gradle/wrapper/gradle-wrapper.properties", &format!(
+        "distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\ndistributionUrl={dist_url}\ndistributionSha256Sum={ZIP_SHA}\nzipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n"
+    ));
+    fs::copy(wrapper, build.join("gradle/wrapper/gradle-wrapper.jar")).unwrap();
+    f.write("backend/gradlew", r#"#!/bin/sh
+root=$(dirname "$0")
+touch "$root/wrapper-started"
+exec "${JAVA_HOME:+$JAVA_HOME/bin/}java" -classpath "$root/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"
+"#);
+    fs::set_permissions(build.join("gradlew"), fs::Permissions::from_mode(0o755)).unwrap();
+
+    let state = f._temp.path();
+    let mut kotlin = pokarak_navigation::default_configs()
+        .into_iter()
+        .find(|c| c.language == "kotlin")
+        .unwrap();
+    let real =
+        pokarak_navigation::discover_program(&kotlin.program).expect("put kotlin-lsp on PATH");
+    symlink(real, state.join("real-server")).unwrap();
+    let launcher = state.join("kotlin-lsp");
+    fs::write(
+        &launcher,
+        r#"#!/bin/sh
+state=$(dirname "$0")
+touch "$state/server-started"
+export GRADLE_USER_HOME="$state/gradle-home"
+exec "$state/real-server" "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+    kotlin.program = launcher.to_str().unwrap().to_owned();
+
+    let options = NavigatorOptions {
+        config_file: None,
+        ..Default::default()
+    };
+    let mut locked = Navigator::with_options(f.root.clone(), vec![kotlin.clone()], options.clone());
+    let (line, col) = f.position(CALLER, "greeting()");
+    let error = locked
+        .navigate(Path::new(CALLER), line, col, Definition)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("allowProjectImports"),
+        "{error:#}"
+    );
+    locked.shutdown();
+    for path in [
+        state.join("server-started"),
+        state.join("gradle-home"),
+        build.join("wrapper-started"),
+        build.join("settings-evaluated"),
+    ] {
+        assert!(
+            !path.exists(),
+            "untrusted navigation created {}",
+            path.display()
+        );
+    }
+
+    let mut nav = Navigator::with_options(
+        f.root.clone(),
+        vec![kotlin],
+        NavigatorOptions {
+            allow_project_imports: true,
+            ..options
+        },
+    );
+    let start = Instant::now();
+    f.check(
+        &mut nav,
+        CALLER,
+        "greeting()",
+        Definition,
+        API,
+        "greeting()",
+    );
+    let definition = start.elapsed();
+    f.check(
+        &mut nav,
+        API,
+        "greeting()",
+        References,
+        CALLER,
+        "greeting()",
+    );
+    let references = start.elapsed() - definition;
+    let versions = fs::read_to_string(build.join("settings-evaluated"))
+        .expect("Gradle must evaluate the enclosing settings");
+    assert!(versions.starts_with("9.3.0 / "), "{versions}");
+    eprintln!(
+        "Gradle / JDK: {versions}; cold definition: {definition:.2?}; references: {references:.2?}"
+    );
+    nav.shutdown();
+}

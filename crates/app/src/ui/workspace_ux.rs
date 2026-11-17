@@ -124,24 +124,24 @@ impl Pokarak {
             "workspace.restore_last",
             true,
         );
-        if !restore && restart.is_none() {
-            if let Some(root) = &self.current
-                && let Some(session) = self.sessions.get_mut(root)
-            {
-                session.saved.selected = None;
-                session.saved.tabs.clear();
-                session.saved.positions.clear();
-                session.saved.line = 0;
-                session.saved.column = 0;
-                session.saved.diff_row = 0;
-                session.saved.scroll_x = 0.;
-                session.saved.scroll_y = 0.;
-                session.documents.clear();
-                session.diffs.clear();
-                session.history.clear();
-                session.forward.clear();
-                session.restoring = false;
-            }
+        if !restore
+            && restart.is_none()
+            && let Some(root) = &self.current
+            && let Some(session) = self.sessions.get_mut(root)
+        {
+            session.saved.selected = None;
+            session.saved.tabs.clear();
+            session.saved.positions.clear();
+            session.saved.line = 0;
+            session.saved.column = 0;
+            session.saved.diff_row = 0;
+            session.saved.scroll_x = 0.;
+            session.saved.scroll_y = 0.;
+            session.documents.clear();
+            session.diffs.clear();
+            session.history.clear();
+            session.forward.clear();
+            session.restoring = false;
         }
         let view = restart.or_else(|| {
             restore

@@ -45,6 +45,7 @@ cargo run -p pokarak -- /path/to/backend /path/to/frontend
 
 - 기본 화면은 커밋 그래프다. 위에서 커밋을 선택하고 아래에서 변경 파일과 diff·커밋 시점의 코드를 읽는다. 상단 **코드 보기**에서 기존 작업 파일 화면으로 전환하며, 프로젝트·워크트리를 열면 그래프부터 표시한다.
 - 상단바 왼쪽에서 프로젝트와 그래프·코드 보기를 전환한다. 오른쪽 Git 툴바는 좁은 창에서도 Stage / 커밋, 브랜치, Stash, Fetch, Pull, Push, Git 작업 더 보기를 아이콘으로 표시한다. 아이콘에 마우스를 올리면 기능명이 나타난다.
+- 상단바의 터미널 아이콘을 누르면 현재 워크트리에서 macOS 터미널이 열린다. 새 대화형 로그인 zsh가 포카락이 받은 환경변수를 상속하고 사용자의 zsh 설정을 읽으므로 설치된 AI CLI를 바로 실행할 수 있다.
 - 저장소의 main/linked worktree 발견과 보기 전환. 전환은 checkout을 실행하지 않는다.
 - 미커밋 변경: HEAD와 현재 파일 비교. staged·unstaged 변경을 함께 확인한다.
 - 브랜치 변경: 선택한 기준 브랜치와의 공통 조상부터 현재 파일까지 비교한다. 이미 커밋된 변경도 포함한다.
@@ -97,6 +98,7 @@ cargo run -p pokarak -- /path/to/backend /path/to/frontend
 | --- | --- |
 | 프로젝트 열기 | ⌘O |
 | 프로젝트 전환 | Control-Tab / Control-Shift-Tab |
+| 워크트리 터미널 열기 | Control + 백틱 |
 | 워크트리 전환 | ⌘⌥↓ / ⌘⌥↑ |
 | 파일 찾기 | ⌘P, ↑↓, Enter |
 | 본문 검색 | ⌘⇧F, 검색어, Enter |

@@ -53,7 +53,19 @@ impl Pokarak {
             })
             .child(div().flex_1())
             .when(self.current.is_some(), |bar| {
-                bar.child(self.git_toolbar(cx)).child(
+                let bar = bar.child(self.git_toolbar(cx));
+                #[cfg(target_os = "macos")]
+                let bar = bar.child(
+                    toolbar_icon(
+                        "open-terminal",
+                        IconName::SquareTerminal,
+                        "워크트리 터미널 열기",
+                    )
+                    .disabled(self.opening_path.is_some())
+                    .tooltip_with_action("워크트리 터미널 열기 · zsh", &OpenWorktreeTerminal, None)
+                    .on_click(cx.listener(|app, _, _, cx| app.open_worktree_terminal(cx))),
+                );
+                bar.child(
                     toolbar_icon("refresh", IconName::RefreshCw, "저장소 새로고침")
                         .loading(self.loading)
                         .disabled(self.loading || self.git_is_busy())
@@ -78,6 +90,28 @@ impl Pokarak {
             .border_b_0()
             .child(div().relative().size_full().child(content))
             .into_any_element()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn open_worktree_terminal(&mut self, cx: &mut Context<Self>) {
+        if let Some(root) = self.current.clone().filter(|_| self.opening_path.is_none()) {
+            let worktree = root.clone();
+            let task = cx.background_spawn(async move { crate::terminal::open(&worktree).await });
+            cx.spawn(async move |view, cx| {
+                let result = task.await;
+                if let Err(error) = result {
+                    let _ = view.update(cx, |app, cx| {
+                        if app.current.as_ref() == Some(&root) {
+                            app.status = "터미널을 열 수 없습니다".into();
+                            app.error =
+                                Some(format!("터미널 열기 — {}\n{error:#}", root.display()));
+                            cx.notify();
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
     }
 
     fn git_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {

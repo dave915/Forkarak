@@ -66,6 +66,7 @@ actions!(
     [
         Quit,
         OpenSettings,
+        OpenWorktreeTerminal,
         OpenGitActions,
         OpenGitCommit,
         OpenGitWorkflow,
@@ -100,6 +101,8 @@ pub fn bind_keys(cx: &mut App) {
         ]),
         Menu::new("파일").items([
             MenuItem::action("저장소 열기…", OpenRepository),
+            #[cfg(target_os = "macos")]
+            MenuItem::action("워크트리 터미널 열기", OpenWorktreeTerminal),
             MenuItem::action("새로고침", Refresh),
             MenuItem::action("Stash / 충돌 해결…", OpenGitWorkflow),
             MenuItem::separator(),
@@ -139,6 +142,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-tab", NextProject, None),
         KeyBinding::new("ctrl-shift-tab", PreviousProject, None),
         KeyBinding::new("cmd-o", OpenRepository, None),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("ctrl-`", OpenWorktreeTerminal, None),
         KeyBinding::new("cmd-r", Refresh, None),
         KeyBinding::new("cmd-[", Back, None),
         KeyBinding::new("cmd-]", Forward, None),
@@ -2997,7 +3002,12 @@ impl Render for Pokarak {
             .as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
-        div().id("pokarak").key_context(if self.git_history.active { "Pokarak GitGraph" } else { "Pokarak" }).track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
+        let root = div().id("pokarak");
+        #[cfg(target_os = "macos")]
+        let root = root.on_action(
+            cx.listener(|app, _: &OpenWorktreeTerminal, _, cx| app.open_worktree_terminal(cx)),
+        );
+        root.key_context(if self.git_history.active { "Pokarak GitGraph" } else { "Pokarak" }).track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(px(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
             .on_action(cx.listener(|this,_:&SearchGitGraph,w,cx|this.open_graph_search(w,cx)))
             .on_action(cx.listener(|this,_:&OpenGitHistory,w,cx|this.open_git_history(w,cx)))

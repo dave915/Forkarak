@@ -105,6 +105,7 @@ else:
         self.bindir = self.home / ".local/bin"
         self.app = self.appdir / "Forkarak.app"
         self.cli = self.bindir / "forkarak"
+        self.alias = self.bindir / "fkk"
         self.log = self.case / "curl.log"
         self.release = self.case / "release"
         shutil.copytree(self.good_release, self.release)
@@ -638,19 +639,116 @@ else:
         self.assertIn("links or special", self.install(expected=1).stderr)
         self.assertFalse(self.app.exists())
 
-    def test_cli_launch_preserves_unicode_and_relative_paths(self):
+    def test_cli_launch_preserves_unicode_and_relative_paths_without_launchservices(self):
         self.install()
-        self.args_file.unlink(missing_ok=True)
-        paths = ["한글 project", "second with spaces"]
-        paths.append("-literal")
-        result = subprocess.run([str(self.cli), "--", *paths], cwd=self.case, env=self.env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        for _ in range(40):
-            if self.args_file.exists():
-                break
-            time.sleep(0.05)
-        self.assertTrue(self.args_file.exists(), "LaunchServices did not execute the authored fixture")
-        self.assertEqual(self.args_file.read_text().splitlines(), ["--", *[str(self.case.resolve() / p) for p in paths]])
+        # The signed authored executable records the native handoff and exits.
+        # No agent execution of the activating human launch path is needed.
+        paths = ["한글 file.rs", "second with spaces", "-literal"]
+        for command in (self.cli, self.alias):
+            self.args_file.unlink(missing_ok=True)
+            result = subprocess.run([str(command), "--", *paths], cwd=self.case, env=self.env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.args_file.read_text().splitlines(),
+                             ["--cli-open", str(self.app.resolve()), "--", *paths])
+
+    def test_dual_commands_upgrade_canonical_only_and_preserve_short_name_collisions(self):
+        self.install()
+        self.assertTrue(self.alias.is_file())
+        self.assertFalse(self.alias.is_symlink())
+        self.assertEqual(self.alias.read_bytes(), self.cli.read_bytes())
+        self.assertEqual(subprocess.check_output([str(self.alias), "--version"], env=self.env, text=True), "0.1.0\n")
+        self.alias.unlink()  # Legacy canonical-only installation.
+        self.install()
+        self.assertEqual(self.alias.read_bytes(), self.cli.read_bytes())
+        app_identity = self.app.stat().st_ino
+        previous = self.cli.read_bytes()
+        self.alias.write_text("#!/bin/sh\necho unrelated\n")
+        self.log.unlink()
+        result = self.install(expected=1)
+        self.assertIn("unrelated command", result.stderr)
+        self.assertIn(str(self.alias), result.stderr)
+        self.assertFalse(self.log.exists(), "collision was not detected before download")
+        self.assertEqual(self.app.stat().st_ino, app_identity)
+        self.assertEqual(self.cli.read_bytes(), previous)
+        self.assertEqual(self.alias.read_text(), "#!/bin/sh\necho unrelated\n")
+        self.alias.unlink()
+        self.alias.symlink_to(self.case / "dangling-other-program")
+        self.assertIn("symlink", self.install(expected=1).stderr)
+        self.assertTrue(self.alias.is_symlink())
+        self.assertFalse(self.log.exists())
+
+    def test_local_bundle_cli_install_has_no_download_and_preserves_bundle(self):
+        self.zip_install()
+        identity = self.app.stat().st_ino
+        binary = (self.app / "Contents/MacOS/forkarak").read_bytes()
+        self.install("--install-cli", str(self.app))
+        self.assertFalse(self.log.exists())
+        self.assertEqual(self.cli.read_bytes(), self.alias.read_bytes())
+        subprocess.run([str(self.alias), "--background", "--", "literal file"], env=self.env, check=True, capture_output=True)
+        self.assertEqual(self.args_file.read_text().splitlines(), ["--cli-open", str(self.app.resolve()), "--background", "--", "literal file"])
+        self.alias.unlink()
+        self.install("--install-cli", str(self.app))
+        self.assertTrue(self.alias.is_file(), "canonical-only local installs must gain fkk")
+        custom = self.case / "commands ' 한글 $(touch unintended)"
+        self.install("--install-cli", str(self.app), "--bin-dir", str(custom))
+        for name in ("forkarak", "fkk"):
+            self.assertEqual(subprocess.check_output([str(custom / name), "--version"], env=self.env, text=True), "0.1.0\n")
+        self.assertFalse((self.case / "unintended").exists())
+        self.assertEqual(self.app.stat().st_ino, identity)
+        self.assertEqual((self.app / "Contents/MacOS/forkarak").read_bytes(), binary)
+        self.assertFalse(self.log.exists())
+        self.alias.write_text("unrelated local short command")
+        self.assertIn("unrelated command", self.install("--install-cli", str(self.app), expected=1).stderr)
+        self.assertEqual(self.alias.read_text(), "unrelated local short command")
+        self.assertFalse(self.log.exists())
+        self.assertIn("only --bin-dir", self.install("--install-cli", str(self.app), "--version", "v0.1.0", expected=1).stderr)
+
+    def test_local_cli_install_publication_failure_restores_both_commands(self):
+        self.zip_install()
+        self.install("--install-cli", str(self.app))
+        previous = [command.read_bytes() for command in (self.cli, self.alias)]
+        identity = self.app.stat().st_ino
+        installer = self.source / "scripts/install.sh"
+        original = installer.read_text()
+        try:
+            installer.write_text(original.replace('/bin/mv -f "$ALIAS_STAGE" "$ALIAS_PATH"', '/usr/bin/false'))
+            self.install("--install-cli", str(self.app), expected=1)
+        finally:
+            installer.write_text(original)
+        self.assertEqual([command.read_bytes() for command in (self.cli, self.alias)], previous)
+        self.assertEqual(self.app.stat().st_ino, identity)
+        self.assertFalse(list(self.bindir.glob(".forkarak-*")))
+        self.assertFalse(self.log.exists())
+
+    def test_second_command_publication_failure_rolls_back_app_and_both_commands(self):
+        installer = self.source / "scripts/install.sh"
+        original = installer.read_text()
+        needle = '/bin/mv -f "$ALIAS_STAGE" "$ALIAS_PATH"'
+        self.assertIn(needle, original)
+        for existing in ("fresh", "canonical-only", "both"):
+            with self.subTest(existing=existing):
+                installer.write_text(original)
+                if self.app.exists(): shutil.rmtree(self.app)
+                for command in (self.cli, self.alias): command.unlink(missing_ok=True)
+                if existing != "fresh":
+                    self.install()
+                    if existing == "canonical-only": self.alias.unlink()
+                before = {command.name: command.read_bytes() if command.exists() else None
+                          for command in (self.cli, self.alias)}
+                identity = self.app.stat().st_ino if self.app.exists() else None
+                try:
+                    # Fault injection in this disposable installer only: fail at
+                    # the final publish, after the app and canonical command moved.
+                    installer.write_text(original.replace(needle, '/usr/bin/false'))
+                    self.install(expected=1)
+                finally:
+                    installer.write_text(original)
+                self.assertEqual(self.app.stat().st_ino if self.app.exists() else None, identity)
+                for command in (self.cli, self.alias):
+                    self.assertEqual(command.read_bytes() if command.exists() else None, before[command.name])
+                self.assertFalse(list(self.bindir.glob(".forkarak-*")))
+                self.assertFalse(list(self.appdir.glob(".forkarak-*")))
 
     def test_running_installed_app_is_refused(self):
         self.install()

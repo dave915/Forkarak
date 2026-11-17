@@ -19,23 +19,108 @@ CLI_STAGE=""
 APP_PATH=""
 CLI_PATH=""
 CLI_BACKUP=""
+ALIAS_PATH=""
+ALIAS_STAGE=""
+ALIAS_BACKUP=""
+CLI_PUBLISHED=false
+ALIAS_PUBLISHED=false
 COMMITTED=false
 APP_PUBLISHED=false
+LOCAL_CLI_APP=""
+BIN_LOCK_DIR=""
 
 fail() { echo "Error: $*" >&2; exit 1; }
 # Bash 3.2 must update its locale before %q; an inline environment assignment
 # leaves partially escaped multi-byte strings in some locale configurations.
 shell_quote() { (LC_ALL=C; printf '%q' "$1"); }
+cleanup() {
+    status=$?
+    if ! "$COMMITTED" && [[ -n "$WORK_DIR" ]]; then
+        if "$APP_PUBLISHED" && [[ -e "$APP_PATH" ]]; then /bin/rm -rf "$APP_PATH"; fi
+        if [[ -d "$WORK_DIR/previous.app" ]]; then
+            /bin/mv "$WORK_DIR/previous.app" "$APP_PATH" || { echo "Previous app preserved at $WORK_DIR/previous.app" >&2; return 1; }
+        fi
+        if "$CLI_PUBLISHED"; then /bin/rm -f "$CLI_PATH"; fi
+        if "$ALIAS_PUBLISHED"; then /bin/rm -f "$ALIAS_PATH"; fi
+        if [[ -n "$ALIAS_BACKUP" && -e "$ALIAS_BACKUP" ]]; then
+            /bin/mv -f "$ALIAS_BACKUP" "$ALIAS_PATH" || { echo "Previous fkk preserved at $ALIAS_BACKUP" >&2; return 1; }
+        fi
+        if [[ -n "$CLI_BACKUP" && -e "$CLI_BACKUP" ]]; then
+            /bin/mv -f "$CLI_BACKUP" "$CLI_PATH" || { echo "Previous CLI preserved at $CLI_BACKUP" >&2; return 1; }
+        fi
+    fi
+    [[ -z "$APP_STAGE" || ! -e "$APP_STAGE" ]] || /bin/rm -rf "$APP_STAGE"
+    [[ -z "$CLI_STAGE" || ! -e "$CLI_STAGE" ]] || /bin/rm -f "$CLI_STAGE"
+    [[ -z "$CLI_BACKUP" || ! -e "$CLI_BACKUP" ]] || /bin/rm -f "$CLI_BACKUP"
+    [[ -z "$ALIAS_STAGE" || ! -e "$ALIAS_STAGE" ]] || /bin/rm -f "$ALIAS_STAGE"
+    [[ -z "$ALIAS_BACKUP" || ! -e "$ALIAS_BACKUP" ]] || /bin/rm -f "$ALIAS_BACKUP"
+    [[ -z "$WORK_DIR" || ! -d "$WORK_DIR" ]] || /bin/rm -rf "$WORK_DIR"
+    [[ -z "$RUNNING_APP" ]] || /bin/rm -f "$LOCK_DIR/work-dir"
+    [[ -z "$BIN_LOCK_DIR" ]] || rmdir "$BIN_LOCK_DIR" 2>/dev/null || true
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    return "$status"
+}
+install_traps() {
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 141' PIPE
+}
+validate_cli_destinations() {
+    # Validate both destinations before downloading or moving the app. Never
+    # take over a different program or a symlink, including a dangling one.
+    for command_path in "$CLI_PATH" "$ALIAS_PATH"; do
+        [[ ! -L "$command_path" ]] || fail "Refusing to replace a symlink: $command_path"
+        if [[ -e "$command_path" ]]; then
+            [[ -f "$command_path" ]] && /usr/bin/grep -Fqx '# Forkarak managed launcher' "$command_path" || fail "Refusing to replace an unrelated command: $command_path (choose another --bin-dir)"
+        fi
+    done
+}
+stage_cli_launchers() {
+    CLI_STAGE="$(mktemp "$BIN_DIR/.forkarak-cli.XXXXXX")"
+    {
+        printf '#!/bin/bash\n# Forkarak managed launcher\n'
+        printf 'FORKARAK_APP_PATH=%s\n' "$(shell_quote "$APP_PATH")"
+        printf 'FORKARAK_BIN_DIR=%s\n' "$(shell_quote "$BIN_DIR")"
+        /bin/cat "$1/Contents/Resources/forkarak-cli.sh"
+    } > "$CLI_STAGE"
+    /bin/chmod 755 "$CLI_STAGE"
+    ALIAS_STAGE="$(mktemp "$BIN_DIR/.forkarak-fkk.XXXXXX")"
+    /bin/cp "$CLI_STAGE" "$ALIAS_STAGE"
+    /bin/chmod 755 "$ALIAS_STAGE"
+}
+backup_cli_launchers() {
+    validate_cli_destinations
+    if [[ -e "$CLI_PATH" ]]; then
+        CLI_BACKUP="$(mktemp "$BIN_DIR/.forkarak-previous.XXXXXX")"
+        /bin/rm "$CLI_BACKUP"
+        /bin/mv "$CLI_PATH" "$CLI_BACKUP"
+    fi
+    if [[ -e "$ALIAS_PATH" ]]; then
+        ALIAS_BACKUP="$(mktemp "$BIN_DIR/.forkarak-fkk-previous.XXXXXX")"
+        /bin/rm "$ALIAS_BACKUP"
+        /bin/mv "$ALIAS_PATH" "$ALIAS_BACKUP"
+    fi
+}
+publish_cli_launchers() {
+    /bin/mv -f "$CLI_STAGE" "$CLI_PATH"
+    CLI_PUBLISHED=true
+    /bin/mv -f "$ALIAS_STAGE" "$ALIAS_PATH"
+    ALIAS_PUBLISHED=true
+}
+
 usage() {
     cat <<'USAGE'
 Usage: bash install.sh [--version vX.Y.Z] [--app-dir DIRECTORY] [--bin-dir DIRECTORY]
+       bash install.sh --install-cli APP_BUNDLE [--bin-dir DIRECTORY]
        bash install.sh --check-only
        bash install.sh --update-running-app APP_BUNDLE --wait-pid PID --version vX.Y.Z
                        [--relaunch-session-dir ABSOLUTE_DIRECTORY]
 
 Installs the latest public dave915/Forkarak release for Apple Silicon macOS 13+.
-Defaults: ~/Applications/Forkarak.app and ~/.local/bin/forkarak.
+Defaults: ~/Applications/Forkarak.app and both ~/.local/bin/forkarak and ~/.local/bin/fkk.
 Use `forkarak update` to update the same installation. Quit the app first.
+Use --install-cli to install both commands from a local signed bundle, without downloads.
 No sudo, Rust, Xcode, Homebrew, or GitHub login is needed.
 USAGE
 }
@@ -46,9 +131,10 @@ if [[ "${1:-}" == --check-only ]]; then
 fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --version|--app-dir|--bin-dir|--update-running-app|--wait-pid|--relaunch-session-dir)
+        --version|--app-dir|--bin-dir|--update-running-app|--wait-pid|--relaunch-session-dir|--install-cli)
             [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "$1 requires a value"
             case "$1" in
+                --install-cli) [[ -z "$LOCAL_CLI_APP" ]] || fail "$1 specified twice"; LOCAL_CLI_APP="$2" ;;
                 --version) [[ -z "$TAG" ]] || fail "--version specified twice"; TAG="$2" ;;
                 --app-dir) APP_DIR="$2"; INSTALL_DIR_GIVEN=true ;;
                 --bin-dir) BIN_DIR="$2"; INSTALL_DIR_GIVEN=true ;;
@@ -64,6 +150,36 @@ done
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || fail "Apple Silicon macOS is required"
 OS_VERSION="$(/usr/bin/sw_vers -productVersion)"
 [[ "${OS_VERSION%%.*}" -ge 13 ]] || fail "macOS 13 or newer is required"
+if [[ -n "$LOCAL_CLI_APP" ]]; then
+    [[ -z "$APP_DIR" && -z "$TAG" && -z "$RUNNING_APP" && -z "$WAIT_PID" && -z "$SESSION_DIR" ]] || fail "--install-cli accepts only --bin-dir"
+    [[ -n "${HOME:-}" ]] || fail "Cannot locate home directory"
+    [[ ! -L "$LOCAL_CLI_APP" && -d "$LOCAL_CLI_APP" ]] || fail "Expected a local app bundle, not a symlink"
+    APP_PATH="$(cd -P -- "$LOCAL_CLI_APP" && pwd -P)"
+    [[ "$APP_PATH" == *.app && "$APP_PATH" != *$'\n'* ]] || fail "Expected a local .app bundle"
+    [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$APP_PATH/Contents/Info.plist")" == dev.pokarak.app &&
+       "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$APP_PATH/Contents/Info.plist")" == forkarak ]] || fail "Expected a Forkarak bundle"
+    [[ -x "$APP_PATH/Contents/MacOS/forkarak" && -f "$APP_PATH/Contents/Resources/forkarak-cli.sh" &&
+       ! -L "$APP_PATH/Contents/Resources/forkarak-cli.sh" ]] || fail "Local bundle is missing CLI resources"
+    /usr/bin/codesign --verify --strict --deep "$APP_PATH" || fail "Local app signature verification failed"
+    BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
+    [[ "$BIN_DIR" != *$'\n'* ]] || fail "Command directory cannot contain newlines"
+    mkdir -p "$BIN_DIR"
+    BIN_DIR="$(cd -P -- "$BIN_DIR" && pwd -P)"
+    CLI_PATH="$BIN_DIR/forkarak"
+    ALIAS_PATH="$BIN_DIR/fkk"
+    LOCK_DIR="$BIN_DIR/.forkarak-cli-install.lock"
+    mkdir "$LOCK_DIR" 2>/dev/null || fail "Another CLI install is active, or a stale lock exists at $LOCK_DIR"
+    install_traps
+    validate_cli_destinations
+    WORK_DIR="$(mktemp -d "$BIN_DIR/.forkarak-cli-install.XXXXXX")"
+    stage_cli_launchers "$APP_PATH"
+    backup_cli_launchers
+    publish_cli_launchers
+    COMMITTED=true
+    echo "Installed local commands: $CLI_PATH and $ALIAS_PATH"
+    echo "Application: $APP_PATH"
+    exit 0
+fi
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 RELEASES_URL="https://github.com/$REPOSITORY/releases"
 # Keep diagnostics tied to the public URL; asset redirects can carry a temporary
@@ -137,33 +253,16 @@ else
     BIN_DIR="$(cd "$BIN_DIR" && pwd -P)"
     APP_PATH="$APP_DIR/$APP_NAME"
     CLI_PATH="$BIN_DIR/forkarak"
+    ALIAS_PATH="$BIN_DIR/fkk"
 fi
 LOCK_DIR="$APP_DIR/.forkarak-install.lock"
 mkdir "$LOCK_DIR" 2>/dev/null || fail "Another install is active, or a stale lock exists at $LOCK_DIR"
 
-cleanup() {
-    status=$?
-    if ! "$COMMITTED" && [[ -n "$WORK_DIR" ]]; then
-        if "$APP_PUBLISHED" && [[ -e "$APP_PATH" ]]; then /bin/rm -rf "$APP_PATH"; fi
-        if [[ -d "$WORK_DIR/previous.app" ]]; then
-            /bin/mv "$WORK_DIR/previous.app" "$APP_PATH" || { echo "Previous app preserved at $WORK_DIR/previous.app" >&2; return 1; }
-        fi
-        if [[ -n "$CLI_BACKUP" && -e "$CLI_BACKUP" ]]; then
-            /bin/mv -f "$CLI_BACKUP" "$CLI_PATH" || { echo "Previous CLI preserved at $CLI_BACKUP" >&2; return 1; }
-        fi
-    fi
-    [[ -z "$APP_STAGE" || ! -e "$APP_STAGE" ]] || /bin/rm -rf "$APP_STAGE"
-    [[ -z "$CLI_STAGE" || ! -e "$CLI_STAGE" ]] || /bin/rm -f "$CLI_STAGE"
-    [[ -z "$CLI_BACKUP" || ! -e "$CLI_BACKUP" ]] || /bin/rm -f "$CLI_BACKUP"
-    [[ -z "$WORK_DIR" || ! -d "$WORK_DIR" ]] || /bin/rm -rf "$WORK_DIR"
-    [[ -z "$RUNNING_APP" ]] || /bin/rm -f "$LOCK_DIR/work-dir"
-    rmdir "$LOCK_DIR" 2>/dev/null || true
-    return "$status"
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 141' PIPE
+install_traps
+if [[ -z "$RUNNING_APP" ]]; then
+    mkdir "$BIN_DIR/.forkarak-cli-install.lock" 2>/dev/null || fail "Another CLI install is active at $BIN_DIR"
+    BIN_LOCK_DIR="$BIN_DIR/.forkarak-cli-install.lock"
+fi
 
 [[ ! -L "$APP_PATH" ]] || fail "Refusing to replace a symlink: $APP_PATH"
 if [[ -e "$APP_PATH" ]]; then
@@ -186,10 +285,7 @@ if [[ -n "$RUNNING_APP" ]]; then
     ORIGINAL_ID="$(bundle_identity "$APP_PATH")"
     require_origin
 else
-    [[ ! -L "$CLI_PATH" ]] || fail "Refusing to replace a symlink: $CLI_PATH"
-    if [[ -e "$CLI_PATH" ]]; then
-        [[ -f "$CLI_PATH" ]] && /usr/bin/grep -Fq '# Forkarak managed launcher' "$CLI_PATH" || fail "Refusing to replace an unrelated command: $CLI_PATH"
-    fi
+    validate_cli_destinations
     require_app_closed "$APP_PATH"
     resolve_tag
 fi
@@ -259,27 +355,16 @@ if [[ -n "$RUNNING_APP" ]]; then
 fi
 
 APP_STAGE="$STAGED_APP"
-CLI_STAGE="$(mktemp "$BIN_DIR/.forkarak-cli.XXXXXX")"
-{
-    printf '#!/bin/bash\n# Forkarak managed launcher\n'
-    printf 'FORKARAK_APP_PATH=%s\n' "$(shell_quote "$APP_PATH")"
-    printf 'FORKARAK_BIN_DIR=%s\n' "$(shell_quote "$BIN_DIR")"
-    /bin/cat "$APP_STAGE/Contents/Resources/forkarak-cli.sh"
-} > "$CLI_STAGE"
-/bin/chmod 755 "$CLI_STAGE"
+stage_cli_launchers "$APP_STAGE"
 require_app_closed "$APP_PATH"
 if [[ -e "$APP_PATH" ]]; then /bin/mv "$APP_PATH" "$WORK_DIR/previous.app"; fi
-if [[ -e "$CLI_PATH" ]]; then
-    CLI_BACKUP="$(mktemp "$BIN_DIR/.forkarak-previous.XXXXXX")"
-    /bin/rm "$CLI_BACKUP"
-    /bin/mv "$CLI_PATH" "$CLI_BACKUP"
-fi
+backup_cli_launchers
 /bin/mv "$APP_STAGE" "$APP_PATH"
 APP_PUBLISHED=true
-/bin/mv -f "$CLI_STAGE" "$CLI_PATH"
+publish_cli_launchers
 COMMITTED=true
 echo "Installed Forkarak ${TAG#v}: $APP_PATH"
-echo "Command: $CLI_PATH"
+echo "Commands: $CLI_PATH and $ALIAS_PATH"
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) printf 'Add the command to this shell: export PATH=%s:"$PATH"\n' "$(shell_quote "$BIN_DIR")" ;;

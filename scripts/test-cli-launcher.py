@@ -62,10 +62,9 @@ sys.exit(int(os.environ["FORKARAK_FIXTURE_EXIT"]))
             "CFBundleShortVersionString": "0.1.0",
         }))
         wrapper = (ROOT / "scripts/forkarak-cli.sh").read_text(encoding="utf-8")
-        # Production uses absolute LaunchServices paths. Redirect only those
-        # calls in this disposable copy so regressions cannot open a real GUI.
-        self.assertEqual(wrapper.count("/usr/bin/open"), 2)
-        wrapper = wrapper.replace("/usr/bin/open", shlex.quote(str(self.base / "open")))
+        # This wrapper must delegate all editor parsing and launching to native
+        # code. The authored executable records argv and never launches a GUI.
+        self.assertNotIn("/usr/bin/open", wrapper)
         # Match install.sh's managed launcher preamble; paths are shell-quoted.
         self.cli.write_text(
             "#!/bin/bash\n# Forkarak managed launcher\n"
@@ -74,6 +73,9 @@ sys.exit(int(os.environ["FORKARAK_FIXTURE_EXIT"]))
             encoding="utf-8",
         )
         self.cli.chmod(0o755)
+        self.alias = self.bindir / "fkk"
+        self.alias.write_bytes(self.cli.read_bytes())
+        self.alias.chmod(0o755)
 
     def invoke(self, *args):
         process = subprocess.Popen(
@@ -144,25 +146,38 @@ sys.exit(int(os.environ["FORKARAK_FIXTURE_EXIT"]))
                 self.assertIn(b"run install.sh again", result.stderr)
                 self.assertEqual(self.calls(), [])
 
-    def test_project_launch_preserves_existing_open_arguments(self):
-        absolute = self.base / "absolute 한글 project"
-        for paths in ((), ("relative project", "한글 ; $(touch unexpected)", str(absolute)),
-                      ("--", "ctl", "update", "--version", "-literal")):
-            with self.subTest(paths=paths):
-                _, result = self.invoke(*paths)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                projects = [str(self.cwd / path) for path in paths if path != "--"]
-                expected = ["-n", str(self.app), "--args", "--", *projects] if projects else [str(self.app)]
-                self.assertEqual(json.loads(result.stdout)["result"]["kind"], "open")
-                self.assertEqual(self.calls()[-1]["argv"], expected)
+    def test_editor_launch_preserves_exact_args_cwd_and_alias(self):
+        absolute = self.base / "absolute 한글 file.rs"
+        for command in (self.cli, self.alias):
+            for paths in ((), ("relative file.rs", "한글 ; $(touch unexpected)", str(absolute)),
+                          ("--", "ctl", "update", "--version", "-literal"),
+                          ("--reuse-window", "-g", "name:12:3", "second file", "--background"),
+                          ("--new-window", "--window-size", "1100x700", "--session-dir", "state dir", ".")):
+                with self.subTest(command=command.name, paths=paths):
+                    process = subprocess.run([str(command), *paths], cwd=self.cwd, env=self.env,
+                                             capture_output=True, timeout=5)
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                    call = self.calls()[-1]
+                    self.assertEqual(call["kind"], "app")
+                    self.assertEqual(call["argv"], ["--cli-open", str(self.app), *paths])
+                    self.assertEqual(call["cwd"], str(self.cwd))
         self.assertFalse((self.cwd / "unexpected").exists())
 
-    def test_unknown_project_option_still_requires_separator(self):
-        _, result = self.invoke("--unknown")
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(result.stdout, b"")
-        self.assertIn(b"use -- before literal directory names", result.stderr)
-        self.assertEqual(self.calls(), [])
+    def test_alias_ctl_update_help_and_version_are_identical(self):
+        for args in (("ctl", "help"), ("ctl", "status", "--repo", "."),
+                     ("install-cli", "--bin-dir", "custom 한글 commands"),
+                     ("update", "--version", "v1.2.3"), ("--help",), ("--version",)):
+            with self.subTest(args=args):
+                results = [subprocess.run([str(command), *args], cwd=self.cwd, env=self.env,
+                                          capture_output=True, timeout=5)
+                           for command in (self.cli, self.alias)]
+                self.assertEqual(results[0].returncode, results[1].returncode)
+                if args[0] in ("--help", "--version"):
+                    self.assertEqual(results[0].stdout, results[1].stdout)
+                else:
+                    calls = self.calls()[-2:]
+                    self.assertEqual(calls[0]["kind"], calls[1]["kind"])
+                    self.assertEqual(calls[0]["argv"], calls[1]["argv"])
 
     def test_update_preserves_installed_directories_and_arguments(self):
         for extra, code in (((), 0), (("--version", "v1.2.3"), 23), (("--help",), 0)):
@@ -191,10 +206,12 @@ sys.exit(int(os.environ["FORKARAK_FIXTURE_EXIT"]))
                 _, result = self.invoke(option)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 help_text = result.stdout.decode("utf-8")
-                for text in ("forkarak [PROJECT ...]", "forkarak -- PROJECT ...", "forkarak ctl --help",
+                for text in ("forkarak [OPTIONS] [--] [FILE|DIRECTORY ...]", "fkk [OPTIONS]", "forkarak ctl --help",
                              "forkarak ctl status --repo .", "instructions --agent claude",
                              "instructions --agent codex", "JSON", "result.instructions",
-                             "forkarak update [--version vX.Y.Z]", "forkarak --version"):
+                             "forkarak update [--version vX.Y.Z]", "forkarak --version",
+                             "--goto FILE:LINE[:COLUMN]", "--background", "--no-launch", "install-cli [--bin-dir DIRECTORY]",
+                             "Loose files/new file creation", "--wait and --diff are not supported"):
                     self.assertIn(text, help_text)
         self.assertEqual(self.calls(), [])
 

@@ -22,25 +22,91 @@ fn main() {
             2
         });
     }
+    if args.first().is_some_and(|arg| arg == "install-cli") {
+        let result = cli::launch::install_cli(&args[1..]);
+        match result {
+            Ok(code) => std::process::exit(code),
+            Err(error) => {
+                eprintln!("{error:#}");
+                std::process::exit(2);
+            }
+        }
+    }
     if args.first().is_some_and(|arg| arg == "ctl") {
         let (response, code) = cli::ctl::response(&args[1..]);
         println!("{response}");
         std::process::exit(code);
     }
-    if std::env::args_os().any(|arg| arg == "--help" || arg == "-h") {
+    if args.first().is_some_and(|arg| arg == "--cli-open") {
+        let result = args
+            .get(1)
+            .ok_or_else(|| anyhow::anyhow!("Missing installed app path"))
+            .and_then(|app| cli::launch(std::path::Path::new(app), &args[2..]));
+        if let Err(error) = result {
+            eprintln!("{error:#}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if let Some(version) = cli::informational(&args) {
         println!(
-            "Forkarak — a native macOS Git client\nBrowse commit graphs across worktrees, compare changes, and stage individual lines or hunks.\n\nUsage: forkarak [--window-size WIDTHxHEIGHT] [--session-dir DIR] [--] [PROJECT ...]\n       forkarak ctl help    (headless JSON control / agent instructions)"
+            "{}",
+            if version {
+                env!("CARGO_PKG_VERSION")
+            } else {
+                cli::HELP
+            }
         );
         return;
     }
-    let options = cli::parse(std::env::args_os().skip(1)).unwrap_or_else(|error| {
+    // LaunchServices receives prevalidated absolute targets as data, never shell text.
+    let mut public_args = args.clone();
+    let handoff = public_args
+        .first()
+        .is_some_and(|arg| arg == "--cli-targets")
+        .then_some(0);
+    let targets = handoff
+        .map(|index| {
+            let value = public_args
+                .get(index + 1)
+                .ok_or_else(|| anyhow::anyhow!("Missing CLI targets"))?;
+            let targets: Vec<cli::OpenTarget> = serde_json::from_str(
+                value
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("Invalid CLI targets"))?,
+            )?;
+            for target in &targets {
+                cli::launch::validate_target(target)?;
+            }
+            public_args.drain(index..=index + 1);
+            anyhow::Ok(targets)
+        })
+        .transpose()
+        .unwrap_or_else(|error| {
+            eprintln!("{error:#}");
+            std::process::exit(2);
+        });
+    let options = cli::parse(public_args).unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(2);
     });
-    if let Some(path) = options.session_dir {
-        prefs::set_session_dir(path);
+    let initial = targets.unwrap_or_else(|| {
+        cli::resolve(&options).unwrap_or_else(|error| {
+            eprintln!("{error:#}");
+            std::process::exit(2);
+        })
+    });
+    if handoff.is_none()
+        && cli::launch::reuse(&options, &initial).unwrap_or_else(|error| {
+            eprintln!("{error:#}");
+            std::process::exit(2);
+        })
+    {
+        return;
     }
-    let initial = options.projects;
+    if let Some(path) = options.session_dir {
+        prefs::set_session_dir(cli::launch::absolute(&path).unwrap_or(path));
+    }
     gpui_kit::application()
         .with_assets(assets::AppAssets)
         .run(move |cx| {
@@ -91,7 +157,15 @@ fn main() {
                 cx,
                 move |window, cx| {
                     window.set_window_title("Forkarak");
-                    cx.new(|cx| ui::Pokarak::new(initial.clone(), window, cx))
+                    cx.new(|cx| {
+                        let roots = initial
+                            .first()
+                            .map(|target| vec![target.repo.clone()])
+                            .unwrap_or_default();
+                        let mut app = ui::Pokarak::new(roots, window, cx);
+                        app.queue_cli_targets(initial.clone());
+                        app
+                    })
                 },
             )
             .expect("포카락 창을 열 수 없습니다");

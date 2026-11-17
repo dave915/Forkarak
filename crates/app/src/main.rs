@@ -5,6 +5,7 @@ mod prefs;
 mod terminal;
 mod theme;
 mod ui;
+mod updater;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 use std::borrow::Cow;

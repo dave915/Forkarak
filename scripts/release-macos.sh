@@ -38,9 +38,12 @@ VERSION="$(/usr/bin/sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\([^"]
 if [[ -n "${NOTARY_KEYCHAIN_PROFILE:-}" && -z "${SIGNING_IDENTITY:-}" ]]; then
     fail "Notarization requires SIGNING_IDENTITY"
 fi
-PACKAGE_ARGS=()
-if [[ -n "$BINARY" ]]; then PACKAGE_ARGS+=(--binary "$BINARY"); fi
-"$ROOT_DIR/scripts/package-macos.sh" "${PACKAGE_ARGS[@]}"
+# System Bash 3.2 treats an empty array expansion as unset under nounset.
+if [[ -n "$BINARY" ]]; then
+    "$ROOT_DIR/scripts/package-macos.sh" --binary "$BINARY"
+else
+    "$ROOT_DIR/scripts/package-macos.sh"
+fi
 APP_PATH="$ROOT_DIR/dist/포카락.app"
 STAGE="$(mktemp -d "$ROOT_DIR/dist/.pokarak-release.XXXXXX")"
 cleanup() { /bin/rm -rf "$STAGE"; }

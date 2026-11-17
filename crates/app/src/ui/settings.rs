@@ -468,7 +468,7 @@ impl Pokarak {
             if category==Category::Keyboard {content=content.child(keyboard_settings(app,&state,cx));}
             if category==Category::Ai {content=content.child(ai_settings(app,&weak,&state,cx));}
             if category==Category::Execution {content=content.children(management_button("forkarak_tasks::ManageTasks","실행 프로필·작업 관리 열기",cx));}
-            if category==Category::Extensions {content=content.children(management_button("forkarak_extensions::ManageExtensions","확장 설치·업데이트·제거 관리",cx)).child(div().text_size(ui_text(12.)).child("S33 설치·업데이트·제거는 확장 관리 화면에서 수행합니다. 여기에서는 프로젝트별 사용 여부와 확장 설정을 편집합니다."));}
+            if category==Category::Extensions {content=content.children(management_button("forkarak_extensions::ManageExtensions","확장 설치·업데이트·제거 관리",cx)).child(div().text_size(ui_text(12.)).child("설치·업데이트·제거는 확장 관리 화면에서 수행합니다. 여기에서는 프로젝트별 사용 여부와 확장 설정을 편집합니다."));}
             if category==Category::Updates {content=content.child(app.update_settings(weak.clone(),cx));}
             let (reset,reset_state)=(weak.clone(),state.clone());
             let reset_label=format!("{} · {} 초기화",if root.is_some(){"프로젝트 재정의"}else{"앱 기본값"},category.label());
@@ -562,7 +562,7 @@ fn appearance(app: &Pokarak, view: &WeakEntity<Pokarak>, cx: &App) -> Div {
     div().v_flex().gap_2().child(themes).child(Setting::Zoom.row(display,view)).child(Setting::InterfaceFont.row(display,view)).child(Setting::CodeFont.row(display,view)).child(div().text_size(ui_text(11.)).text_color(palette.rgb(MUTED)).child("배율은 화면 전체의 크기·간격을 바꿉니다. 일반 글자는 UI에, 코드 글자는 코드·diff·Blame에 적용됩니다. 터미널은 터미널·실행에서 별도로 조절합니다. 표시 설정은 앱 전체에 적용됩니다.")).child(preview)
 }
 fn trust_settings(app: &Pokarak, view: &WeakEntity<Pokarak>, state: &DialogState, cx: &App) -> Div {
-    let mut section=div().v_flex().gap_2().pt_2().child("S13 분석 허용 워크트리").child(div().text_size(ui_text(11.)).child("허용 추가는 해당 워크트리에서 언어 분석을 켤 때 확인합니다. 해제하면 실행 중인 해당 분석을 중지합니다."));
+    let mut section=div().v_flex().gap_2().pt_2().child("분석 허용 워크트리").child(div().text_size(ui_text(11.)).child("허용 추가는 해당 워크트리에서 언어 분석을 켤 때 확인합니다. 해제하면 실행 중인 해당 분석을 중지합니다."));
     if app.prefs.trusted.is_empty() {
         section = section.child("허용된 워크트리가 없습니다.");
     }

@@ -89,133 +89,133 @@ pub(super) const FIELDS: &[Field] = &[
     field!(
         Appearance,
         "workspace.default_view",
-        "S01 기본 작업 화면",
+        "기본 작업 화면",
         "저장된 작업이 없을 때 여는 화면입니다.",
         Kind::Choice(&[("editor", "에디터"), ("git", "Git")])
     ),
     field!(
         Appearance,
         "workspace.restore_last",
-        "S02 마지막 작업 복원",
+        "마지막 작업 복원",
         "워크트리별 화면·파일·커서·읽던 위치를 복원합니다.",
         Kind::Bool
     ),
     field!(
         Appearance,
         "layout.auto_collapse",
-        "S03 작은 창에서 패널 자동 접기",
+        "작은 창에서 패널 자동 접기",
         "코드와 diff 공간을 확보합니다.",
         Kind::Bool
     ),
     field!(
         Editor,
         "editor.direct_edit",
-        "S05 파일 열기 모드",
+        "파일 열기 모드",
         "과거 커밋 파일은 항상 읽기 전용입니다.",
         Kind::Bool
     ),
     field!(
         Editor,
         "editor.editorconfig",
-        "S06 .editorconfig 적용",
+        ".editorconfig 적용",
         "프로젝트 규칙을 기본 들여쓰기보다 우선합니다.",
         Kind::Bool
     ),
     field!(
         Editor,
         "editor.detect_indent",
-        "S07 파일 들여쓰기 감지",
+        "파일 들여쓰기 감지",
         "기존 파일에서 탭과 공백 규칙을 감지합니다.",
         Kind::Bool
     ),
     field!(
         Editor,
         "editor.tab_size",
-        "S08 기본 탭 크기",
+        "기본 탭 크기",
         "프로젝트·파일 규칙이 없을 때 적용합니다.",
         Kind::Number(1, 16)
     ),
     field!(
         Editor,
         "editor.use_spaces",
-        "S08 공백으로 들여쓰기",
+        "공백으로 들여쓰기",
         "끄면 탭 문자를 사용합니다.",
         Kind::Bool
     ),
     field!(
         Editor,
         "editor.word_wrap",
-        "S09 긴 줄 화면 줄바꿈",
+        "긴 줄 화면 줄바꿈",
         "파일 내용에 줄바꿈 문자를 넣지 않습니다.",
         Kind::Bool
     ),
     field!(
         Editor,
         "editor.wrap_patterns",
-        "S09 파일 종류별 줄바꿈",
+        "파일 종류별 줄바꿈",
         "JSON: {\"rs\":false,\"md\":true} · 확장자별 재정의",
         Kind::Json
     ),
     field!(
         Editor,
         "editor.preview_tabs",
-        "S10 미리보기 탭 사용",
+        "미리보기 탭 사용",
         "편집하거나 고정하면 일반 탭이 됩니다.",
         Kind::Bool
     ),
     field!(
         Editor,
         "editor.inline_changes",
-        "S11 코드 안 변경 줄 표시",
+        "코드 안 변경 줄 표시",
         "변경 표시에서 이전 코드를 펼칩니다.",
         Kind::Bool
     ),
     field!(
         Language,
         "language.servers",
-        "S12 언어 서버 경로·인수",
+        "언어 서버 경로·인수",
         "JSON: {\"rust\":{\"path\":\"rust-analyzer\",\"args\":[]}}",
         Kind::Json
     ),
     field!(
         Language,
         "language.completion",
-        "S14 자동완성",
+        "자동완성",
         "분석을 명시적으로 허용하고 켠 경우에만 사용합니다.",
         Kind::Bool
     ),
     field!(
         Language,
         "language.diagnostics",
-        "S14 오류 표시",
+        "오류 표시",
         "분석을 켠 경우 진단을 표시합니다.",
         Kind::Bool
     ),
     field!(
         Language,
         "language.unsaved",
-        "S15 미저장 코드 탐색",
+        "미저장 코드 탐색",
         "현재 표시 중인 초안으로 정의·사용처를 찾습니다.",
         Kind::Bool
     ),
     field!(
         Language,
         "formatters.config",
-        "S16 언어별 포맷터",
+        "언어별 포맷터",
         "JSON: {\"rust\":{\"path\":\"rustfmt\",\"args\":[]}} · 표준입력/출력",
         Kind::Json
     ),
     field!(
         Language,
         "editor.format_on_save",
-        "S17 저장 시 포맷",
+        "저장 시 포맷",
         "기본은 수동 실행입니다. 허용된 프로젝트에만 적용합니다.",
         Kind::Bool
     ),
     field!(
         Navigation,
         "navigation.results_placement",
-        "S18 탐색 결과 표시",
+        "탐색 결과 표시",
         "팝오버 결과는 파일 영역에 고정할 수 있습니다.",
         Kind::Choice(&[
             ("popover", "팝오버"),
@@ -226,181 +226,181 @@ pub(super) const FIELDS: &[Field] = &[
     field!(
         Navigation,
         "navigation.blame_mode",
-        "S19 Blame 표시",
+        "Blame 표시",
         "현재 줄부터 확인하거나 파일 전체에 표시합니다.",
         Kind::Choice(&[("line", "현재 줄"), ("file", "파일 전체")])
     ),
     field!(
         Navigation,
         "navigation.symbols_placement",
-        "S20 심볼 목록 위치",
+        "심볼 목록 위치",
         "파일 심볼의 기본 표시 위치입니다.",
         Kind::Choice(&[("sidebar", "사이드바"), ("popover", "팝오버")])
     ),
     field!(
         Navigation,
         "search.exclude",
-        "S21 프로젝트 검색 제외 패턴",
+        "프로젝트 검색 제외 패턴",
         "줄마다 glob 패턴 하나. 예: **/node_modules/**",
         Kind::Text
     ),
     field!(
         Review,
         "review.split_diff",
-        "S22 기본 diff 방식",
+        "기본 diff 방식",
         "각 워크트리에서 마지막 선택한 방식이 우선합니다.",
         Kind::Bool
     ),
     field!(
         Review,
         "review.hide_whitespace",
-        "S23 공백 변경 숨김",
+        "공백 변경 숨김",
         "표시만 바뀌며 원본 패치와 스테이징 좌표는 유지합니다.",
         Kind::Bool
     ),
     field!(
         Review,
         "review.advance",
-        "S24 검토 완료 후 다음 파일",
+        "검토 완료 후 다음 파일",
         "다음 미검토 파일로 자동 이동합니다.",
         Kind::Bool
     ),
     field!(
         Keyboard,
         "keyboard.bindings",
-        "S25–26 단축키 재정의",
+        "단축키 재정의",
         "JSON: 명령 ID → cmd-alt-f 형태의 키. 아래에서 충돌을 확인합니다.",
         Kind::Json
     ),
     field!(
         Execution,
         "terminal.font_size",
-        "S04 터미널 글자 크기",
+        "터미널 글자 크기",
         "새 세션부터 코드·diff 크기와 독립적으로 적용됩니다. 기본값은 코드 크기입니다.",
         Kind::Number(8, 32)
     ),
     field!(
         Execution,
         "terminal.shell",
-        "S27 기본 쉘",
+        "기본 쉘",
         "실행 파일 경로. 변경은 새 터미널부터 적용됩니다.",
         Kind::Text
     ),
     field!(
         Execution,
         "terminal.args",
-        "S27 쉘 시작 인수",
+        "쉘 시작 인수",
         "JSON 문자열 배열. 기본 [\"-l\",\"-i\"]로 zsh 환경을 읽습니다.",
         Kind::Json
     ),
     field!(
         Execution,
         "tasks.profiles",
-        "S28 실행 프로필",
+        "실행 프로필",
         "JSON 배열: {name,command,cwd,env:{}} · 실행 관리는 작업 화면에서 합니다.",
         Kind::Json
     ),
     field!(
         Execution,
         "logs.auto_scroll",
-        "S29 로그 자동 스크롤",
+        "로그 자동 스크롤",
         "새 출력이 추가되면 끝을 따라갑니다.",
         Kind::Bool
     ),
     field!(
         Execution,
         "logs.word_wrap",
-        "S29 로그 줄바꿈",
+        "로그 줄바꿈",
         "긴 로그를 화면 너비에 맞춥니다.",
         Kind::Bool
     ),
     field!(
         Execution,
         "logs.max_lines",
-        "S29 로그 보관 줄 수",
+        "로그 보관 줄 수",
         "실행마다 보관할 최대 줄 수입니다.",
         Kind::Number(100, 1000000)
     ),
     field!(
         Execution,
         "spring.jdk",
-        "S30 JDK 경로",
+        "JDK 경로",
         "프로젝트의 JAVA_HOME. 빈 값은 상속한 환경을 사용합니다.",
         Kind::Text
     ),
     field!(
         Execution,
         "spring.gradle",
-        "S30 Gradle 경로",
+        "Gradle 경로",
         "빈 값은 확장 런타임의 기본 탐색을 사용합니다.",
         Kind::Text
     ),
     field!(
         Execution,
         "spring.maven",
-        "S30 Maven 경로",
+        "Maven 경로",
         "빈 값은 확장 런타임의 기본 탐색을 사용합니다.",
         Kind::Text
     ),
     field!(
         Execution,
         "spring.profiles",
-        "S30 Spring 프로파일",
+        "Spring 프로파일",
         "쉼표로 구분한 활성 프로파일입니다.",
         Kind::Text
     ),
     field!(
         Execution,
         "spring.env",
-        "S30 환경변수",
+        "환경변수",
         "JSON: {\"NAME\":\"value\"} · 외부 전송 없이 로컬에 저장됩니다.",
         Kind::Json
     ),
     field!(
         Ai,
         "ai.cli",
-        "S31 기본 AI CLI",
+        "기본 AI CLI",
         "새 세션으로 시작합니다. 실행은 사용자가 직접 선택합니다.",
         Kind::Choice(&[("codex", "Codex"), ("claude", "Claude")])
     ),
     field!(
         Ai,
         "ai.path",
-        "S31 실행 파일 경로",
+        "실행 파일 경로",
         "빈 값이면 로그인 쉘의 PATH에서 선택한 CLI를 찾습니다.",
         Kind::Text
     ),
     field!(
         Ai,
         "ai.args",
-        "S31 추가 인수",
+        "추가 인수",
         "JSON 문자열 배열. 인수마다 별도 argv로 전달합니다.",
         Kind::Json
     ),
     field!(
         Ai,
         "ai.start",
-        "S32 기본 시작 방식",
+        "기본 시작 방식",
         "현재 워크트리의 새 내장 터미널 또는 명령 복사입니다.",
         Kind::Choice(&[("terminal", "내장 터미널"), ("copy", "명령 복사")])
     ),
     field!(
         Extensions,
         "extensions.enabled",
-        "S34 프로젝트별 확장 사용",
+        "프로젝트별 확장 사용",
         "JSON: {\"extension-id\":true} · 앱 기본값을 재정의합니다.",
         Kind::Json
     ),
     field!(
         Extensions,
         "extensions.settings",
-        "S34 확장별 설정",
+        "확장별 설정",
         "JSON: {\"extension-id\":{\"key\":\"value\"}}",
         Kind::Json
     ),
     Field {
         key: "updates.auto_check",
-        label: "S35 자동 업데이트 확인",
+        label: "자동 업데이트 확인",
         hint: "자동 확인만 조절합니다. 설치·재시작은 직접 선택합니다.",
         category: Category::Updates,
         kind: Kind::Bool,

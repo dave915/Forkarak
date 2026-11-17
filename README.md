@@ -18,7 +18,7 @@ Apple Silicon Mac(M1 이상), macOS 13 이상에서 터미널에 다음 명령�
 
 기존에 `포카락.app`으로 설치했다면 앱을 종료하고 위 설치 명령을 한 번 실행하세요. 같은 위치의 앱 이름이 `Pokarak.app`으로 바뀝니다.
 
-`~/Applications/Pokarak.app`을 열고 **⌘O**로 저장소를 선택하세요. 터미널에서는 저장소 폴더에서 `~/.local/bin/pokarak .`으로 열 수 있습니다. 업데이트할 때는 앱을 종료한 뒤 `~/.local/bin/pokarak update`를 실행하세요.
+`~/Applications/Pokarak.app`을 열고 **⌘O**로 저장소를 선택하세요. 터미널에서는 저장소 폴더에서 `~/.local/bin/pokarak .`으로 열 수 있습니다. 업데이트할 때는 앱을 종료한 뒤 `~/.local/bin/pokarak update`를 실행하세요. v0.2.1 이하에서 업데이트가 403으로 멈추면 앱을 종료한 뒤 위 설치 명령을 다시 실행하세요.
 
 ## 주요 기능
 

@@ -180,7 +180,7 @@ impl Pokarak {
             .when(missing_kotlin_server(error), |row| {
                 row.child(
                     Button::new("language-tool-settings")
-                        .label("언어 도구 설정…")
+                        .label("코드 지원 설정…")
                         .ghost()
                         .small()
                         .on_click(

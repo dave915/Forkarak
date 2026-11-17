@@ -142,31 +142,31 @@ fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
         FindReferences
     );
     add!(
-        "언어 분석: 코드 완성",
+        "코드 지원: 자동완성",
         "language_completion",
         "ctrl-space",
         language_tools::Complete
     );
     add!(
-        "언어 분석: 현재 파일 진단",
+        "코드 지원: 오류 확인",
         "language_diagnostics",
         "",
         language_tools::Diagnostics
     );
     add!(
-        "언어 분석: 문서 심볼 검색",
+        "코드 지원: 파일 구조 검색",
         "language_symbols",
         "cmd-shift-o",
         language_tools::Symbols
     );
     add!(
-        "언어 분석: 함수 시그니처",
+        "코드 지원: 함수 도움말",
         "language_signature",
         "ctrl-shift-space",
         language_tools::Signature
     );
     add!(
-        "언어 분석: 타입 · 문서",
+        "코드 지원: 타입 · 설명",
         "language_hover",
         "alt-f1",
         language_tools::Hover

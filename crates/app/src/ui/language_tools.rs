@@ -34,11 +34,11 @@ pub(super) enum Tool {
 impl Tool {
     fn title(&self) -> &'static str {
         match self {
-            Self::Complete => "코드 완성",
-            Self::Diagnostics => "현재 파일 진단",
-            Self::Symbols => "문서 심볼",
-            Self::Signature => "함수 시그니처",
-            Self::Hover => "타입 · 문서",
+            Self::Complete => "자동완성",
+            Self::Diagnostics => "오류 확인",
+            Self::Symbols => "파일 구조",
+            Self::Signature => "함수 도움말",
+            Self::Hover => "타입 · 설명",
             Self::Format { .. } => "파일 포맷",
             Self::Navigate(NavigationKind::Definition) => "정의",
             Self::Navigate(NavigationKind::References) => "사용처",
@@ -525,7 +525,7 @@ impl Pokarak {
             == Some(false)
         {
             self.status =
-                format!("{language} 언어 지원이 꺼져 있습니다. 언어 도구 관리에서 켜세요.");
+                format!("{language} 언어 지원이 꺼져 있습니다. 언어 지원 관리에서 켜세요.");
             cx.notify();
             return;
         }

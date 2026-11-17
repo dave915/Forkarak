@@ -11,17 +11,18 @@ impl Pokarak {
             .gap_1()
             .child(
                 Button::new("language-tools")
-                    .label("언어 도구…")
+                    .label("코드 지원…")
+                    .tooltip("자동완성 · 오류 확인 · 함수 도움말 · 코드 탐색")
                     .ghost()
                     .small()
                     .disabled(!enabled)
                     .dropdown_menu_with_anchor(Anchor::TopLeft, move |mut menu, _, _| {
                         for (label, tool) in [
-                            ("코드 완성  ⌃Space", Tool::Complete),
-                            ("현재 파일 진단", Tool::Diagnostics),
-                            ("문서 심볼 검색  ⌘⇧O", Tool::Symbols),
-                            ("함수 시그니처  ⌃⇧Space", Tool::Signature),
-                            ("타입 · 문서  ⌥F1", Tool::Hover),
+                            ("자동완성  ⌃Space", Tool::Complete),
+                            ("오류 확인", Tool::Diagnostics),
+                            ("파일 구조 검색  ⌘⇧O", Tool::Symbols),
+                            ("함수 도움말  ⌃⇧Space", Tool::Signature),
+                            ("타입 · 설명  ⌥F1", Tool::Hover),
                         ] {
                             let owner = weak.clone();
                             menu =
@@ -32,7 +33,7 @@ impl Pokarak {
                                 }));
                         }
                         let owner = weak.clone();
-                        menu.item(PopupMenuItem::new("언어 분석 설정…").on_click(
+                        menu.item(PopupMenuItem::new("코드 지원 설정…").on_click(
                             move |_, w, cx| {
                                 let _ = owner
                                     .update(cx, |a, cx| a.open_settings_section("language", w, cx));
@@ -653,7 +654,7 @@ impl Pokarak {
                             .min_w_0()
                             .text_ellipsis()
                             .text_size(ui_text(12.))
-                            .child(format!("{title} · 의미 분석")),
+                            .child(format!("{title} · 현재 파일")),
                     )
                     .child(
                         Button::new("refresh-language-panel")
@@ -667,7 +668,7 @@ impl Pokarak {
                     .child(
                         Button::new("close-language-panel")
                             .icon(IconName::X)
-                            .tooltip("언어 도구 닫기")
+                            .tooltip("코드 지원 닫기")
                             .ghost()
                             .small()
                             .on_click(cx.listener(|a, _, w, cx| a.dismiss_language(w, cx))),
@@ -687,7 +688,7 @@ impl Pokarak {
         }
         Some(
             Button::new("retry-language-tool")
-                .label("분석 다시 시도")
+                .label("다시 시도")
                 .ghost()
                 .small()
                 .disabled(self.language_tools.pending.is_some())

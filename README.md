@@ -3,6 +3,27 @@
 AI가 바꾼 코드를 여러 프로젝트와 Git 워크트리에서 읽는 Rust 네이티브 macOS 앱.
 GPUI + GPUI Kit로 만들며 웹뷰를 사용하지 않는다.
 
+## 설치 · 업데이트
+
+Apple Silicon Mac(M1 이상), macOS 13 이상에서 터미널로 설치한다. Rust, Xcode, Homebrew, GitHub 로그인 없이 빌드된 앱을 받는다.
+
+```sh
+/bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh | /bin/bash'
+```
+
+앱은 `~/Applications/포카락.app`, CLI는 `~/.local/bin/pokarak`에 설치된다. 설치가 끝나면 Finder에서 앱을 열거나 다음 명령을 사용한다.
+
+```sh
+~/.local/bin/pokarak /path/to/project
+~/.local/bin/pokarak --version
+# 앱을 종료한 뒤 최신 릴리스로 업데이트
+~/.local/bin/pokarak update
+```
+
+`~/.local/bin`이 PATH에 있으면 `pokarak`, `pokarak update`로 줄여 쓴다. 필요하면 `export PATH="$HOME/.local/bin:$PATH"`를 셸 설정에 추가한다. 설치 프로그램은 셸 설정을 바꾸지 않는다.
+
+다운로드 SHA-256, 앱 식별자와 서명을 검사하고 교체한다. 설치 경로 설정과 세션 데이터는 업데이트 후에도 유지한다. 현재 배포는 ad-hoc 서명으로 **Apple 공증이 없으며**, 모든 Mac에서 보안 경고 없이 실행됨을 보장하지 않는다. [설치 옵션·릴리스 배포](docs/distribution.md)
+
 ## 실행
 
 빌드된 앱: `dist/포카락.app`. Finder에서 더블클릭하거나 다음 명령으로 연다.
@@ -93,7 +114,7 @@ cargo run -p pokarak -- /path/to/backend /path/to/frontend
 
 Git 읽기는 외부 diff/filter/hook을 실행하지 않는다. 파일당 텍스트 미리보기는 2 MiB, diff는 50,000행 및 계산 제한이 있다. 제한을 넘으면 부분 표시를 알린다. 통합 diff의 긴 줄은 가로 스크롤로 변경 전·후 내용을 모두 확인할 수 있다. 바이너리·비 UTF-8 텍스트는 코드로 표시하지 않는다. 자세한 비교/rename/symlink 처리 범위는 [core README](crates/core/README.md)에 있다.
 
-macOS Apple Silicon에서 빌드·실행했다. Intel Mac, Windows/Linux 패키징, 최소 macOS 13 환경, Developer ID 서명·공증·자동 업데이트는 검증하지 않았다.
+macOS Apple Silicon에서 빌드·실행했다. Intel Mac, Windows/Linux 패키징, 최소 macOS 13 환경, Developer ID 서명·공증은 검증하지 않았다. CLI 업데이트는 명시적으로 `pokarak update`를 실행할 때만 동작한다.
 
 ## 빌드와 검사
 

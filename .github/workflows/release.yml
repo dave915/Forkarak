@@ -1,0 +1,99 @@
+name: Release macOS
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag, e.g. v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: '13.0'
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Validate tag
+        shell: bash
+        run: '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]'
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Prepare Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin
+      - name: Test installation and updates
+        run: python3 scripts/test-distribution.py
+      - name: Test application
+        run: cargo test --locked --workspace --features pokarak-navigation/test-server
+      - name: Build release
+        run: ./scripts/release-macos.sh --version "$RELEASE_TAG"
+      - name: Record source revision
+        run: git rev-parse HEAD > dist/source-revision.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-arm64-release
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/pokarak-macos-arm64.tar.gz
+            dist/SHA256SUMS
+            dist/install.sh
+            dist/source-revision.txt
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: macos-arm64-release
+          path: release
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Release already exists. Publish a new version rather than replacing assets.' >&2
+            exit 1
+          fi
+          cat > release/notes.md <<'NOTES'
+          Apple Silicon Mac용 포카락입니다. macOS 13 이상이 필요합니다.
+
+          설치 (Rust, Xcode, GitHub 로그인 불필요):
+          ```sh
+          /bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh | /bin/bash'
+          ```
+          설치 후 앱은 `~/Applications/포카락.app`, 명령은 `~/.local/bin/pokarak`에 있습니다.
+          업데이트: `~/.local/bin/pokarak update`
+
+          이번 빌드는 ad-hoc 서명이며 Apple Developer ID 공증은 없습니다.
+          NOTES
+          gh release create "$RELEASE_TAG" \
+            release/pokarak-macos-arm64.tar.gz release/SHA256SUMS \
+            release/install.sh release/source-revision.txt \
+            --verify-tag --latest --title "Pokarak $RELEASE_TAG" \
+            --notes-file release/notes.md

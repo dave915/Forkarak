@@ -81,9 +81,15 @@ impl Client {
         config: &ServerConfig,
         options: &NavigatorOptions,
     ) -> Result<()> {
-        if (config.language == "kotlin" || is_jetbrains(config)) && !options.allow_project_imports {
+        if (matches!(
+            config.language.as_str(),
+            "kotlin" | "rust" | "go" | "groovy" | "svelte" | "sql"
+        ) || is_jetbrains(config))
+            && !options.allow_project_imports
+        {
             bail!(
-                "Kotlin analysis is disabled: explicitly enable allowProjectImports after trusting Gradle/Maven project import actions."
+                "{} analysis is disabled: explicitly enable allowProjectImports after trusting project/tool import actions.",
+                config.language
             );
         }
         Ok(())
@@ -107,6 +113,17 @@ impl Client {
             .prefix(&format!("pokarak-lsp-{:016x}-", hash.finish()))
             .tempdir()?;
         let workspace_path = workspace.path().canonicalize()?;
+        fs::create_dir(workspace_path.join("home"))?;
+        let vue_tsdk = if config.language == "vue" {
+            config
+                .args
+                .iter()
+                .position(|a| a == "--tsdk")
+                .and_then(|i| config.args.get(i + 1))
+                .cloned()
+        } else {
+            None
+        };
         let mut args: Vec<_> = config
             .args
             .iter()
@@ -115,6 +132,29 @@ impl Client {
                     .replace("{workspace}", &workspace_path.to_string_lossy())
             })
             .collect();
+        if config.language == "vue"
+            && let Some(index) = args.iter().position(|a| a == "--tsdk")
+        {
+            if index + 1 >= args.len() {
+                bail!("Vue TypeScript SDK argument is missing");
+            }
+            args.drain(index..=index + 1);
+        }
+        if config.args.iter().any(|a| a == "FORKARAK_MANAGED=1")
+            && crate::config::is_jdt(config)
+            && let Some(i) = args.iter().position(|a| a == "-configuration")
+        {
+            let source = PathBuf::from(args.get(i + 1).context("JDT configuration path missing")?);
+            let destination = workspace_path.join("configuration");
+            fs::create_dir(&destination)?;
+            for entry in fs::read_dir(source)? {
+                let entry = entry?;
+                if entry.file_type()?.is_file() {
+                    fs::copy(entry.path(), destination.join(entry.file_name()))?;
+                }
+            }
+            args[i + 1] = destination.to_string_lossy().into_owned();
+        }
         if config.language == "java" && !jetbrains {
             // JDT's data directory must never be shared between worktrees or instances.
             for index in 0..args.len() {
@@ -136,10 +176,15 @@ impl Client {
         let settings = json!({
             "java": {
                 "autobuild": {"enabled": false},
+                "signatureHelp":{"enabled":true},
                 "configuration": {"updateBuildConfiguration": "disabled"},
                 "import": {"gradle": {"enabled": options.allow_project_imports}, "maven": {"enabled": options.allow_project_imports}},
                 "references": {"includeDecompiledSources": false}
-            }
+            },
+            "rust-analyzer": {"cargo":{"buildScripts":{"enable":false},"autoreload":false},"procMacro":{"enable":false},"checkOnSave":false,"check":{"enable":false}},
+            "yaml": {"schemaStore":{"enable":false},"schemaDownload":{"enable":false}},
+            "xml": {"downloadExternalResources":{"enabled":false},"validation":{"resolveExternalEntities":false}},
+            "bashIde":{"shellcheckPath":"","shfmt":{"path":""}}
         });
         let mut client = Self {
             transport,
@@ -168,13 +213,23 @@ impl Client {
                 // The adapter's automatic syntax server can answer definitions with
                 // import aliases while the semantic project is still loading.
                 "tsserver": {"logDirectory": workspace_path.join("tsserver-logs"), "logVerbosity": "off", "useSyntaxServer": "never"},
-                "settings": client.settings
+                "settings": client.settings,
+                "provideFormatter": true
             });
             // No build, installation, executable-command, edit, or dynamic-registration capability.
             if jetbrains {
                 init_options = json!({"indexDir": workspace_path.join("index").to_string_lossy()});
             } else if config.language == "java" {
                 init_options = json!({"settings": client.settings});
+            } else if config.language == "vue" {
+                let sdk=vue_tsdk.as_deref().context("Vue standalone server requires an explicit managed TypeScript SDK (--tsdk absolute-path)")?;
+                if !Path::new(sdk).is_absolute() || !Path::new(sdk).join("typescript.js").is_file()
+                {
+                    bail!("Vue TypeScript SDK is unavailable");
+                }
+                init_options = json!({"typescript":{"tsdk":sdk},"vue":{"hybridMode":false}});
+            } else if config.language == "rust" {
+                init_options = client.settings["rust-analyzer"].clone();
             }
             let response = client.request("initialize", json!({
                 "processId": std::process::id(),
@@ -189,7 +244,7 @@ impl Client {
                         "definition": {"dynamicRegistration": false, "linkSupport": true},
                         "references": {"dynamicRegistration": false},
                         "implementation": {"dynamicRegistration": false, "linkSupport": true},
-                        "completion": {"dynamicRegistration": false, "completionItem": {"snippetSupport": false, "insertReplaceSupport": true, "documentationFormat":["markdown","plaintext"], "resolveSupport":{"properties":["documentation","detail","additionalTextEdits"]}}},
+                        "completion": {"dynamicRegistration": false, "completionItem": {"snippetSupport": true, "insertReplaceSupport": true, "documentationFormat":["markdown","plaintext"], "resolveSupport":{"properties":["documentation","detail","additionalTextEdits"]}}},
                         "hover":{"dynamicRegistration":false,"contentFormat":["markdown","plaintext"]},
                         "signatureHelp":{"dynamicRegistration":false,"signatureInformation":{"documentationFormat":["markdown","plaintext"],"parameterInformation":{"labelOffsetSupport":true},"activeParameterSupport":true}},
                         "publishDiagnostics": {"versionSupport": true},
@@ -268,6 +323,10 @@ impl Client {
             message.push_str(&format!("\nServer messages:\n{}", self.server_messages));
         }
         message
+    }
+
+    pub(crate) fn capabilities(&self) -> Value {
+        self.capabilities.clone()
     }
 
     pub fn server_messages(&self) -> &str {
@@ -423,6 +482,8 @@ impl Client {
                 }).collect();
                 json!(results)
             }
+            "client/registerCapability" if message["params"]["registrations"].as_array().is_some_and(|items|items.iter().all(|i|i["method"]=="workspace/didChangeConfiguration")) => Value::Null,
+            "client/unregisterCapability" if message["params"]["unregisterations"].as_array().is_some_and(|items|items.iter().all(|i|i["method"]=="workspace/didChangeConfiguration")) => Value::Null,
             "workspace/workspaceFolders" => self.workspace_folders()?,
             "window/workDoneProgress/create" | "window/showMessageRequest" => Value::Null,
             "workspace/applyEdit" => json!({"applied": false, "failureReason": "Forkarak only reads source files during language analysis"}),

@@ -1,0 +1,40 @@
+{
+  "groovy": [
+    {
+      "version": "347d098a928707223ce44b52cc45174a6327a5f3",
+      "source_url": "https://codeload.github.com/GroovyLanguageServer/groovy-language-server/tar.gz/347d098a928707223ce44b52cc45174a6327a5f3",
+      "checksum": "sha256:65b92676edf3e57df2afb6703bd40cbeada166fcea3bd4345605babb6e2036f4",
+      "metadata_url": "https://api.github.com/repos/GroovyLanguageServer/groovy-language-server/commits/347d098a928707223ce44b52cc45174a6327a5f3"
+    },
+    {
+      "version": "0.12.0",
+      "source_url": "https://repo.maven.apache.org/maven2/org/eclipse/lsp4j/org.eclipse.lsp4j/0.12.0/org.eclipse.lsp4j-0.12.0.jar",
+      "checksum": "sha256:1ffcdfc91cb66609db52e5a8b02d2cfad19b513cf88a37817f1cea6560f64190",
+      "metadata_url": "https://repo.maven.apache.org/maven2/org/eclipse/lsp4j/org.eclipse.lsp4j/0.12.0/org.eclipse.lsp4j-0.12.0.pom"
+    },
+    {
+      "version": "0.12.0",
+      "source_url": "https://repo.maven.apache.org/maven2/org/eclipse/lsp4j/org.eclipse.lsp4j.jsonrpc/0.12.0/org.eclipse.lsp4j.jsonrpc-0.12.0.jar",
+      "checksum": "sha256:24286c7cd774aadd25fe12b12c356f83928a1c30fbc11bf4c4722e24084a2a81",
+      "metadata_url": "https://repo.maven.apache.org/maven2/org/eclipse/lsp4j/org.eclipse.lsp4j.jsonrpc/0.12.0/org.eclipse.lsp4j.jsonrpc-0.12.0.pom"
+    },
+    {
+      "version": "4.0.26",
+      "source_url": "https://repo.maven.apache.org/maven2/org/apache/groovy/groovy/4.0.26/groovy-4.0.26.jar",
+      "checksum": "sha256:ae3196ed31fa11e8506f9c40a6b34fdaff06a8eeda78a8a6ebaeb1a2a0ad35dc",
+      "metadata_url": "https://repo.maven.apache.org/maven2/org/apache/groovy/groovy/4.0.26/groovy-4.0.26.pom"
+    },
+    {
+      "version": "2.13.1",
+      "source_url": "https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.13.1/gson-2.13.1.jar",
+      "checksum": "sha256:94855942d4992f112946d3de1c334e709237b8126d8130bf07807c018a4a2120",
+      "metadata_url": "https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.13.1/gson-2.13.1.pom"
+    },
+    {
+      "version": "4.8.179",
+      "source_url": "https://repo.maven.apache.org/maven2/io/github/classgraph/classgraph/4.8.179/classgraph-4.8.179.jar",
+      "checksum": "sha256:16558357f234052370109127a45d69a9bd6d8646925594792634486dc48b159d",
+      "metadata_url": "https://repo.maven.apache.org/maven2/io/github/classgraph/classgraph/4.8.179/classgraph-4.8.179.pom"
+    }
+  ]
+}

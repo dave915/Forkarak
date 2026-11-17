@@ -172,6 +172,35 @@ pub struct CompletionItem {
     pub text_edit: Option<TextEdit>,
     pub additional_text_edits: Vec<TextEdit>,
 }
+impl CompletionItem {
+    /// For UIs without a snippet editor: use defaults/first choices, remove tabstops,
+    /// and reject unsupported transforms. Never execute snippet variables.
+    pub fn plain_text_insertion(&self) -> Result<String> {
+        self.source.check()?;
+        if self.insert_text_format == 2 {
+            crate::snippet::plain(&self.insert_text)
+        } else {
+            Ok(self.insert_text.clone())
+        }
+    }
+    pub fn plain_text_text_edit(&self) -> Result<Option<TextEdit>> {
+        self.source.check()?;
+        self.text_edit
+            .as_ref()
+            .map(|edit| {
+                Ok(TextEdit {
+                    range: edit.range,
+                    new_text: if self.insert_text_format == 2 {
+                        crate::snippet::plain(&edit.new_text)?
+                    } else {
+                        edit.new_text.clone()
+                    },
+                })
+            })
+            .transpose()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Diagnostic {
     pub range: TextRange,
@@ -238,15 +267,10 @@ impl Navigator {
             if config.program.trim().is_empty() {
                 bail!("Empty formatter program");
             }
-            if !matches!(
-                config.language.as_str(),
-                "typescript"
-                    | "typescriptreact"
-                    | "javascript"
-                    | "javascriptreact"
-                    | "java"
-                    | "kotlin"
-            ) {
+            if !crate::language_catalog()
+                .iter()
+                .any(|l| l.language == config.language && l.package.is_some())
+            {
                 bail!("Unsupported formatter language {}", config.language);
             }
         }

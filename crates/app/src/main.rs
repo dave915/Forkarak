@@ -1,3 +1,4 @@
+mod app_icon;
 mod assets;
 mod cli;
 mod control;

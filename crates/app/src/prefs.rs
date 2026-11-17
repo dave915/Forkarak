@@ -127,20 +127,28 @@ pub fn config_path() -> PathBuf {
 }
 impl Preferences {
     pub fn option_bool(&self, root: Option<&Path>, key: &str, fallback: bool) -> bool {
-        self.option(root, key).and_then(serde_json::Value::as_bool).unwrap_or(fallback)
+        self.option(root, key)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(fallback)
     }
 
     pub fn option_usize(&self, root: Option<&Path>, key: &str, fallback: usize) -> usize {
-        self.option(root, key).and_then(serde_json::Value::as_u64)
-            .and_then(|value| usize::try_from(value).ok()).unwrap_or(fallback)
+        self.option(root, key)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(fallback)
     }
 
     pub fn option_string(&self, root: Option<&Path>, key: &str, fallback: &str) -> String {
-        self.option(root, key).and_then(serde_json::Value::as_str).unwrap_or(fallback).to_owned()
+        self.option(root, key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(fallback)
+            .to_owned()
     }
 
     pub fn option(&self, root: Option<&Path>, key: &str) -> Option<&serde_json::Value> {
-        root.and_then(|root| self.project_options.get(root)).and_then(|options| options.get(key))
+        root.and_then(|root| self.project_options.get(root))
+            .and_then(|options| options.get(key))
             .or_else(|| self.options.get(key))
     }
 
@@ -148,11 +156,15 @@ impl Preferences {
         match root {
             Some(root) => self.project_options.entry(root.to_path_buf()).or_default(),
             None => &mut self.options,
-        }.insert(key.to_owned(), value);
+        }
+        .insert(key.to_owned(), value);
     }
 
     pub fn remove_option(&mut self, root: Option<&Path>, key: &str) {
-        if let Some(options) = root.map(|root| self.project_options.get_mut(root)).unwrap_or(Some(&mut self.options)) {
+        if let Some(options) = root
+            .map(|root| self.project_options.get_mut(root))
+            .unwrap_or(Some(&mut self.options))
+        {
             options.remove(key);
         }
     }
@@ -257,5 +269,49 @@ mod pane_visibility_tests {
         assert!(!linked.hide_sidebar && linked.hide_files);
         assert_eq!(project.sidebar_width, Some(245.));
         assert_eq!(linked.code_files_width, Some(315.));
+    }
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn legacy_unknown_and_project_options_round_trip_without_scope_leaks() {
+        let mut prefs: Preferences = serde_json::from_str(r#"{"split_diff":true}"#).unwrap();
+        assert!(prefs.options.is_empty() && prefs.project_options.is_empty());
+        let first = Path::new("/authored/first");
+        let second = Path::new("/authored/second");
+        prefs.set_option(None, "editor.tab_size", json!(4));
+        prefs.set_option(None, "future.setting", json!({"keep":[1,2,3]}));
+        prefs.set_option(Some(first), "editor.tab_size", json!(2));
+        prefs.set_option(Some(first), "editor.direct_edit", json!(true));
+        let mut restored: Preferences =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
+        assert_eq!(restored.option_usize(Some(first), "editor.tab_size", 8), 2);
+        assert_eq!(restored.option_usize(Some(second), "editor.tab_size", 8), 4);
+        assert!(restored.option_bool(Some(first), "editor.direct_edit", false));
+        assert!(!restored.option_bool(Some(second), "editor.direct_edit", false));
+        restored.remove_option(Some(first), "editor.tab_size");
+        assert_eq!(restored.option_usize(Some(first), "editor.tab_size", 8), 4);
+        assert_eq!(
+            restored.option(None, "future.setting"),
+            Some(&json!({"keep":[1,2,3]}))
+        );
+        assert!(restored.split_diff);
+    }
+    #[test]
+    fn malformed_typed_values_use_callers_fallbacks() {
+        let mut prefs = Preferences::default();
+        let root = Path::new("/authored");
+        prefs.set_option(None, "number", json!(4));
+        prefs.set_option(Some(root), "number", json!(-1));
+        prefs.set_option(None, "bool", json!("true"));
+        prefs.set_option(None, "text", json!(false));
+        assert_eq!(prefs.option_usize(Some(root), "number", 8), 8);
+        assert!(prefs.option_bool(None, "bool", true));
+        assert_eq!(prefs.option_string(None, "text", "fallback"), "fallback");
+        prefs.remove_option(Some(Path::new("/missing")), "number");
+        assert_eq!(prefs.option_usize(None, "number", 0), 4);
     }
 }

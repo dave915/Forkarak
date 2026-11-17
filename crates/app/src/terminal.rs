@@ -18,7 +18,7 @@ use anyhow::{Context, Result, ensure};
 use smol::channel::{Receiver, Sender};
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -85,8 +85,63 @@ struct Shell {
     listener: Listener,
     io: EventLoopSender,
 }
+/// Immutable launch/display options for a terminal session. Existing shells are never restarted
+/// as a side effect of changing settings.
+#[derive(Clone)]
+pub(crate) struct TerminalConfig {
+    pub project: Option<PathBuf>,
+    pub shell: String,
+    pub args: Vec<String>,
+    pub font_size: f32,
+}
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            project: None,
+            shell: "/bin/zsh".into(),
+            args: vec!["-l".into(), "-i".into()],
+            font_size: 13.,
+        }
+    }
+}
+impl TerminalConfig {
+    pub(crate) fn from_preferences(
+        prefs: &crate::prefs::Preferences,
+        project: Option<&Path>,
+    ) -> Self {
+        Self {
+            project: project.map(Path::to_path_buf),
+            shell: prefs.option_string(project, "terminal.shell", "/bin/zsh"),
+            args: prefs
+                .option(project, "terminal.args")
+                .and_then(serde_json::Value::as_array)
+                .map(|args| {
+                    args.iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_else(|| Self::default().args),
+            font_size: prefs
+                .option_usize(
+                    project,
+                    "terminal.font_size",
+                    prefs.display.code_font_size.round() as usize,
+                )
+                .clamp(8, 32) as f32,
+        }
+    }
+}
 impl Shell {
+    #[cfg(test)]
     fn open(root: &Path, extra_env: HashMap<String, String>) -> Result<(Self, Receiver<()>)> {
+        Self::open_configured(root, extra_env, &TerminalConfig::default())
+    }
+    fn open_configured(
+        root: &Path,
+        extra_env: HashMap<String, String>,
+        config: &TerminalConfig,
+    ) -> Result<(Self, Receiver<()>)> {
         ensure!(
             root.is_absolute() && root.is_dir(),
             "워크트리 폴더를 찾을 수 없습니다"
@@ -108,7 +163,7 @@ impl Shell {
         let mut env = HashMap::from([
             ("TERM".into(), "xterm-256color".into()),
             ("COLORTERM".into(), "truecolor".into()),
-            ("SHELL".into(), "/bin/zsh".into()),
+            ("SHELL".into(), config.shell.clone()),
             ("TERM_PROGRAM".into(), "Forkarak".into()),
             (
                 "TERM_PROGRAM_VERSION".into(),
@@ -117,13 +172,13 @@ impl Shell {
         ]);
         env.extend(extra_env);
         let options = tty::Options {
-            shell: Some(tty::Shell::new("/bin/zsh".into(), vec!["-il".into()])),
+            shell: Some(tty::Shell::new(config.shell.clone(), config.args.clone())),
             working_directory: Some(root.to_owned()),
             drain_on_exit: true,
             env,
         };
-        let pty =
-            tty::new(&options, size, 0).context("워크트리 PTY에서 zsh를 시작할 수 없습니다")?;
+        let pty = tty::new(&options, size, 0)
+            .context("워크트리 PTY에서 설정한 명령을 시작할 수 없습니다")?;
         let master = Arc::new(pty.file().try_clone()?);
         let leader = rustix::process::Pid::from_child(pty.child());
         let term = Arc::new(FairMutex::new(Term::new(
@@ -382,6 +437,47 @@ mod tests {
             .status
             .success()
     }
+    #[test]
+    fn configured_shell_uses_exact_argv_and_authored_working_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("project with 'quote");
+        fs::create_dir(&root).unwrap();
+        let config = super::TerminalConfig {
+            project: None,
+            shell: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "printf '%s\\n' \"$PWD\" \"$1\" > configured.out".into(),
+                "fixture".into(),
+                "literal ; $(touch unwanted)".into(),
+            ],
+            font_size: 17.,
+        };
+        let (shell, _events) = Shell::open_configured(&root, HashMap::new(), &config).unwrap();
+        wait_for("configured shell should finish", || shell.exited());
+        let output = fs::read_to_string(root.join("configured.out")).unwrap();
+        assert_eq!(
+            output,
+            format!(
+                "{}\n{}\n",
+                root.canonicalize().unwrap().display(),
+                "literal ; $(touch unwanted)"
+            )
+        );
+        assert!(!root.join("unwanted").exists());
+        let mut prefs = crate::prefs::Preferences::default();
+        prefs.display.code_font_size = 19.;
+        assert_eq!(
+            super::TerminalConfig::from_preferences(&prefs, None).font_size,
+            19.
+        );
+        prefs.set_option(Some(&root), "terminal.font_size", serde_json::json!(17));
+        assert_eq!(
+            super::TerminalConfig::from_preferences(&prefs, Some(&root)).font_size,
+            17.
+        );
+    }
+
     #[test]
     fn actual_zsh_and_full_screen_pty() {
         let tmp = tempfile::tempdir().unwrap();

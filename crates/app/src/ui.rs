@@ -1671,7 +1671,10 @@ impl Pokarak {
         self.navigating = true;
         self.navigation_request += 1;
         let token = self.navigation_request;
-        self.status = if matches!(path.extension().and_then(|ext| ext.to_str()), Some("kt" | "kts")) {
+        self.status = if matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("kt" | "kts")
+        ) {
             format!("Kotlin {title} 찾는 중… 첫 탐색 시 Gradle/Maven 프로젝트를 동기화합니다.")
         } else {
             format!("{title} 찾는 중…")

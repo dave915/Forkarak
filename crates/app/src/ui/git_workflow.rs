@@ -569,16 +569,15 @@ fn wf_action(
     action: impl Fn(&mut Pokarak, &mut Window, &mut Context<Pokarak>) + 'static,
 ) -> Button {
     let target = weak.clone();
-    Button::new(id)
+    theme::action_button(id, disabled)
         .label(label)
         .small()
-        .disabled(disabled)
         .on_click(move |_, w, cx| {
             let _ = target.update(cx, |app, cx| action(app, w, cx));
         })
 }
 fn workflow_close() -> Button {
-    Button::new("workflow-close")
+    theme::action_button("workflow-close", false)
         .label("닫기")
         .small()
         .on_click(|_, w, cx| w.close_dialog(cx))

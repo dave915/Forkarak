@@ -1,10 +1,15 @@
 mod analysis_feedback;
+mod cli_control;
+mod code_edit;
+mod code_workspace;
 mod file_icons;
 mod file_inspector;
+mod file_tree;
 mod git_actions;
 mod git_commit;
 mod git_history;
 mod git_workflow;
+mod pane_visibility;
 mod patch;
 mod reader_navigation;
 mod settings;
@@ -12,15 +17,17 @@ mod split_diff;
 mod syntax;
 #[cfg(target_os = "macos")]
 mod terminal_dock;
+#[cfg(target_os = "macos")]
+mod terminal_sessions;
 mod toolbar;
 mod update_workspace;
 mod updates;
 use analysis_feedback::AnalysisFeedback;
+use file_tree::FileRow;
 use split_diff::ReviewDiff;
 
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
 use crate::theme::{self, Palette, ThemeChoice, ui_px, ui_text};
-use git_actions::integration::IntegrationKind;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::{
@@ -111,13 +118,18 @@ actions!(
         FindText,
         FindReferences,
         FindDefinition,
-        ToggleCode
+        ToggleCode,
+        ToggleSidebar,
+        ToggleFiles,
+        SaveCodeFile
     ]
 );
 
 pub fn bind_keys(cx: &mut App) {
     #[cfg(target_os = "macos")]
     crate::terminal::bind_keys(cx);
+    #[cfg(target_os = "macos")]
+    terminal_sessions::bind_keys(cx);
     cx.on_action(git_actions::request_app_quit);
     cx.set_menus([
         Menu::new("Forkarak").items([
@@ -130,6 +142,7 @@ pub fn bind_keys(cx: &mut App) {
             #[cfg(target_os = "macos")]
             MenuItem::action("워크트리 터미널 표시 / 숨기기", OpenWorktreeTerminal),
             MenuItem::action("새로고침", Refresh),
+            MenuItem::action("파일 저장", SaveCodeFile),
             MenuItem::action("Stash / 충돌 해결…", OpenGitWorkflow),
             MenuItem::separator(),
             MenuItem::action("파일 닫기", CloseFile),
@@ -152,6 +165,10 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("뒤로", Back),
             MenuItem::action("앞으로", Forward),
         ]),
+        Menu::new("보기").items([
+            MenuItem::action("사이드바 표시 / 숨기기", ToggleSidebar),
+            MenuItem::action("파일 목록 표시 / 숨기기 (코드 보기)", ToggleFiles),
+        ]),
     ]);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
@@ -171,12 +188,15 @@ pub fn bind_keys(cx: &mut App) {
         #[cfg(target_os = "macos")]
         KeyBinding::new("ctrl-`", OpenWorktreeTerminal, None),
         KeyBinding::new("cmd-r", Refresh, None),
+        KeyBinding::new("cmd-s", SaveCodeFile, None),
         KeyBinding::new("cmd-[", Back, None),
         KeyBinding::new("cmd-]", Forward, None),
         KeyBinding::new("cmd-p", FindFile, None),
         KeyBinding::new("cmd-shift-f", FindText, None),
         KeyBinding::new("alt-f7", FindReferences, None),
         KeyBinding::new("cmd-b", FindDefinition, None),
+        KeyBinding::new("cmd-alt-b", ToggleSidebar, None),
+        KeyBinding::new("cmd-shift-b", ToggleFiles, None),
         KeyBinding::new("cmd-d", ToggleCode, None),
     ]);
 }
@@ -194,7 +214,7 @@ struct ReadingPoint {
 
 struct Session {
     #[cfg(target_os = "macos")]
-    terminal: Option<Entity<crate::terminal::TerminalDock>>,
+    terminal: Option<Entity<terminal_sessions::TerminalSessions>>,
     #[cfg(target_os = "macos")]
     terminal_visible: bool,
     snapshot: Option<Snapshot>,
@@ -204,11 +224,11 @@ struct Session {
     scroll: UniformListScrollHandle,
     history: Vec<ReadingPoint>,
     forward: Vec<ReadingPoint>,
-    collapsed: HashSet<PathBuf>,
     restoring: bool,
 }
 impl Session {
-    fn new(saved: SavedView) -> Self {
+    fn new(mut saved: SavedView) -> Self {
+        saved.comparison = CompareMode::Uncommitted;
         let restoring = saved.selected.is_some();
         Self {
             #[cfg(target_os = "macos")]
@@ -222,22 +242,13 @@ impl Session {
             scroll: UniformListScrollHandle::new(),
             history: vec![],
             forward: vec![],
-            collapsed: HashSet::new(),
             restoring,
         }
     }
 }
 
-#[derive(Clone)]
-struct FileRow {
-    path: PathBuf,
-    label: String,
-    depth: usize,
-    directory: bool,
-    change: Option<ChangedFile>,
-}
-
 pub struct Pokarak {
+    code_edits: code_edit::CodeEdits,
     git_history: git_history::HistoryUi,
     workflow: git_workflow::WorkflowUi,
     focus: FocusHandle,
@@ -255,7 +266,6 @@ pub struct Pokarak {
     update_view: Option<(PathBuf, crate::prefs::UpdateView)>,
     sessions: HashMap<PathBuf, Session>,
     search_input: Entity<InputState>,
-    base_input: Entity<InputState>,
     filter: String,
     text_search: bool,
     loading: bool,
@@ -278,6 +288,7 @@ pub struct Pokarak {
     result_scroll: UniformListScrollHandle,
     file_scroll: UniformListScrollHandle,
     file_cursor: usize,
+    file_tree_focus: FocusHandle,
     result_cursor: usize,
     results_focus: FocusHandle,
     navigation: Option<Arc<Mutex<Navigator>>>,
@@ -288,6 +299,8 @@ pub struct Pokarak {
     changed: Arc<AtomicBool>,
     external_change: bool,
     checking_changes: bool,
+    cli_control: Option<crate::control::Server>,
+    pending_cli_file: Option<code_workspace::PendingFile>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -344,13 +357,8 @@ impl Pokarak {
     }
     fn activate_row(&mut self, row: FileRow, window: &mut Window, cx: &mut Context<Self>) {
         if row.directory {
-            if let Some(root) = &self.current {
-                let collapsed = &mut self.sessions.get_mut(root).unwrap().collapsed;
-                if !collapsed.remove(&row.path) {
-                    collapsed.insert(row.path);
-                }
-            }
-            cx.notify();
+            self.toggle_folder(&row.path, cx);
+            self.file_tree_focus.focus(window, cx);
         } else {
             self.open_file(row.path, true, None, window, cx);
         }
@@ -407,6 +415,9 @@ impl Pokarak {
     }
 
     fn close_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.block_code_close(cx) {
+            return;
+        }
         self.capture_positions(cx);
         self.file_request += 1;
         self.navigation_request += 1;
@@ -437,6 +448,9 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.block_code_close(cx) {
+            return;
+        }
         self.persist(cx);
         let Some(index) = self.projects.iter().position(|p| p.root == project_root) else {
             return;
@@ -452,6 +466,8 @@ impl Pokarak {
             self.opening_path = None;
         }
         for root in project.worktrees {
+            #[cfg(target_os = "macos")]
+            self.close_worktree_terminals(&root, cx);
             self.sessions.remove(&root);
         }
         if self.current_project.as_ref() == Some(&project_root) {
@@ -501,9 +517,14 @@ impl Pokarak {
     }
 
     fn close_all_projects(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.block_code_close(cx) {
+            return;
+        }
         self.persist(cx);
         self.reset_active(cx);
         self.projects.clear();
+        #[cfg(target_os = "macos")]
+        self.shutdown_terminals(cx);
         self.sessions.clear();
         self.persist(cx);
         self.focus.focus(window, cx);
@@ -531,11 +552,6 @@ impl Pokarak {
             .or_else(|| prefs.last_root.clone());
         let search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("파일 이름 검색   ⌘P"));
-        let base_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value("main")
-                .placeholder("기준 브랜치")
-        });
         let mut subscriptions = vec![cx.subscribe_in(
             &search_input,
             window,
@@ -558,15 +574,6 @@ impl Pokarak {
                 _ => {}
             },
         )];
-        subscriptions.push(cx.subscribe_in(
-            &base_input,
-            window,
-            |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { .. } => this.compare(true, window, cx),
-                InputEvent::Change => cx.notify(),
-                _ => {}
-            },
-        ));
         subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
             if this.prefs.theme == ThemeChoice::System {
                 theme::apply(this.prefs.theme, this.prefs.display, window, cx);
@@ -574,6 +581,7 @@ impl Pokarak {
             }
         }));
         let mut this = Self {
+            code_edits: code_edit::CodeEdits::load(),
             workflow: git_workflow::WorkflowUi::default(),
             git_history: git_history::HistoryUi::default(),
             focus: cx.focus_handle(),
@@ -590,7 +598,6 @@ impl Pokarak {
             pending_projects,
             sessions: HashMap::new(),
             search_input,
-            base_input,
             filter: String::new(),
             text_search: false,
             loading: false,
@@ -614,6 +621,7 @@ impl Pokarak {
             result_scroll: UniformListScrollHandle::new(),
             file_scroll: UniformListScrollHandle::new(),
             file_cursor: 0,
+            file_tree_focus: cx.focus_handle(),
             result_cursor: 0,
             results_focus: cx.focus_handle(),
             navigation: None,
@@ -624,12 +632,17 @@ impl Pokarak {
             changed: Arc::new(AtomicBool::new(false)),
             external_change: false,
             checking_changes: false,
+            cli_control: None,
+            pending_cli_file: None,
             _subscriptions: subscriptions,
         };
         this.reset_git_history();
         this.install_git_lifecycle(window, cx);
+        this.install_cli_control(window, cx);
         cx.on_release(|this, cx| {
             this.cancel_git_job();
+            #[cfg(target_os = "macos")]
+            this.shutdown_terminals(cx);
             this.persist(cx);
             if let Some(cancel) = this.cancellation.take() {
                 let _ = cancel.cancel();
@@ -642,7 +655,14 @@ impl Pokarak {
             if let Some(cancel) = this.cancellation.take() {
                 let _ = cancel.cancel();
             }
-            std::future::ready(())
+            #[cfg(target_os = "macos")]
+            let terminals = this.shutdown_terminals(cx);
+            async move {
+                #[cfg(target_os = "macos")]
+                for terminal in terminals {
+                    terminal.wait().await;
+                }
+            }
         })
         .detach();
         let executor = cx.background_executor().clone();
@@ -656,6 +676,7 @@ impl Pokarak {
                             && !this.count_pending
                             && this.changed.swap(false, Ordering::Relaxed)
                         {
+                            this.check_code_disk_changes(cx);
                             this.check_changes(cx);
                         }
                     })
@@ -707,18 +728,22 @@ impl Pokarak {
             .documents
             .get(&path)
             .map(|doc| doc.read(cx).cursor_position())
-            .unwrap_or_default();
+            .unwrap_or(Position::new(session.saved.line, session.saved.column));
         let scroll = session
             .documents
             .get(&path)
             .map(|doc| doc.read(cx).scroll_offset())
-            .unwrap_or_default();
+            .unwrap_or_else(|| point(px(session.saved.scroll_x), px(session.saved.scroll_y)));
         Some(ReadingPoint {
             scroll_x: scroll.x.into(),
             scroll_y: scroll.y.into(),
             path,
             code: session.saved.code,
-            row: scroll_row(&session.scroll),
+            row: if session.restoring {
+                session.saved.diff_row
+            } else {
+                scroll_row(&session.scroll)
+            },
             line: position.line,
             column: position.character,
         })
@@ -769,6 +794,7 @@ impl Pokarak {
     }
 
     fn persist(&mut self, cx: &App) {
+        self.retain_code_drafts(cx);
         self.remember_view(cx);
         if self.current.is_some() || self.opening_path.is_none() {
             self.prefs.last_root = self.current.clone();
@@ -848,6 +874,7 @@ impl Pokarak {
                         this.change_count = None;
                         this.graph_fingerprint = None;
                         this.current = Some(root.clone());
+                        this.file_cursor = 0;
                         let project_root = this
                             .inventory
                             .iter()
@@ -1059,10 +1086,10 @@ impl Pokarak {
             self.refresh_graph_inventory(root, window, cx);
             return;
         }
-        let mode = self
-            .session()
-            .map(|s| s.saved.comparison.clone())
-            .unwrap_or_default();
+        if let Some(session) = self.sessions.get_mut(&root) {
+            session.prepare_code_snapshot();
+        }
+        let mode = CompareMode::Uncommitted;
         self.persist(cx);
         self.request += 1;
         let token = self.request;
@@ -1084,15 +1111,7 @@ impl Pokarak {
                     }
                     Err(error) => {
                         this.error = Some(format!("{error:#}"));
-                        this.status = "비교 기준을 확인하세요".into();
-                        if let Some(s) = this
-                            .current
-                            .as_ref()
-                            .and_then(|root| this.sessions.get_mut(root))
-                            && let Some(snapshot) = &s.snapshot
-                        {
-                            s.saved.comparison = snapshot.compare.clone();
-                        }
+                        this.status = "변경사항을 읽을 수 없습니다".into();
                     }
                 }
                 cx.notify();
@@ -1163,30 +1182,24 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let pending_file = self.take_pending_cli_file();
+        self.capture_code_buffers(cx);
         self.inventory = snapshot.worktrees.clone();
         self.change_count = Some(snapshot.worktree.changed_files);
         self.graph_fingerprint = None;
         self.count_pending = false;
         let root = self.current.clone().unwrap();
         let session = self.sessions.get_mut(&root).unwrap();
-        let selection = session
-            .saved
-            .selected
-            .clone()
-            .filter(|p| {
-                p.is_absolute()
-                    || snapshot.files.contains(p)
-                    || snapshot.changes.iter().any(|f| &f.path == p)
-            })
-            .or_else(|| snapshot.changes.first().map(|f| f.path.clone()));
+        let code_edits = &self.code_edits;
+        let selection = session.snapshot_selection(&snapshot);
         session.saved.comparison = snapshot.compare.clone();
-        if let CompareMode::Branch(base) = &snapshot.compare {
-            self.base_input
-                .update(cx, |input, cx| input.set_value(base.clone(), window, cx));
+        if pending_file.is_none() {
+            session.saved.selected = selection.clone();
         }
-        session.saved.selected = selection.clone();
         session.saved.tabs.retain(|path| {
-            if path.is_absolute() {
+            if session.saved.selected.as_ref() == Some(path) || code_edits.dirty(&root, path) {
+                true
+            } else if path.is_absolute() {
                 path.is_file()
             } else {
                 snapshot.files.contains(path) || snapshot.changes.iter().any(|f| &f.path == path)
@@ -1201,11 +1214,16 @@ impl Pokarak {
         session.snapshot = Some(snapshot);
         session.diffs.clear();
         self.status = "준비됨".into();
-        if let Some(path) = selection.filter(|_| !self.git_history.active) {
+        if let Some(pending) = pending_file {
+            self.pending_history = pending.history_restore;
+            self.pending_location_revision = pending.target_revision;
+            self.open_file(pending.path, pending.history, pending.position, window, cx);
+        } else if let Some(path) = selection.filter(|_| !self.git_history.active) {
             self.open_file(path, false, None, window, cx);
         }
         self.sync_git_history(window, cx);
         self.restore_git_completion(cx);
+        self.finish_code_save_commit(window, cx);
     }
 
     fn open_file(
@@ -1221,6 +1239,30 @@ impl Pokarak {
             return;
         };
         self.capture_positions(cx);
+        self.capture_code_buffers(cx);
+        if self
+            .sessions
+            .get_mut(&root)
+            .is_some_and(Session::prepare_code_snapshot)
+        {
+            self.file_request += 1;
+            self.navigation_request += 1;
+            self.file_loading = false;
+            self.navigating = false;
+            self.refresh(window, cx);
+            self.pending_cli_file = Some(code_workspace::PendingFile {
+                root,
+                snapshot_request: self.request,
+                file_request: self.file_request,
+                path,
+                position,
+                history,
+                history_restore: self.pending_history.take(),
+                target_revision: self.pending_location_revision.take(),
+            });
+            return;
+        }
+        self.pending_cli_file = None;
         let history_restore = self.pending_history.take();
         let target_revision = self.pending_location_revision.take();
         let previous = if history {
@@ -1291,44 +1333,59 @@ impl Pokarak {
         self.error = None;
         let load_root = root.clone();
         let load_path = path.clone();
+        self.capture_code_buffers(cx);
+        let retained = self.code_edits.retained_text(&root, &path);
+        let live = retained.is_some()
+            || !matches!(file.as_ref().map(|f| &f.status), Some(FileStatus::Deleted));
         let task = cx.background_spawn(async move {
-            if let Some(expected) = target_revision {
-                anyhow::ensure!(
-                    file_revision(&load_root.join(&load_path)) == Some(expected),
-                    "탐색 결과의 파일이 변경되었습니다. 다시 검색하세요."
-                );
-            }
-            let diff = file
-                .as_ref()
-                .map(|file| pokarak_core::diff(&load_root, file, &mode))
-                .transpose()?;
-            let text = if let Some(diff) = &diff {
-                if diff.binary {
-                    String::new()
-                } else if diff.new_text.is_empty()
-                    && matches!(file.as_ref().map(|f| &f.status), Some(FileStatus::Deleted))
-                {
-                    diff.old_text.clone()
-                } else {
-                    diff.new_text.clone()
+            let result = (|| {
+                if let Some(expected) = target_revision {
+                    anyhow::ensure!(
+                        file_revision(&load_root.join(&load_path)) == Some(expected),
+                        "탐색 결과의 파일이 변경되었습니다. 다시 검색하세요."
+                    );
                 }
-            } else if load_path.is_absolute() && !load_path.starts_with(&load_root) {
-                let metadata = std::fs::metadata(&load_path)?;
-                anyhow::ensure!(
-                    metadata.len() < 4 * 1024 * 1024,
-                    "외부 소스가 4MB를 초과합니다"
-                );
-                std::fs::read_to_string(&load_path)?
-            } else {
-                pokarak_core::read_file(&load_root, &load_path)?
-            };
-            if let Some(expected) = target_revision {
-                anyhow::ensure!(
-                    file_revision(&load_root.join(&load_path)) == Some(expected),
-                    "파일을 여는 중 내용이 변경되었습니다. 다시 검색하세요."
-                );
-            }
-            anyhow::Ok((text, diff.map(split_diff::PreparedDiff::new)))
+                let diff = file
+                    .as_ref()
+                    .map(|file| pokarak_core::diff(&load_root, file, &mode))
+                    .transpose()?;
+                let deleted = matches!(file.as_ref().map(|f| &f.status), Some(FileStatus::Deleted));
+                let binary = diff.as_ref().is_some_and(|diff| diff.binary);
+                let text = if let Some(diff) = &diff {
+                    if diff.binary {
+                        String::new()
+                    } else if deleted {
+                        diff.old_text.clone()
+                    } else {
+                        pokarak_core::read_file(&load_root, &load_path)?
+                    }
+                } else if load_path.is_absolute() && !load_path.starts_with(&load_root) {
+                    let metadata = std::fs::metadata(&load_path)?;
+                    anyhow::ensure!(
+                        metadata.len() < 4 * 1024 * 1024,
+                        "외부 소스가 4MB를 초과합니다"
+                    );
+                    std::fs::read_to_string(&load_path)?
+                } else {
+                    pokarak_core::read_file(&load_root, &load_path)?
+                };
+                if let Some(expected) = target_revision {
+                    anyhow::ensure!(
+                        file_revision(&load_root.join(&load_path)) == Some(expected),
+                        "파일을 여는 중 내용이 변경되었습니다. 다시 검색하세요."
+                    );
+                }
+                anyhow::Ok((
+                    text,
+                    diff.map(split_diff::PreparedDiff::new),
+                    !deleted,
+                    !binary,
+                ))
+            })();
+            result.or_else(|error| match retained {
+                Some(text) => Ok((text, None, false, true)),
+                None => Err(error),
+            })
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
@@ -1337,8 +1394,25 @@ impl Pokarak {
                     return;
                 }
                 this.file_loading = false;
+                this.capture_code_buffers(cx);
+                // A user may have typed after this request began, including
+                // after a refresh that now finds the file missing/unreadable.
+                let result =
+                    result.or_else(|error| match this.code_edits.retained_text(&root, &path) {
+                        Some(text) => Ok((text, None, false, true)),
+                        None => Err(error),
+                    });
                 match result {
-                    Ok((text, diff)) => {
+                    Ok((text, diff, available, text_file)) => {
+                        let has_draft = this.code_edits.dirty(&root, &path);
+                        let text = this.prepare_code_buffer(
+                            &root,
+                            &path,
+                            text,
+                            available,
+                            (live && text_file) || has_draft,
+                        );
+                        let editing = this.code_edits.editing(&root, &path);
                         let session = this.sessions.get_mut(&root).unwrap();
                         if let Some(diff) = diff {
                             session.diffs.insert(path.clone(), diff.into());
@@ -1357,7 +1431,7 @@ impl Pokarak {
                             })
                             .clone();
                         editor.update(cx, |editor, cx| {
-                            editor.set_readonly(true, cx);
+                            editor.set_readonly(!editing, cx);
                             if editor.value().as_ref() != text {
                                 editor.set_value(text, window, cx);
                             }
@@ -1402,7 +1476,9 @@ impl Pokarak {
                         session
                             .scroll
                             .scroll_to_item_strict(diff_row, ScrollStrategy::Top);
-                        if !session.saved.code {
+                        let code = session.saved.code;
+                        this.bind_code_editor(&root, &path, &editor, cx);
+                        if !code && !this.file_tree_focus.is_focused(window) {
                             this.focus.focus(window, cx);
                         }
                         this.status = if this.navigation.is_some() {
@@ -1489,26 +1565,6 @@ impl Pokarak {
         cx.notify();
     }
 
-    fn compare(&mut self, branch: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.leave_git_graph();
-        let Some(root) = &self.current else {
-            return;
-        };
-        let mode = if branch {
-            let base = self.base_input.read(cx).value().to_string();
-            if base.trim().is_empty() {
-                self.error = Some("기준 브랜치를 입력하세요. 예: main 또는 origin/main".into());
-                cx.notify();
-                return;
-            }
-            CompareMode::Branch(base.trim().into())
-        } else {
-            CompareMode::Uncommitted
-        };
-        self.sessions.get_mut(root).unwrap().saved.comparison = mode;
-        self.refresh(window, cx);
-    }
-
     fn stop_analysis(&mut self, cx: &mut Context<Self>) {
         self.navigation_request += 1;
         if let Some(cancel) = self.cancellation.take() {
@@ -1563,6 +1619,13 @@ impl Pokarak {
         let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
             return;
         };
+        if self.code_edits.dirty(&root, &path) {
+            self.status =
+                "심볼 탐색 전에 파일을 저장하세요. 미저장 초안을 디스크 소스로 탐색하지 않습니다."
+                    .into();
+            cx.notify();
+            return;
+        }
         let current_source = self.session().map(|s| s.saved.code).unwrap_or(false)
             && !self
                 .snapshot()
@@ -1860,713 +1923,30 @@ impl Pokarak {
         cx.notify();
     }
 
-    fn file_rows(&self) -> Vec<FileRow> {
-        let Some(session) = self.session() else {
-            return vec![];
-        };
-        let Some(snapshot) = &session.snapshot else {
-            return vec![];
-        };
-        let query = if self.text_search {
-            String::new()
-        } else {
-            self.filter.to_lowercase()
-        };
-        let paths = if session.saved.all_files {
-            snapshot.files.clone()
-        } else {
-            snapshot.changes.iter().map(|f| f.path.clone()).collect()
-        };
-        let mut rows = vec![];
-        let mut folders = HashSet::new();
-        for path in paths {
-            if !query.is_empty() && !path.to_string_lossy().to_lowercase().contains(&query) {
-                continue;
-            }
-            if session.saved.all_files && query.is_empty() {
-                let components: Vec<_> = path.components().collect();
-                let mut dir = PathBuf::new();
-                let mut hidden = false;
-                for (depth, part) in components
-                    .iter()
-                    .take(components.len().saturating_sub(1))
-                    .enumerate()
-                {
-                    dir.push(part.as_os_str());
-                    if folders.insert(dir.clone()) && !hidden {
-                        rows.push(FileRow {
-                            path: dir.clone(),
-                            label: part.as_os_str().to_string_lossy().into(),
-                            depth,
-                            directory: true,
-                            change: None,
-                        });
-                    }
-                    if session.collapsed.contains(&dir) {
-                        hidden = true;
-                    }
-                }
-                if hidden {
-                    continue;
-                }
-            }
-            let change = snapshot.changes.iter().find(|f| f.path == path).cloned();
-            rows.push(FileRow {
-                label: if session.saved.all_files && query.is_empty() {
-                    path.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into()
-                } else {
-                    path.to_string_lossy().into()
-                },
-                depth: if session.saved.all_files && query.is_empty() {
-                    path.components().count().saturating_sub(1)
-                } else {
-                    0
-                },
-                path,
-                directory: false,
-                change,
-            });
-        }
-        rows
-    }
-
-    fn render_sidebar_header(&self, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .h(ui_px(44.))
-            .flex_none()
-            .px_2()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                Button::new("sidebar-worktrees")
-                    .label("워크트리")
-                    .ghost()
-                    .small()
-                    .text_size(ui_text(12.))
-                    .selected(!self.prefs.show_branches)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.prefs.show_branches = false;
-                        this.prefs.save();
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("sidebar-branches")
-                    .label("브랜치")
-                    .ghost()
-                    .small()
-                    .text_size(ui_text(12.))
-                    .selected(self.prefs.show_branches)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.prefs.show_branches = true;
-                        this.prefs.save();
-                        cx.notify();
-                    })),
-            )
-            .when(!self.prefs.show_branches, |row| {
-                row.child(div().flex_1()).child(
-                    Button::new("manage-worktrees")
-                        .icon(IconName::Settings)
-                        .small()
-                        .ghost()
-                        .tooltip("워크트리 생성·정리")
-                        .accessibility_label("워크트리 관리")
-                        .disabled(self.git_is_busy() || self.loading)
-                        .on_click(cx.listener(|app, _, w, cx| app.open_worktree_manager(w, cx))),
-                )
-            })
-            .into_any_element()
-    }
-
-    fn render_branches(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = Palette::new(cx);
-        let branches = Arc::new(
-            self.snapshot()
-                .map(|s| s.branches.clone())
-                .unwrap_or_default(),
-        );
-        let current = self
-            .snapshot()
-            .map(|s| s.worktree.branch.clone())
-            .unwrap_or_default();
-        let base = match self.snapshot().map(|s| &s.compare) {
-            Some(CompareMode::Branch(base)) => Some(base.clone()),
-            _ => None,
-        };
-        let root = self.current.clone();
-        let weak = cx.entity().downgrade();
-        div()
-            .size_full()
-            .v_flex()
-            .bg(palette.rgb(SIDE))
-            .overflow_hidden()
-            .child(self.render_sidebar_header(cx))
-            .child(if branches.is_empty() {
-                div()
-                    .p_3()
-                    .text_color(palette.rgb(MUTED))
-                    .child("아직 커밋된 브랜치가 없습니다.")
-                    .into_any_element()
-            } else {
-                uniform_list("branches", branches.len(), move |range, _, _| {
-                    range
-                        .map(|index| {
-                            let name = branches[index].clone();
-                            let target = weak.clone();
-                            let scope = root.clone();
-                            let selected = base.as_ref() == Some(&name);
-                            let tooltip = format!("{name}을 기준으로 현재 워크트리와 비교");
-                            let branch = name.clone();
-                            let activate = move |window: &mut Window, cx: &mut App| {
-                                let _ = target.update(cx, |this, cx| {
-                                    if this.current != scope {
-                                        return;
-                                    }
-                                    this.base_input.update(cx, |input, cx| {
-                                        input.set_value(branch.clone(), window, cx)
-                                    });
-                                    this.compare(true, window, cx);
-                                });
-                            };
-                            let menu_target = weak.clone();
-                            let menu_scope = root.clone();
-                            let menu_branch = name.clone();
-                            let can_integrate = name != current;
-                            let a11y_activate = activate.clone();
-                            let key_activate = activate.clone();
-                            div()
-                                .h(ui_px(32.))
-                                .w_full()
-                                .px_2()
-                                .child(
-                                    div()
-                                        .id(("branch", index))
-                                        .size_full()
-                                        .role(accesskit::Role::Button)
-                                        .aria_label(tooltip.clone())
-                                        .aria_selected(selected)
-                                        .tab_index(0)
-                                        .on_a11y_action(
-                                            accesskit::Action::Click,
-                                            move |_, w, cx| a11y_activate(w, cx),
-                                        )
-                                        .on_key_down(move |event, window, cx| {
-                                            if !event.keystroke.modifiers.modified()
-                                                && matches!(
-                                                    event.keystroke.key.as_str(),
-                                                    "enter" | "space"
-                                                )
-                                            {
-                                                window.prevent_default();
-                                                cx.stop_propagation();
-                                                if !event.is_held {
-                                                    key_activate(window, cx);
-                                                }
-                                            }
-                                        })
-                                        .px_2()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .rounded(ui_px(5.))
-                                        .cursor_pointer()
-                                        .bg(if selected {
-                                            palette.rgb(0x2b3947)
-                                        } else {
-                                            palette.rgb(SIDE)
-                                        })
-                                        .hover(|s| {
-                                            s.bg(if selected {
-                                                palette.rgb(0x2b3947)
-                                            } else {
-                                                palette.rgb(PANEL)
-                                            })
-                                        })
-                                        .focus_visible(|s| {
-                                            s.border_1().border_color(palette.rgb(BLUE))
-                                        })
-                                        .tooltip(move |window, cx| {
-                                            gpui_kit::component::tooltip::Tooltip::new(
-                                                tooltip.clone(),
-                                            )
-                                            .build(window, cx)
-                                        })
-                                        .on_click(move |_, window, cx| activate(window, cx))
-                                        .child(
-                                            Icon::new(IconName::GitBranch)
-                                                .size(ui_px(15.))
-                                                .flex_none()
-                                                .text_color(if selected {
-                                                    palette.rgb(BLUE)
-                                                } else {
-                                                    palette.rgb(MUTED)
-                                                }),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .text_ellipsis()
-                                                .child(name.clone()),
-                                        )
-                                        .when(name == current, |row| {
-                                            row.child(
-                                                div()
-                                                    .flex_none()
-                                                    .text_size(ui_text(10.))
-                                                    .text_color(palette.rgb(MUTED))
-                                                    .child("현재"),
-                                            )
-                                        })
-                                        .context_menu(move |mut menu, _, _| {
-                                            if can_integrate {
-                                                for (kind, label) in [
-                                                    (
-                                                        IntegrationKind::Merge,
-                                                        "현재 브랜치에 Merge…",
-                                                    ),
-                                                    (
-                                                        IntegrationKind::Rebase,
-                                                        "이 브랜치 위로 Rebase…",
-                                                    ),
-                                                ] {
-                                                    let target = menu_target.clone();
-                                                    let scope = menu_scope.clone();
-                                                    let branch = menu_branch.clone();
-                                                    menu = menu.item(
-                                                        PopupMenuItem::new(label).on_click(
-                                                            move |_, w, cx| {
-                                                                let _ =
-                                                                    target.update(cx, |app, cx| {
-                                                                        if app.current == scope {
-                                                                            app.open_integration(
-                                                                                kind,
-                                                                                Some(
-                                                                                    branch.clone(),
-                                                                                ),
-                                                                                w,
-                                                                                cx,
-                                                                            );
-                                                                        }
-                                                                    });
-                                                            },
-                                                        ),
-                                                    );
-                                                }
-                                            }
-                                            menu
-                                        }),
-                                )
-                                .into_any_element()
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .flex_1()
-                .h_full()
-                .into_any_element()
-            })
-            .into_any_element()
-    }
-
     fn render_worktrees(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.git_history.active {
-            return self.render_graph_sidebar(cx);
-        }
-        if self.prefs.show_branches {
-            return self.render_branches(cx);
-        }
-        let palette = Palette::new(cx);
-        let worktrees = self
-            .snapshot()
-            .map(|s| s.worktrees.clone())
-            .unwrap_or_default();
-        let mut panel = div()
-            .size_full()
-            .v_flex()
-            .bg(palette.rgb(SIDE))
-            .overflow_hidden()
-            .child(self.render_sidebar_header(cx));
-        let mut list = div()
-            .id("worktree-list")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px_2();
-        for (index, tree) in worktrees.into_iter().enumerate() {
-            let active = self.current.as_ref() == Some(&tree.path);
-            let path = tree.path.clone();
-            let a11y_path = path.clone();
-            let a11y_target = cx.entity().downgrade();
-            let missing = tree.is_prunable || !path.exists();
-            let branch = if tree.is_detached {
-                format!("{} (detached)", &tree.head[..tree.head.len().min(8)])
-            } else {
-                tree.branch.clone()
-            };
-            list = list.child(
-                div()
-                    .id(("worktree", index))
-                    .w_full()
-                    .role(accesskit::Role::Button)
-                    .aria_label(format!("워크트리 {}", branch))
-                    .on_a11y_action(accesskit::Action::Click, move |_, window, cx| {
-                        let _ = a11y_target.update(cx, |this, cx| {
-                            this.open_repository(a11y_path.clone(), window, cx)
-                        });
-                    })
-                    .px_2()
-                    .py_2()
-                    .mb_1()
-                    .rounded(ui_px(5.))
-                    .cursor_pointer()
-                    .bg(if active {
-                        palette.rgb(0x2b3947)
-                    } else {
-                        palette.rgb(SIDE)
-                    })
-                    .hover(|s| s.bg(palette.rgb(PANEL)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if !missing {
-                            this.open_repository(path.clone(), window, cx);
-                        }
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(Icon::new(IconName::GitBranch).size(ui_px(15.)).text_color(
-                                if active {
-                                    palette.rgb(BLUE)
-                                } else {
-                                    palette.rgb(MUTED)
-                                },
-                            ))
-                            .child(div().flex_1().text_ellipsis().child(branch))
-                            .child(
-                                div()
-                                    .text_size(ui_text(11.))
-                                    .text_color(palette.rgb(MUTED))
-                                    .child(tree.changed_files.to_string()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .mt_1()
-                            .pl(ui_px(23.))
-                            .text_size(ui_text(11.))
-                            .text_color(palette.rgb(MUTED))
-                            .text_ellipsis()
-                            .child(
-                                tree.path
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string(),
-                            ),
-                    )
-                    .when(tree.is_locked || missing, |d| {
-                        d.child(
-                            div()
-                                .text_size(ui_text(11.))
-                                .text_color(palette.rgb(0xe4bb79))
-                                .child(if missing {
-                                    "경로가 없습니다"
-                                } else {
-                                    "잠긴 워크트리"
-                                }),
-                        )
-                    }),
-            );
-        }
-        panel = panel.child(list);
-        panel.into_any_element()
+        self.render_graph_sidebar(cx)
     }
 
-    fn render_files(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let palette = Palette::new(cx);
-        let all = self.session().map(|s| s.saved.all_files).unwrap_or(false);
-        let selected = self.selected();
-        let keyboard_index = if self.search_input.focus_handle(cx).is_focused(window) {
-            Some(self.file_cursor)
-        } else {
-            None
-        };
-        let rows = Arc::new(self.file_rows());
-        let count = rows.iter().filter(|r| !r.directory).count();
-        let weak = cx.entity().downgrade();
-        div()
-            .size_full()
-            .v_flex()
-            .bg(palette.rgb(BG))
-            .overflow_hidden()
-            .child(
-                div()
-                    .h(ui_px(44.))
-                    .flex_none()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        Button::new("changes")
-                            .label("변경 파일")
-                            .ghost()
-                            .small()
-                            .selected(!all)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(root) = &this.current {
-                                    this.sessions.get_mut(root).unwrap().saved.all_files = false;
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("all-files")
-                            .label("전체 파일")
-                            .ghost()
-                            .small()
-                            .selected(all)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(root) = &this.current {
-                                    this.sessions.get_mut(root).unwrap().saved.all_files = true;
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(ui_text(11.))
-                            .text_color(palette.rgb(MUTED))
-                            .child(count.to_string()),
-                    ),
-            )
-            .child(
-                div()
-                    .px_2()
-                    .pb_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        Input::new(&self.search_input)
-                            .small()
-                            .prefix(IconName::Search),
-                    )
-                    .child(
-                        Button::new("text-search")
-                            .icon(IconName::TextSearch)
-                            .ghost()
-                            .small()
-                            .tooltip("본문 검색  ⌘⇧F")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.focus_search(true, window, cx)
-                            })),
-                    ),
-            )
-            .child(if count == 0 {
-                div()
-                    .p_4()
-                    .text_color(palette.rgb(MUTED))
-                    .child(if self.filter.is_empty() {
-                        "변경된 파일이 없습니다. 전체 파일에서 코드를 읽을 수 있습니다."
-                    } else {
-                        "일치하는 파일이 없습니다."
-                    })
-                    .into_any_element()
+    fn code_analysis_control(&self, cx: &mut Context<Self>) -> Button {
+        Button::new("analysis")
+            .label(if self.navigation.is_some() {
+                "코드 탐색 켜짐"
             } else {
-                uniform_list("files", rows.len(), move |range, _, cx| {
-                    range
-                        .map(|ix| {
-                            let row = rows[ix].clone();
-                            let target = weak.clone();
-                            let path = row.path.clone();
-                            let a11y_target = weak.clone();
-                            let a11y_path = path.clone();
-                            let directory = row.directory;
-                            let selected = if let Some(index) = keyboard_index {
-                                ix == index
-                            } else {
-                                selected.as_ref() == Some(&path)
-                            };
-                            let status = row.change.as_ref().map(|c| file_status(&c.status));
-                            div()
-                                .id(("file", ix))
-                                .w_full()
-                                .role(accesskit::Role::Button)
-                                .aria_label(row.path.to_string_lossy().to_string())
-                                .on_a11y_action(accesskit::Action::Click, move |_, window, cx| {
-                                    let _ = a11y_target.update(cx, |this, cx| {
-                                        if directory {
-                                            if let Some(root) = &this.current {
-                                                let collapsed = &mut this
-                                                    .sessions
-                                                    .get_mut(root)
-                                                    .unwrap()
-                                                    .collapsed;
-                                                if !collapsed.remove(&a11y_path) {
-                                                    collapsed.insert(a11y_path.clone());
-                                                }
-                                            }
-                                            cx.notify();
-                                        } else {
-                                            this.open_file(
-                                                a11y_path.clone(),
-                                                true,
-                                                None,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    });
-                                })
-                                .h(ui_px(29.))
-                                .px_2()
-                                .pl(ui_px(10. + row.depth as f32 * 13.))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .cursor_pointer()
-                                .bg(if selected {
-                                    palette.rgb(0x2c3a48)
-                                } else {
-                                    palette.rgb(BG)
-                                })
-                                .hover(|s| s.bg(palette.rgb(PANEL)))
-                                .child(if row.directory {
-                                    Icon::new(IconName::Folder)
-                                        .size(ui_px(14.))
-                                        .text_color(palette.rgb(MUTED))
-                                        .into_any_element()
-                                } else {
-                                    file_icons::icon_for_path(&row.path, cx).into_any_element()
-                                })
-                                .child(div().flex_1().min_w_0().text_ellipsis().child(row.label))
-                                .when_some(status, |d, (label, color)| {
-                                    d.child(
-                                        div()
-                                            .text_size(ui_text(10.))
-                                            .text_color(palette.rgb(color))
-                                            .child(label),
-                                    )
-                                })
-                                .on_click(move |_, window, cx| {
-                                    let _ = target.update(cx, |this, cx| {
-                                        if row.directory {
-                                            if let Some(root) = &this.current {
-                                                let dirs = &mut this
-                                                    .sessions
-                                                    .get_mut(root)
-                                                    .unwrap()
-                                                    .collapsed;
-                                                if !dirs.remove(&path) {
-                                                    dirs.insert(path.clone());
-                                                }
-                                            }
-                                            cx.notify();
-                                        } else {
-                                            this.open_file(path.clone(), true, None, window, cx);
-                                        }
-                                    });
-                                })
-                                .into_any_element()
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .track_scroll(&self.file_scroll)
-                .h_full()
-                .flex_1()
-                .into_any_element()
+                "코드 탐색"
             })
-            .into_any_element()
-    }
-
-    fn render_comparison(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = Palette::new(cx);
-        let mode = self.snapshot().map(|s| &s.compare);
-        let draft = self.base_input.read(cx).value();
-        let pending = matches!(mode,Some(CompareMode::Branch(base)) if base.as_str()!=draft.trim());
-        div()
-            .h(ui_px(42.))
-            .flex_none()
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(palette.rgb(LINE))
-            .child(
-                Button::new("uncommitted")
-                    .label("미커밋")
-                    .ghost()
-                    .small()
-                    .selected(matches!(mode, Some(CompareMode::Uncommitted)))
-                    .tooltip("HEAD와 현재 파일 비교: staged + unstaged")
-                    .on_click(cx.listener(|this, _, w, cx| this.compare(false, w, cx))),
-            )
-            .child(
-                Button::new("branch-compare")
-                    .label("브랜치 변경")
-                    .ghost()
-                    .small()
-                    .selected(matches!(mode, Some(CompareMode::Branch(_))))
-                    .on_click(cx.listener(|this, _, w, cx| this.compare(true, w, cx))),
-            )
-            .child(
-                div()
-                    .w(ui_px(145.))
-                    .child(Input::new(&self.base_input).small()),
-            )
-            .child(
-                Button::new("apply-base")
-                    .label(if pending { "적용 *" } else { "적용" })
-                    .ghost()
-                    .small()
-                    .disabled(self.loading || draft.trim().is_empty())
-                    .tooltip("입력한 기준 브랜치를 적용합니다. Enter로도 적용할 수 있습니다.")
-                    .on_click(cx.listener(|this, _, window, cx| this.compare(true, window, cx))),
-            )
-            .child(
-                div()
-                    .max_w(ui_px(260.))
-                    .text_ellipsis()
-                    .text_size(ui_text(11.))
-                    .text_color(palette.rgb(MUTED))
-                    .child(match mode {
-                        Some(CompareMode::Branch(base)) => {
-                            format!("적용됨: {base} 공통 조상 → 현재 파일")
-                        }
-                        _ => "적용됨: HEAD → 현재 파일".into(),
-                    }),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("analysis")
-                    .label(if self.navigation.is_some() {
-                        "코드 탐색 켜짐"
-                    } else {
-                        "코드 탐색"
-                    })
-                    .icon(IconName::Waypoints)
-                    .ghost()
-                    .small()
-                    .disabled(self.current.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if this.navigation.is_some() {
-                            this.stop_analysis(cx);
-                            this.status = "코드 탐색 중지됨".into();
-                        } else {
-                            this.trust_prompt = true;
-                        }
-                        cx.notify();
-                    })),
-            )
-            .into_any_element()
+            .icon(IconName::Waypoints)
+            .ghost()
+            .small()
+            .disabled(self.current.is_none())
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this.navigation.is_some() {
+                    this.stop_analysis(cx);
+                    this.status = "코드 탐색 중지됨".into();
+                } else {
+                    this.trust_prompt = true;
+                }
+                cx.notify();
+            }))
     }
 
     fn render_reader(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2593,6 +1973,15 @@ impl Pokarak {
             .and_then(|s| s.changes.iter().find(|f| &f.path == path))
             .map(|f| f.status == FileStatus::Deleted)
             .unwrap_or(false);
+        let dirty = self
+            .current
+            .as_ref()
+            .is_some_and(|root| self.code_edits.dirty(root, path));
+        let editing = self
+            .current
+            .as_ref()
+            .is_some_and(|root| self.code_edits.editing(root, path))
+            && (!deleted || dirty);
         let mut tabs = div()
             .id("file-tabs")
             .flex()
@@ -2613,10 +2002,19 @@ impl Pokarak {
                         file_icons::file_button(
                             ("tab", i),
                             tab,
-                            tab.file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string(),
+                            format!(
+                                "{}{}",
+                                if self
+                                    .current
+                                    .as_ref()
+                                    .is_some_and(|root| self.code_edits.dirty(root, tab))
+                                {
+                                    "● "
+                                } else {
+                                    ""
+                                },
+                                tab.file_name().unwrap_or_default().to_string_lossy()
+                            ),
                             cx,
                         )
                         .ghost()
@@ -2659,6 +2057,7 @@ impl Pokarak {
                     .text_size(ui_text(11.))
                     .child(path.to_string_lossy().to_string()),
             )
+            .child(self.code_analysis_control(cx))
             .child(
                 Button::new("diff")
                     .label("변경")
@@ -2718,7 +2117,7 @@ impl Pokarak {
                         .label("사용처")
                         .ghost()
                         .small()
-                        .disabled(!code || deleted || self.navigating)
+                        .disabled(!code || deleted || dirty || self.navigating)
                         .tooltip("선택한 심볼의 사용처  ⌥F7")
                         .on_click(cx.listener(|this, _, w, cx| {
                             this.request_navigation(NavigationKind::References, None, w, cx)
@@ -2731,13 +2130,13 @@ impl Pokarak {
                         .label("구현체")
                         .ghost()
                         .small()
-                        .disabled(!code || deleted || self.navigating)
+                        .disabled(!code || deleted || dirty || self.navigating)
                         .on_click(cx.listener(|this, _, w, cx| {
                             this.request_navigation(NavigationKind::Implementation, None, w, cx)
                         })),
                 )
             });
-        let content = if diff.map(|d| d.binary).unwrap_or(false) {
+        let content = if diff.map(|d| d.binary).unwrap_or(false) && !dirty {
             div()
                 .p_6()
                 .text_color(palette.rgb(MUTED))
@@ -2751,7 +2150,7 @@ impl Pokarak {
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseUpEvent, window, cx| {
-                            if event.modifiers.platform && !deleted {
+                            if event.modifiers.platform && !deleted && !dirty {
                                 this.request_clicked_definition(
                                     &clicked_editor,
                                     event.position,
@@ -2763,7 +2162,7 @@ impl Pokarak {
                     )
                     .child(
                         Editor::new(&editor)
-                            .readonly(true)
+                            .readonly(!editing)
                             .bordered(false)
                             .h(relative(1.)),
                     )
@@ -2893,7 +2292,9 @@ impl Pokarak {
             .overflow_hidden()
             .child(tabs)
             .child(head)
-            .when(deleted && code, |d| {
+            .when(code, |d| d.child(self.code_edit_controls(path, cx)))
+            .children(self.code_draft_notice(path, cx))
+            .when(deleted && code && !dirty, |d| {
                 d.child(
                     div()
                         .px_3()
@@ -3165,50 +2566,7 @@ impl Render for Pokarak {
                 )
                 .into_any_element()
         } else if let Some(root) = &self.current {
-            let graph = self.git_history.active;
-            let saved = self.session().map(|session| &session.saved);
-            let sidebar = saved.and_then(|s| s.sidebar_width).unwrap_or(210.);
-            let files = saved.and_then(|s| s.code_files_width).unwrap_or(285.);
-            let target = root.clone();
-            let view = cx.weak_entity();
-            // GPUI retains panel sizes by group ID. Start from the saved logical
-            // widths when switching worktrees, modes, or zoom levels.
-            let mut panels = h_resizable(SharedString::from(format!(
-                "workspace-panes:{root:?}:{graph}:{}",
-                self.prefs.display.ui_zoom_percent
-            )))
-            .on_resize(move |state, _, cx| {
-                let sizes = state.read(cx).sizes();
-                let sidebar_width = sizes.first().copied().map(theme::logical_px);
-                let files_width = sizes.get(1).copied().map(theme::logical_px);
-                let _ = view.update(cx, |app, _| {
-                    if let Some(session) = app.sessions.get_mut(&target) {
-                        session.saved.sidebar_width = sidebar_width;
-                        if !graph {
-                            session.saved.code_files_width = files_width;
-                        }
-                    }
-                });
-            })
-            .child(
-                resizable_panel()
-                    .size(ui_px(sidebar))
-                    .size_range(ui_px(160.)..ui_px(420.))
-                    .child(self.render_worktrees(cx)),
-            );
-            if graph {
-                panels = panels.child(resizable_panel().child(self.render_git_graph(window, cx)));
-            } else {
-                panels = panels
-                    .child(
-                        resizable_panel()
-                            .size(ui_px(files))
-                            .size_range(ui_px(200.)..ui_px(600.))
-                            .child(self.render_files(window, cx)),
-                    )
-                    .child(resizable_panel().child(self.render_reader(window, cx)));
-            }
-            panels.into_any_element()
+            self.render_workspace_panes(root, window, cx)
         } else {
             self.render_welcome(cx)
         };
@@ -3216,7 +2574,14 @@ impl Render for Pokarak {
             .opening_path
             .as_ref()
             .or(self.current.as_ref())
-            .map(|p| p.to_string_lossy().to_string())
+            .map(|p| {
+                let path = p.to_string_lossy();
+                if self.opening_path.is_none() && !self.git_history.active {
+                    format!("{path}  ·  HEAD → 현재 파일")
+                } else {
+                    path.to_string()
+                }
+            })
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
         #[cfg(target_os = "macos")]
         let body = self.with_terminal_dock(body, window);
@@ -3225,6 +2590,21 @@ impl Render for Pokarak {
         let root = root.on_action(cx.listener(|app, _: &OpenWorktreeTerminal, window, cx| {
             app.open_worktree_terminal(window, cx)
         }));
+        // Register only available panel actions so native menu entries reflect
+        // the same enabled state as the toolbar (files are a Code-only panel).
+        let root = root.when(
+            self.current.is_some() && self.opening_path.is_none(),
+            |root| {
+                root.on_action(cx.listener(|app, _: &ToggleSidebar, w, cx| {
+                    app.toggle_pane(pane_visibility::Pane::Sidebar, w, cx)
+                }))
+                .when(!self.git_history.active, |root| {
+                    root.on_action(cx.listener(|app, _: &ToggleFiles, w, cx| {
+                        app.toggle_pane(pane_visibility::Pane::Files, w, cx)
+                    }))
+                })
+            },
+        );
         root.key_context(if self.git_history.active { "Pokarak GitGraph" } else { "Pokarak" }).track_focus(&self.focus).size_full().overflow_hidden().v_flex().bg(palette.rgb(BG)).text_color(palette.rgb(TEXT)).text_size(ui_text(13.)).font_family("IBM Plex Sans")
             .capture_key_down(cx.listener(Self::handle_list_key))
             .on_action(cx.listener(|this,_:&SearchGitGraph,w,cx|this.open_graph_search(w,cx)))
@@ -3242,6 +2622,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&NextProject,w,cx|this.cycle_project(true,w,cx)))
             .on_action(cx.listener(|this,_:&PreviousProject,w,cx|this.cycle_project(false,w,cx)))
             .on_action(cx.listener(|this,_:&Refresh,w,cx|this.refresh(w,cx)))
+            .on_action(cx.listener(|this,_:&SaveCodeFile,w,cx|this.save_code_file(false,w,cx)))
             .on_action(cx.listener(|this,_:&Back,w,cx|{if !this.git_history.active {this.navigate_history(true,w,cx)}}))
             .on_action(cx.listener(|this,_:&Forward,w,cx|{if !this.git_history.active {this.navigate_history(false,w,cx)}}))
             .on_action(cx.listener(|this,_:&FindFile,w,cx|this.focus_search(false,w,cx)))
@@ -3251,7 +2632,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}}))
             .child(self.render_toolbar(window, cx))
             .children(self.update_banner(cx))
-            .when(self.opening_path.is_none() && self.current.is_some() && !self.git_history.active,|d|d.child(self.render_comparison(cx)))
+            .children(self.code_drafts_banner(cx))
             .when(self.opening_path.is_none() && self.external_change,|d|d.child(div().h(ui_px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(ui_text(12.))
                 .child("새 변경사항이 있습니다. 읽던 위치를 유지한 채 갱신할 수 있습니다.")
                 .child(Button::new("apply-refresh").label("갱신").ghost().small().on_click(cx.listener(|this,_,w,cx|this.refresh(w,cx))))))

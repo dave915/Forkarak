@@ -1,5 +1,6 @@
 mod assets;
 mod cli;
+mod control;
 mod prefs;
 #[cfg(target_os = "macos")]
 mod terminal;
@@ -10,9 +11,15 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 use std::borrow::Cow;
 fn main() {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "ctl") {
+        let (response, code) = cli::ctl::response(&args[1..]);
+        println!("{response}");
+        std::process::exit(code);
+    }
     if std::env::args_os().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Forkarak — a native macOS Git client\nBrowse commit graphs across worktrees, compare changes, and stage individual lines or hunks.\n\nUsage: forkarak [--window-size WIDTHxHEIGHT] [--session-dir DIR] [--] [PROJECT ...]"
+            "Forkarak — a native macOS Git client\nBrowse commit graphs across worktrees, compare changes, and stage individual lines or hunks.\n\nUsage: forkarak [--window-size WIDTHxHEIGHT] [--session-dir DIR] [--] [PROJECT ...]\n       forkarak ctl help    (headless JSON control / agent instructions)"
         );
         return;
     }

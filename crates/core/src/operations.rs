@@ -1,14 +1,16 @@
-//! Explicit, user-requested Git writes. Inspection APIs never call this module.
+//! Explicit, user-requested Git and file writes. Inspection APIs never call this module.
 //!
 //! Commands are argv-only, scoped to a canonical worktree, noninteractive, and
 //! bounded by a deadline and output limits. Credentials/SSH configuration are
-//! inherited. Explicit writes honor configured Git hooks; submodule operations
+//! inherited. Explicit Git writes honor configured Git hooks; submodule operations
 //! are not recursive.
 pub mod commit_actions;
+mod file_save;
 pub mod history_actions;
 pub mod integration;
 pub mod workflow;
 pub mod worktrees;
+pub use file_save::save_file;
 
 use anyhow::{Context, Result, bail, ensure};
 use std::{

@@ -80,10 +80,9 @@ impl Pokarak {
                     .gap_2()
                     .child(close_button())
                     .child(
-                        Button::new("integration-review")
+                        theme::action_button("integration-review", empty)
                             .label("대상 확인…")
                             .primary()
-                            .disabled(empty)
                             .on_click(move |_, w, cx| {
                                 let Some(item) = selected
                                     .read(cx)
@@ -126,7 +125,7 @@ impl Pokarak {
                 .child(description).child(note("충돌이 생기면 ‘Stash / 충돌 해결’에서 해결한 뒤 계속하거나 중단할 수 있습니다."));
             let root=target.current.root.clone();
             dialog.title(format!("{label} 확인")).width(ui_px(620.)).child(body)
-                .footer(div().flex().justify_end().gap_2().child(close_button()).child(Button::new("integration-confirm").label(format!("{label} 실행")).primary().on_click(move |_,w,cx|{
+                .footer(div().flex().justify_end().gap_2().child(close_button()).child(theme::action_button("integration-confirm", false).label(format!("{label} 실행")).primary().on_click(move |_,w,cx|{
                     let target=target.clone();
                     let _=weak.update(cx,|app,cx|{w.close_dialog(cx);app.run_git_job(root.clone(),label.into(),move |ops|ops.integrate_branch(kind,&target),w,cx);});
                 })))

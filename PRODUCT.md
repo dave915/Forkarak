@@ -19,9 +19,12 @@ Local Git repositories and multiple worktrees. AI or an external IDE can continu
 ## Capabilities and Constraints
 - Multiple project tabs in one window, per-project worktrees, individual/all-project close, and a recent-project welcome screen.
 - Worktree discovery and switching without checkout or mutation.
-- Separate file tabs, selected file, scroll position, and navigation history per worktree.
-- Working-tree versus HEAD and branch changes versus a chosen base.
-- Changed files, whole-file browsing, syntax highlighting and text search.
+- Separate file tabs, selected file, scroll position, panel visibility, and navigation history per worktree.
+- Multiple native terminal sessions per worktree, with tab selection, individual close/restart, and live-session retention while hidden.
+- Code View compares working files with HEAD; explicit CLI branch comparisons accept a chosen base. Graph View provides commit and branch history.
+- Changed files, collapsible file trees, whole-file browsing, syntax highlighting and text search.
+- Explicit working-file editing and atomic save with external-change checks. Unsaved drafts are isolated per worktree/file and retained outside the inspected repository. Historical files remain read-only.
+- A JSON CLI for AI agents: repository inspection, explicitly confirmed save/stage/commit/merge, and private local GUI navigation. Settings provides copyable Claude and Codex launch commands.
 - Java/Kotlin, JS/TS/JSX/TSX and frontend/configuration file viewing.
 - Cmd-click definitions and explicit references action through language servers. Semantic results and text candidates must be distinguished.
 - File and diff viewing must work without a language server or project indexing.

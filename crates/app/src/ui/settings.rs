@@ -159,9 +159,12 @@ impl Pokarak {
             });
             dialog
                 .title("설정")
-                .width(ui_px(445.).min(window.viewport_size().width - ui_px(24.)))
+                .width(ui_px(630.).min(window.viewport_size().width - ui_px(24.)))
                 .child(
                     div()
+                        .id("settings-scroll")
+                        .max_h(window.viewport_size().height - ui_px(200.))
+                        .overflow_y_scroll()
                         .v_flex()
                         .gap_3()
                         .child(
@@ -195,6 +198,7 @@ impl Pokarak {
                                 .children(preview),
                         )
                         .children(weak.read_with(cx, |app, cx| app.update_settings(weak.clone(), cx)).ok())
+                        .children(weak.read_with(cx, |app, cx| app.ai_cli_settings(cx)).ok())
                 )
                 .footer(
                             div()
@@ -219,5 +223,103 @@ impl Pokarak {
                                 ),
                 )
         });
+    }
+}
+
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+fn agent_prompt(repo: &Path, agent: &str) -> String {
+    format!(
+        "Use Forkarak CLI for this worktree: {}. First run forkarak ctl instructions --agent {agent}, then forkarak ctl status --repo {}. Read the JSON instructions and follow them. All ctl responses are JSON; verify ok and the canonical repo. Use read-only inspection first. File edits, staging, commits and merges require my explicit request and --yes. Save only with exact expected content. Do not force, discard, reset, stash, checkout, start builds or language servers implicitly.",
+        repo.display(),
+        shell_quote(&repo.to_string_lossy())
+    )
+}
+
+fn copy_command(id: &'static str, label: &'static str, command: String, palette: &Palette) -> Div {
+    let copy = command.clone();
+    div()
+        .v_flex()
+        .gap_1()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().flex_1().font_weight(FontWeight::MEDIUM).child(label))
+                .child(
+                    Button::new(id)
+                        .label("복사")
+                        .small()
+                        .ghost()
+                        .accessibility_label(format!("{label} 복사"))
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .text_size(ui_text(11.))
+                .text_color(palette.rgb(MUTED))
+                .font_family("JetBrains Mono")
+                .child(command),
+        )
+}
+
+impl Pokarak {
+    fn ai_cli_settings(&self, cx: &App) -> Div {
+        let palette = Palette::new(cx);
+        let repo = self
+            .current
+            .as_deref()
+            .unwrap_or_else(|| Path::new("/absolute/worktree"));
+        let quoted = shell_quote(&repo.to_string_lossy());
+        let claude = agent_prompt(repo, "claude");
+        let codex = agent_prompt(repo, "codex");
+        let mut section = div().v_flex().gap_2().pt_3().border_t_1().border_color(palette.rgb(LINE))
+            .child(div().font_weight(FontWeight::SEMIBOLD).child("Claude · Codex CLI"))
+            .child(div().text_size(ui_text(12.)).text_color(palette.rgb(MUTED)).child("터미널에서 실행하세요. 각 명령은 선택한 워크트리를 명시하며 ctl 응답은 JSON입니다. 프롬프트는 AI 대화에 붙여 넣을 수 있습니다."))
+            .child(copy_command("ai-cli-claude","Claude 시작",format!("claude {}",shell_quote(&claude)),&palette))
+            .child(copy_command("ai-cli-codex","Codex 시작",format!("codex {}",shell_quote(&codex)),&palette))
+            .child(copy_command("ai-cli-prompt","AI에게 보낼 프롬프트",agent_prompt(repo,"codex"),&palette))
+            .child(copy_command("ai-cli-status","상태 확인",format!("forkarak ctl status --repo {quoted}"),&palette))
+            .child(copy_command("ai-cli-diff","변경 파일 확인",format!("forkarak ctl files --repo {quoted} --changed"),&palette))
+            .child(copy_command("ai-cli-guide","전체 명령 · 사용 지침","forkarak ctl instructions".into(),&palette));
+        if let Some(server) = &self.cli_control {
+            section = section.child(copy_command(
+                "ai-cli-gui",
+                "현재 창 제어",
+                format!(
+                    "forkarak ctl gui status --session {}",
+                    shell_quote(&server.socket.to_string_lossy())
+                ),
+                &palette,
+            ));
+        }
+        section
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::{agent_prompt, shell_quote};
+    use std::path::Path;
+    #[::core::prelude::v1::test]
+    fn launcher_quotes_spaces_apostrophes_and_substitutions() {
+        assert_eq!(shell_quote("a'b $c `d`"), "'a'\\''b $c `d`'");
+        let prompt = agent_prompt(Path::new("/tmp/a'b $(whoami)"), "claude");
+        assert!(prompt.contains("forkarak ctl instructions --agent claude"));
+        assert!(prompt.contains("--yes"));
+        // Verify the launch argument round-trips through a real shell without evaluation.
+        let command = format!("printf '%s' {}", shell_quote(&prompt));
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", &command])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), prompt);
     }
 }

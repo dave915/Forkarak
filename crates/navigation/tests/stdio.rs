@@ -808,6 +808,161 @@ fn cancellation_before_first_request_prevents_server_start() {
 
 #[cfg(unix)]
 #[test]
+fn java_gui_discovery_starts_only_on_navigation_and_preserves_user_argv() {
+    const CHILD: &str = "POKARAK_TEST_JAVA_GUI_LAUNCHER";
+    const TEST: &str = "java_gui_discovery_starts_only_on_navigation_and_preserves_user_argv";
+    if let Some(launcher) = std::env::var_os(CHILD) {
+        // Run in a separate process so PATH/HOME changes cannot race other tests.
+        let root = PathBuf::from(std::env::var_os("POKARAK_TEST_JAVA_GUI_ROOT").unwrap());
+        let configs = default_configs();
+        let java = configs.iter().find(|c| c.language == "java").unwrap();
+        assert_eq!(Path::new(&java.program), Path::new(&launcher));
+        assert_eq!(
+            java.args,
+            [
+                "-data",
+                "{workspace}",
+                "-configuration",
+                "{workspace}/configuration"
+            ]
+        );
+        let args = ["normal", "argument with spaces #한", "literal-$HOME-;"];
+        let config_file = root.parent().unwrap().join("language-servers.json");
+        fs::write(
+            &config_file,
+            serde_json::to_vec(&serde_json::json!({
+                "servers": [{"language":"java", "program":"jdtls", "args":args}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let options = NavigatorOptions {
+            config_file: Some(config_file),
+            initialize_timeout: Duration::from_secs(3),
+            request_timeout: Duration::from_secs(3),
+            shutdown_timeout: Duration::from_millis(100),
+            ..Default::default()
+        };
+        let mut cancelled = Navigator::with_options(root.clone(), configs.clone(), options.clone());
+        assert!(!root.join("mock.pid").exists());
+        cancelled.cancellation_handle().cancel().unwrap();
+        assert!(
+            cancelled
+                .navigate(Path::new("Main.java"), 0, 6, Definition)
+                .unwrap_err()
+                .to_string()
+                .contains("cancelled")
+        );
+        assert!(!root.join("mock.pid").exists());
+        let mut nav = Navigator::with_options(root.clone(), configs, options);
+        assert!(!root.join("mock.pid").exists());
+        assert!(
+            nav.navigate(Path::new("Main.java"), 0, 6, Definition)
+                .unwrap()
+                .semantic
+        );
+        nav.shutdown();
+        let launched: Vec<String> =
+            serde_json::from_str(&fs::read_to_string(root.join("launch.json")).unwrap()).unwrap();
+        assert_eq!(Path::new(&launched[0]), Path::new(&launcher));
+        assert_eq!(&launched[1..4], &args);
+        assert_eq!(launched[4], "-data");
+        assert!(!Path::new(&launched[5]).starts_with(&root));
+        assert_process_gone(&root.join("mock.pid"));
+        return;
+    }
+
+    for location in ["brew", "home", "JDTLS_HOME", "JDTLS_DIR"] {
+        let f = Fixture::new();
+        fs::write(f.root.join("Main.java"), "class Main {}\n").unwrap();
+        fs::write(f.root.join("pom.xml"), "<project/>\n").unwrap();
+        let home = f._temp.path().join("isolated home");
+        let brew = f._temp.path().join("isolated brew");
+        let dist = f._temp.path().join("user JDT LS #한");
+        let launcher = match location {
+            "brew" => brew.join("opt/jdtls/bin/jdtls"),
+            "home" => home.join(".local/share/jdtls/bin/jdtls"),
+            _ => dist.join("bin/jdtls"),
+        };
+        fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_pokarak-mock-lsp"), &launcher).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, &launcher)
+            .env("POKARAK_TEST_JAVA_GUI_ROOT", &f.root)
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", &home)
+            .env("HOMEBREW_PREFIX", &brew)
+            .env_remove("JDTLS_HOME")
+            .env_remove("JDTLS_DIR");
+        if location.starts_with("JDTLS_") {
+            child.env(location, &dist);
+        }
+        let output = child.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{location}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_java_override_is_actionable_before_build_discovery_and_can_be_retried() {
+    let f = Fixture::new();
+    let source = Path::new("Main.java");
+    fs::write(f.root.join(source), "class Main {}\n").unwrap();
+    let launcher = f._temp.path().join("custom Java install/jdtls");
+    let config_file = f._temp.path().join("language-servers.json");
+    fs::write(
+        &config_file,
+        serde_json::to_vec(&serde_json::json!({
+            "servers": [{"language":"java", "program":launcher, "args":["normal"]}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut options = f.options();
+    options.config_file = Some(config_file);
+    // Even a real installed JDT LS must never replace a broken explicit override.
+    let mut nav = Navigator::with_options(f.root.clone(), default_configs(), options);
+    assert!(!f.root.join("mock.pid").exists());
+    let error = nav
+        .navigate(source, 0, 6, Definition)
+        .unwrap_err()
+        .to_string();
+    assert!(error.starts_with("Language server unavailable for java"));
+    assert!(error.contains(launcher.to_str().unwrap()));
+    assert!(error.contains("실행 파일을 찾을 수 없거나 실행 권한이 없습니다"));
+    assert!(error.contains("brew install jdtls"));
+    assert!(error.contains("scripts/setup-language-servers.sh"));
+    assert!(error.contains("~/.config/pokarak/language-servers.json"));
+    assert_eq!(
+        nav.navigate(source, 0, 6, References)
+            .unwrap_err()
+            .to_string(),
+        error
+    );
+    fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_pokarak-mock-lsp"), &launcher).unwrap();
+    assert!(
+        nav.navigate(source, 0, 6, Definition)
+            .unwrap_err()
+            .to_string()
+            .contains("noBuildSystemFound")
+    );
+    assert!(!f.root.join("mock.pid").exists());
+    fs::write(f.root.join("pom.xml"), "<project/>\n").unwrap();
+    assert!(nav.navigate(source, 0, 6, Definition).unwrap().semantic);
+    nav.shutdown();
+    assert_process_gone(&f.root.join("mock.pid"));
+}
+
+#[cfg(unix)]
+#[test]
 fn unavailable_kotlin_honors_override_and_trust_before_project_discovery() {
     use std::os::unix::fs::symlink;
 

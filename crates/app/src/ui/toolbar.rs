@@ -13,7 +13,7 @@ impl Pokarak {
         let compact = width < ui_px(1180.);
         let has_projects = !self.projects.is_empty();
         // Keep the native window controls and settings reachable at high zoom.
-        let two_rows = self.current.is_some() && width < ui_px(860.);
+        let two_rows = self.current.is_some() && width < ui_px(1040.);
         let content = div()
             .absolute()
             .inset_0()
@@ -56,7 +56,8 @@ impl Pokarak {
                     .when(!self.git_history.active, |bar| {
                         bar.child(self.reading_navigation(cx))
                     })
-                    .child(self.workspace_modes(compact, cx));
+                    .child(self.workspace_modes(compact, cx))
+                    .child(self.pane_toggles(cx));
                 #[cfg(target_os = "macos")]
                 let bar =
                     bar.child(
@@ -357,7 +358,7 @@ impl Pokarak {
     }
 }
 
-fn toolbar_icon(id: &'static str, icon: IconName, name: &'static str) -> Button {
+pub(super) fn toolbar_icon(id: &'static str, icon: IconName, name: &'static str) -> Button {
     Button::new(id)
         .icon(icon)
         .accessibility_label(name)

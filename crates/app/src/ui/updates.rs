@@ -182,11 +182,7 @@ impl Pokarak {
             return;
         };
         #[cfg(target_os = "macos")]
-        let terminal = self
-            .sessions
-            .values()
-            .filter_map(|s| s.terminal.as_ref())
-            .any(|dock| dock.read(cx).has_running_shell());
+        let terminal = self.has_live_terminals(cx);
         #[cfg(not(target_os = "macos"))]
         let terminal = false;
         let conflict = self.has_unsaved_conflict(cx);

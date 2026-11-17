@@ -148,10 +148,9 @@ impl Pokarak {
                         }
                         let target = preview.clone();
                         let weak = weak.clone();
-                        Button::new(("partial-row", i))
+                        theme::action_button(("partial-row", i), disabled)
                             .small()
                             .when_some(label, |button, label| button.accessibility_label(label))
-                            .disabled(disabled)
                             .on_click(move |_, _, cx| {
                                 let _ = weak.update(cx, |app, cx| {
                                     if token == app.commit_ui.preview_request {
@@ -165,13 +164,16 @@ impl Pokarak {
                             })
                             .child(div().w_full().child(content))
                             .ghost()
-                            .when(line.kind == DiffKind::Addition, |row| {
-                                row.bg(palette.rgb(patch::ADD_BG))
-                            })
-                            .when(line.kind == DiffKind::Deletion, |row| {
-                                row.bg(palette.rgb(patch::DELETE_BG))
-                            })
+                            .when(
+                                !checked && !disabled && line.kind == DiffKind::Addition,
+                                |row| row.bg(palette.rgb(patch::ADD_BG)),
+                            )
+                            .when(
+                                !checked && !disabled && line.kind == DiffKind::Deletion,
+                                |row| row.bg(palette.rgb(patch::DELETE_BG)),
+                            )
                             .selected(checked)
+                            .when(disabled, |row| row.opacity(0.45))
                             .h(theme::code_row_height(font_size))
                             .min_w_full()
                             .justify_start()

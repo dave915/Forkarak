@@ -167,10 +167,14 @@ impl Navigator {
                 .or_else(|| self.configs.iter().rev().find(|c| c.language == family(language)))
                 .cloned().with_context(|| format!("No language server configured for {language}; semantic navigation is unavailable"))?;
             Client::check_import_permission(&config, &self.options)?;
-            // A missing Kotlin installation should not inspect Maven reactors or start
-            // the /usr/bin/env wrapper on every definition/references click.
+            // Check installation before inspecting Maven reactors or creating any
+            // server workspace. Discovery checks files only and preserves argv.
             if config.language == "kotlin" || is_jetbrains(&config) {
                 config.program = config::kotlin_program(&config)?
+                    .to_string_lossy()
+                    .into_owned();
+            } else if config.language == "java" {
+                config.program = config::java_program(&config)?
                     .to_string_lossy()
                     .into_owned();
             }

@@ -1,4 +1,4 @@
-//! One explicitly opened PTY and Alacritty screen per worktree.
+//! Native PTY and Alacritty screen owned by each explicitly opened terminal tab.
 mod input;
 mod panel;
 mod screen;
@@ -43,6 +43,7 @@ struct Events {
     io: OnceLock<EventLoopSender>,
     wake: Sender<()>,
     exited: AtomicBool,
+    status: Mutex<Option<std::process::ExitStatus>>,
     size: Mutex<WindowSize>,
 }
 #[derive(Clone)]
@@ -54,7 +55,13 @@ impl EventListener for Listener {
             Event::PtyWrite(bytes) => Some(bytes),
             Event::TextAreaSizeRequest(format) => Some(format(*self.0.size.lock().unwrap())),
             Event::ColorRequest(index, format) => Some(format(screen::default_color(index))),
-            Event::ChildExit(_) | Event::Exit => {
+            Event::ChildExit(status) => {
+                *self.0.status.lock().unwrap() = Some(status);
+                self.0.exited.store(true, Ordering::Release);
+                let _ = self.0.wake.try_send(());
+                None
+            }
+            Event::Exit => {
                 self.0.exited.store(true, Ordering::Release);
                 let _ = self.0.wake.try_send(());
                 None
@@ -95,6 +102,7 @@ impl Shell {
             io: OnceLock::new(),
             wake,
             exited: AtomicBool::new(false),
+            status: Mutex::new(None),
             size: Mutex::new(size),
         }));
         let mut env = HashMap::from([
@@ -142,6 +150,9 @@ impl Shell {
     fn exited(&self) -> bool {
         self.listener.0.exited.load(Ordering::Acquire)
     }
+    fn exit_status(&self) -> Option<std::process::ExitStatus> {
+        *self.listener.0.status.lock().unwrap()
+    }
     fn write(&self, bytes: Vec<u8>) {
         if bytes.is_empty() || self.exited() {
             return;
@@ -184,6 +195,63 @@ impl Shell {
         }
     }
 }
+
+/// Also retain closing PTYs: quitting immediately after closing a tab must not
+/// abandon the asynchronous graceful teardown already in progress.
+static CLOSING: OnceLock<Mutex<Vec<Shutdown>>> = OnceLock::new();
+
+#[derive(Clone)]
+pub(crate) struct Shutdown {
+    state: Arc<Events>,
+    master: Arc<std::fs::File>,
+    leader: rustix::process::Pid,
+}
+impl Shutdown {
+    fn for_shell(shell: &Shell) -> Self {
+        Self {
+            state: shell.listener.0.clone(),
+            master: shell.master.clone(),
+            leader: shell.leader,
+        }
+    }
+
+    fn force(&self) {
+        use rustix::{
+            process::{Signal, getsid, kill_process_group},
+            termios::tcgetpgrp,
+        };
+        if self.state.exited.load(Ordering::Acquire) {
+            return;
+        }
+        // GPUI grants quit handlers 200ms. Finish owned foreground jobs before
+        // the UI process exits; never signal a group from another PTY session.
+        if let Ok(group) = tcgetpgrp(&*self.master)
+            && group != self.leader
+            && getsid(Some(group)) == Ok(self.leader)
+        {
+            let _ = kill_process_group(group, Signal::KILL);
+        }
+        if getsid(Some(self.leader)) == Ok(self.leader) {
+            let _ = kill_process_group(self.leader, Signal::KILL);
+        }
+    }
+
+    pub(crate) async fn wait(self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !self.state.exited.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            smol::Timer::after(std::time::Duration::from_millis(10)).await;
+        }
+    }
+}
+
+pub(crate) fn finish_pending_shutdowns() -> Vec<Shutdown> {
+    let pending = std::mem::take(&mut *CLOSING.get_or_init(Default::default).lock().unwrap());
+    for shutdown in &pending {
+        shutdown.force();
+    }
+    pending
+}
+
 impl Drop for Shell {
     fn drop(&mut self) {
         use rustix::{
@@ -193,6 +261,11 @@ impl Drop for Shell {
         use std::{thread, time::Duration};
         if self.exited() {
             return;
+        }
+        {
+            let mut pending = CLOSING.get_or_init(Default::default).lock().unwrap();
+            pending.retain(|shutdown| !shutdown.state.exited.load(Ordering::Acquire));
+            pending.push(Shutdown::for_shell(self));
         }
         let master = self.master.clone();
         let leader = self.leader;
@@ -264,18 +337,26 @@ mod tests {
         }
     }
     fn fixture(root: &Path) -> Shell {
-        let dot = root.join("dotfiles");
+        fixture_named(root, "shell")
+    }
+    fn fixture_named(root: &Path, name: &str) -> Shell {
+        let dot = root.join(format!("dotfiles-{name}"));
         fs::create_dir(&dot).unwrap();
         fs::write(dot.join(".zprofile"), "export FIXTURE_PROFILE=login\n").unwrap();
-        fs::write(dot.join(".zshrc"),"export FIXTURE_RC=interactive\nunsetopt BEEP\nPROMPT=''\nHISTFILE=/dev/null\nprint -r -- $$ > shell.pid\n").unwrap();
+        fs::write(dot.join(".zshrc"),"export FIXTURE_RC=interactive\nunsetopt BEEP\nPROMPT=''\nHISTFILE=/dev/null\nprint -r -- $$ > \"$FIXTURE_PID\"\n").unwrap();
+        let pid_file = root.join(format!("{name}.pid"));
         let env = HashMap::from([
             ("ZDOTDIR".into(), dot.to_string_lossy().into_owned()),
             ("HOME".into(), dot.to_string_lossy().into_owned()),
             ("SESSION_VALUE".into(), "hello 꿀".into()),
+            (
+                "FIXTURE_PID".into(),
+                pid_file.to_string_lossy().into_owned(),
+            ),
         ]);
         let (shell, _rx) = Shell::open(root, env).unwrap();
         wait_for("zsh should load its interactive startup", || {
-            root.join("shell.pid").is_file()
+            pid_file.is_file()
         });
         shell
     }
@@ -397,5 +478,109 @@ os.write(1,b'\x1b[?2004l\x1b[?1l\x1b[?1049l')
         wait_for("closed worktree must release its PTY process group", || {
             !running(&shell_pid) && !running(&job_pid)
         });
+    }
+
+    #[test]
+    fn multiple_tabs_share_root_but_close_only_their_owned_shell_and_job() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let first = fixture_named(&root, "first");
+        let second = fixture_named(&root, "second");
+        let other_root = root.join("other worktree");
+        fs::create_dir(&other_root).unwrap();
+        let other = fixture_named(&other_root, "other");
+        second.write(
+            b"/bin/sh -c 'trap \"\" HUP TERM; echo $$ > job.pid; exec /bin/sleep 45'\r".to_vec(),
+        );
+        wait_for("second tab foreground job", || {
+            root.join("job.pid").is_file()
+        });
+        let first_pid = fs::read_to_string(root.join("first.pid")).unwrap();
+        let second_pid = fs::read_to_string(root.join("second.pid")).unwrap();
+        let job_pid = fs::read_to_string(root.join("job.pid")).unwrap();
+        let other_pid = fs::read_to_string(other_root.join("other.pid")).unwrap();
+        drop(second);
+        wait_for(
+            "only the closed tab's shell and foreground group exit",
+            || !running(&second_pid) && !running(&job_pid),
+        );
+        assert!(running(&first_pid) && running(&other_pid));
+        first.write(b"print FIRST_STILL_ALIVE > first.out\r".to_vec());
+        other.write(b"print OTHER_STILL_ALIVE > other.out\r".to_vec());
+        wait_for("remaining tabs accept independent input", || {
+            root.join("first.out").is_file() && other_root.join("other.out").is_file()
+        });
+        assert_eq!(
+            fs::read_to_string(root.join("first.out")).unwrap().trim(),
+            "FIRST_STILL_ALIVE"
+        );
+        assert_eq!(
+            fs::read_to_string(other_root.join("other.out"))
+                .unwrap()
+                .trim(),
+            "OTHER_STILL_ALIVE"
+        );
+        drop((first, other));
+        wait_for("project close releases every remaining shell", || {
+            !running(&first_pid) && !running(&other_pid)
+        });
+    }
+
+    #[test]
+    fn exit_status_is_retained_and_restart_uses_a_fresh_process() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let old = fixture_named(&root, "old");
+        let old_pid = fs::read_to_string(root.join("old.pid")).unwrap();
+        old.write(b"exit 37\r".to_vec());
+        wait_for("nonzero exit status should reach inactive tab", || {
+            old.exit_status().is_some()
+        });
+        assert_eq!(old.exit_status().unwrap().code(), Some(37));
+        assert!(old.exited());
+        assert!(!running(&old_pid));
+        let new = fixture_named(&root, "restarted");
+        assert!(!new.exited());
+        assert!(new.exit_status().is_none());
+        let new_pid = fs::read_to_string(root.join("restarted.pid")).unwrap();
+        assert_ne!(old_pid, new_pid);
+        drop(old);
+        assert!(running(&new_pid));
+        drop(new);
+        wait_for("fresh shell is independently owned", || !running(&new_pid));
+    }
+
+    #[test]
+    fn quit_finishes_already_closing_tabs_and_all_foreground_groups() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let shells = [fixture_named(&root, "one"), fixture_named(&root, "two")];
+        for (i, shell) in shells.iter().enumerate() {
+            shell.write(
+                format!(
+                    "/bin/sh -c 'trap \"\" HUP TERM; echo $$ > job-{i}.pid; exec /bin/sleep 45'\r"
+                )
+                .into_bytes(),
+            );
+        }
+        wait_for("foreground jobs in both tabs", || {
+            root.join("job-0.pid").is_file() && root.join("job-1.pid").is_file()
+        });
+        let pids = ["one.pid", "two.pid", "job-0.pid", "job-1.pid"]
+            .map(|name| fs::read_to_string(root.join(name)).unwrap());
+        let shutdowns = shells
+            .iter()
+            .map(super::Shutdown::for_shell)
+            .collect::<Vec<_>>();
+        drop(shells);
+        // Exercise the same force step used at app quit, without touching other
+        // tests' PTYs in the process-wide pending list.
+        for shutdown in shutdowns {
+            shutdown.force();
+        }
+        wait_for(
+            "quit must reap every owned shell and foreground job",
+            || pids.iter().all(|pid| !running(pid)),
+        );
     }
 }

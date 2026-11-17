@@ -38,10 +38,40 @@ Apple Silicon Mac(M1 이상), macOS 13 이상에서 터미널에 다음 명령�
 
 왼쪽 목록에서 워크트리를 만들고 전환하세요. 상단의 **터미널**(`>_`) 버튼을 누르면 앱 하단에 해당 워크트리의 로그인 zsh가 열립니다. 평소 zsh에 설정한 PATH와 환경 변수로 `codex` 등 설치해 둔 AI CLI를 실행하세요. 버튼을 다시 눌러 패널을 숨겼다가 열어도 셸 세션이 이어집니다.
 
+현재 소스 빌드에서는 터미널의 **+**로 여러 세션을 만들고 탭으로 전환할 수 있습니다. 탭의 **×**는 해당 세션만 종료하며, 패널을 숨기면 모든 세션이 유지됩니다. 터미널에 포커스가 있을 때 **⌘⌥T**로 추가, **⌘⇧[ / ]**로 전환, **⌘⌥W**로 선택한 세션을 닫습니다.
+
 ![커밋 그래프 아래의 내장 터미널에서 Codex CLI 버전을 확인하는 화면](docs/images/terminal-panel.png)
 
 ### 스테이징과 브랜치 작업
 
 **Stage / 커밋**에서 파일 전체, 변경 블록 또는 개별 줄을 골라 커밋하세요. 상단 툴바에서 Fetch·Pull·Push와 Stash를 실행하고, 브랜치 메뉴에서 Merge·Rebase를 시작할 수 있습니다.
+
+브랜치 이름을 우클릭하면 **Merge 선택 브랜치 → 현재 브랜치**를 실행할 수 있습니다. 그래프의 **브랜치 / 태그** 열을 넓히면 표시되는 배지가 늘어나고, **+N**을 누르면 생략된 참조를 모두 볼 수 있습니다. 펼친 목록에서도 마우스를 올려 그래프를 강조하거나 브랜치를 우클릭할 수 있습니다.
+
+### 파일 트리와 간단한 코드 수정
+
+현재 소스 빌드의 코드 보기에서는 폴더를 접고 펼치고, **편집 → 저장** 또는 **⌘S**로 현재 작업 파일을 수정할 수 있습니다. **저장 + 커밋…**은 저장 후 기존 스테이징 화면을 엽니다. 커밋할 파일이나 줄은 직접 선택하세요. 과거 커밋의 파일은 읽기 전용입니다.
+
+툴바와 **보기** 메뉴에서 사이드바(**⌘⌥B**)와 파일 목록(**⌘⇧B**) 전체를 숨기거나 다시 표시할 수 있습니다. 워크트리마다 표시 여부와 너비를 기억합니다. 코드 보기의 사이드바도 Git 그래프와 같은 워크트리·브랜치·태그·Stash 목록을 사용합니다. 코드 보기의 별도 ‘미커밋 / 브랜치 변경’ 전환은 제거하고 작업 파일과 HEAD를 비교합니다.
+
+미저장 초안은 워크트리·파일별로 저장소 밖에 보관됩니다. 외부 편집으로 디스크 내용이 달라지면 저장을 거부하고 초안을 유지합니다.
+
+### Claude·Codex에서 CLI 사용하기
+
+현재 소스 빌드의 **설정 → Claude · Codex CLI**에서 Claude 또는 Codex 실행 명령과 안내 프롬프트를 복사할 수 있습니다. `ctl` 명령은 앱 창을 열지 않고 JSON을 출력합니다.
+
+```sh
+forkarak ctl status --repo .
+forkarak ctl files --repo . --changed
+forkarak ctl read --repo . --path src/main.rs
+forkarak ctl instructions --agent codex
+forkarak ctl stage --repo . --path src/main.rs --yes
+forkarak ctl commit --repo . --message "Update example" --yes
+forkarak ctl merge --repo . --branch feature/example --yes
+```
+
+저장·스테이징·커밋·머지는 명시적인 `--yes`가 필요합니다. 파일 저장에는 원본과 수정본을 각각 `--expected-file`과 `--content-file`로 전달합니다. 커밋은 이미 스테이징한 변경만 사용합니다.
+
+`forkarak ctl sessions`로 실행 중인 앱의 소켓을 찾고, `forkarak ctl gui status --session SOCKET`으로 상태를 확인할 수 있습니다. GUI의 프로젝트·워크트리·파일·뷰 이동과 새로고침도 제어할 수 있습니다. 전체 명령은 `forkarak ctl --help`를 참고하세요.
 
 [설치 옵션](docs/distribution.md) · [코드 탐색 설정](docs/language-analysis.md) · [MIT 라이선스](LICENSE)

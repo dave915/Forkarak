@@ -177,7 +177,7 @@ fn kotlin_directories(
     dirs
 }
 
-fn find_kotlin(names: &[&str], search_path: &OsStr, extra: &[PathBuf]) -> Option<PathBuf> {
+fn find_launchers(names: &[&str], search_path: &OsStr, extra: &[PathBuf]) -> Option<PathBuf> {
     names
         .iter()
         .find_map(|name| find_on_path(name, search_path))
@@ -190,7 +190,7 @@ fn find_kotlin(names: &[&str], search_path: &OsStr, extra: &[PathBuf]) -> Option
         })
 }
 
-fn installed_kotlin(names: &[&str]) -> Option<PathBuf> {
+fn homebrew_prefixes() -> Vec<PathBuf> {
     let mut brew: Vec<PathBuf> = env::var_os("HOMEBREW_PREFIX")
         .map(PathBuf::from)
         .into_iter()
@@ -203,13 +203,76 @@ fn installed_kotlin(names: &[&str]) -> Option<PathBuf> {
         };
         brew.extend(defaults.map(PathBuf::from));
     }
+    brew
+}
+
+fn installed_kotlin(names: &[&str]) -> Option<PathBuf> {
     let home = env::var_os("HOME").map(PathBuf::from);
     let distribution = env::var_os("KOTLIN_LSP_DIR").map(PathBuf::from);
-    find_kotlin(
+    find_launchers(
         names,
         &env::var_os("PATH").unwrap_or_default(),
-        &kotlin_directories(home.as_deref(), distribution.as_deref(), &brew),
+        &kotlin_directories(
+            home.as_deref(),
+            distribution.as_deref(),
+            &homebrew_prefixes(),
+        ),
     )
+}
+
+fn jdtls_directories(
+    home: Option<&Path>,
+    distributions: &[PathBuf],
+    brew_prefixes: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for dist in distributions.iter().filter(|p| p.is_absolute()) {
+        dirs.extend([dist.join("bin"), dist.to_path_buf()]);
+    }
+    if let Some(home) = home.filter(|p| p.is_absolute()) {
+        dirs.push(home.join(".local/bin"));
+        dirs.push(home.join(".local/share/jdtls/bin"));
+        dirs.push(home.join(".local/share/jdtls"));
+    }
+    for prefix in brew_prefixes.iter().filter(|p| p.is_absolute()) {
+        dirs.push(prefix.join("bin"));
+        dirs.push(prefix.join("opt/jdtls/bin"));
+        dirs.push(prefix.join("opt/jdtls/libexec/bin"));
+    }
+    dirs
+}
+
+fn find_java(program: &str, search_path: &OsStr, extra: &[PathBuf]) -> Option<PathBuf> {
+    // Only the default bare launcher gets fallback discovery. An explicit path or
+    // another configured executable must never be replaced by an installed JDT LS.
+    if program == "jdtls" {
+        find_launchers(&["jdtls"], search_path, extra)
+    } else {
+        find_on_path(program, search_path)
+    }
+}
+
+fn installed_java(program: &str) -> Option<PathBuf> {
+    let home = env::var_os("HOME").map(PathBuf::from);
+    let distributions: Vec<_> = ["JDTLS_HOME", "JDTLS_DIR"]
+        .into_iter()
+        .filter_map(env::var_os)
+        .map(PathBuf::from)
+        .collect();
+    find_java(
+        program,
+        &env::var_os("PATH").unwrap_or_default(),
+        &jdtls_directories(home.as_deref(), &distributions, &homebrew_prefixes()),
+    )
+}
+
+pub(crate) fn java_program(config: &ServerConfig) -> Result<PathBuf> {
+    installed_java(&config.program).ok_or_else(|| {
+        anyhow!(
+            "Language server unavailable for java: {} 실행 파일을 찾을 수 없거나 실행 권한이 없습니다.\nJDT LS 설치 명령은 brew install jdtls 입니다. 또는 Forkarak 소스 디렉터리에서 scripts/setup-language-servers.sh를 직접 실행하세요. 직접 설치했다면 ~/.config/pokarak/language-servers.json의 java program에 실행 파일의 절대 경로와 필요한 args를 지정하고 분석을 다시 활성화하세요.",
+            config.program
+        )
+    })
 }
 
 // Preserve a configured program/argv pair. For a managed /usr/bin/env wrapper,
@@ -262,10 +325,10 @@ pub fn default_configs() -> Vec<ServerConfig> {
     .into_iter()
     .map(|(language, program, args)| ServerConfig {
         language: language.into(),
-        program: (if language == "kotlin" {
-            installed_kotlin(&KOTLIN_LAUNCHERS)
-        } else {
-            discover_program(program)
+        program: (match language {
+            "kotlin" => installed_kotlin(&KOTLIN_LAUNCHERS),
+            "java" => installed_java(program),
+            _ => discover_program(program),
         })
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| program.into()),
@@ -396,14 +459,14 @@ mod tests {
         ] {
             put_launcher(&candidate);
             assert_eq!(
-                find_kotlin(&KOTLIN_LAUNCHERS, &gui_path, &dirs),
+                find_launchers(&KOTLIN_LAUNCHERS, &gui_path, &dirs),
                 Some(candidate)
             );
         }
         let path_launcher = tmp.path().join("system/bin/kotlin-lsp.sh");
         put_launcher(&path_launcher);
         assert_eq!(
-            find_kotlin(&KOTLIN_LAUNCHERS, &gui_path, &dirs),
+            find_launchers(&KOTLIN_LAUNCHERS, &gui_path, &dirs),
             Some(path_launcher)
         );
         assert!(
@@ -419,6 +482,136 @@ mod tests {
         fs::write(&unopened, b"not executable").unwrap();
         fs::set_permissions(&unopened, fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(find_on_path(unopened.to_str().unwrap(), &gui_path), None);
+    }
+
+    #[test]
+    fn finds_jdtls_in_gui_install_locations_without_executing_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let dist = tmp.path().join("user distribution #한");
+        let arm_brew = tmp.path().join("arm-brew");
+        let intel_brew = tmp.path().join("intel-brew");
+        let dirs = jdtls_directories(
+            Some(&home),
+            std::slice::from_ref(&dist),
+            &[arm_brew.clone(), intel_brew.clone()],
+        );
+        let gui_path = env::join_paths([tmp.path().join("system/bin")]).unwrap();
+        // Each location is tested alone; the real HOME, PATH and Homebrew installs
+        // are never consulted. A non-program fixture also catches accidental spawn.
+        for candidate in [
+            arm_brew.join("bin/jdtls"),
+            arm_brew.join("opt/jdtls/bin/jdtls"),
+            arm_brew.join("opt/jdtls/libexec/bin/jdtls"),
+            intel_brew.join("bin/jdtls"),
+            intel_brew.join("opt/jdtls/bin/jdtls"),
+            intel_brew.join("opt/jdtls/libexec/bin/jdtls"),
+            home.join(".local/bin/jdtls"),
+            home.join(".local/share/jdtls/bin/jdtls"),
+            home.join(".local/share/jdtls/jdtls"),
+            dist.join("bin/jdtls"),
+            dist.join("jdtls"),
+        ] {
+            fs::create_dir_all(candidate.parent().unwrap()).unwrap();
+            fs::write(&candidate, b"discovery fixture, not a program").unwrap();
+            fs::set_permissions(&candidate, fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(
+                find_java("jdtls", &gui_path, &dirs),
+                Some(candidate.clone())
+            );
+            fs::remove_file(candidate).unwrap();
+            assert_eq!(find_java("jdtls", &gui_path, &dirs), None);
+        }
+    }
+
+    #[test]
+    fn java_discovery_preserves_explicit_programs_and_rejects_unsafe_candidates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("path/bin");
+        let fallback = tmp.path().join("brew/bin");
+        let extra = vec![fallback.clone()];
+        let search_path = env::join_paths([&bin]).unwrap();
+        let installed = fallback.join("jdtls");
+        put_launcher(&installed);
+        let on_path = bin.join("jdtls");
+        put_launcher(&on_path);
+        assert_eq!(find_java("jdtls", &search_path, &extra), Some(on_path));
+
+        let explicit = tmp.path().join("custom install/jdtls");
+        assert_eq!(
+            find_java(explicit.to_str().unwrap(), &search_path, &extra),
+            None
+        );
+        put_launcher(&explicit);
+        assert_eq!(
+            find_java(explicit.to_str().unwrap(), &search_path, &extra),
+            Some(explicit)
+        );
+        // A direct JVM launcher and a custom bare name keep their own identity.
+        let java = bin.join("custom-java");
+        put_launcher(&java);
+        assert_eq!(find_java("custom-java", &search_path, &extra), Some(java));
+        assert_eq!(find_java("missing-custom-java", &search_path, &extra), None);
+        for relative in [
+            "./jdtls",
+            "bin/jdtls",
+            "~/bin/jdtls",
+            "$JDTLS_HOME/bin/jdtls",
+        ] {
+            assert_eq!(find_java(relative, &search_path, &extra), None);
+        }
+
+        assert!(
+            jdtls_directories(Some(Path::new(".")), &["relative".into()], &[".".into()]).is_empty()
+        );
+        assert_eq!(
+            find_java("jdtls", OsStr::new(".:relative:"), &[".".into()]),
+            None
+        );
+        fs::remove_file(&installed).unwrap();
+        let empty_path = OsStr::new("");
+        fs::create_dir(&installed).unwrap();
+        assert_eq!(find_java("jdtls", empty_path, &extra), None);
+        fs::remove_dir(&installed).unwrap();
+        fs::write(&installed, b"not executable").unwrap();
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(find_java("jdtls", empty_path, &extra), None);
+        fs::remove_file(&installed).unwrap();
+        symlink(tmp.path().join("missing-payload"), &installed).unwrap();
+        assert_eq!(find_java("jdtls", empty_path, &extra), None);
+    }
+
+    #[test]
+    fn managed_java_keeps_the_direct_jvm_launcher_and_argv() {
+        let tmp = tempfile::tempdir().unwrap();
+        let java = tmp.path().join("managed JDK/bin/java");
+        put_launcher(&java);
+        let args = vec![
+            "-Declipse.application=org.eclipse.jdt.ls.core.id1",
+            "-jar",
+            "/absolute/JDT LS/launcher.jar",
+            "-data",
+            "{workspace}/data",
+        ];
+        fs::write(
+            tmp.path().join("installed.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 1,
+                "servers": [{"language":"java", "program":java, "args":args}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut configs = vec![ServerConfig {
+            language: "java".into(),
+            program: "jdtls".into(),
+            args: vec!["fallback".into()],
+        }];
+        apply_managed_configs(&mut configs, tmp.path());
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].program, java.to_str().unwrap());
+        assert_eq!(configs[0].args, args);
+        assert_eq!(java_program(&configs[0]).unwrap(), java);
     }
 
     #[test]

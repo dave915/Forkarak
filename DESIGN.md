@@ -18,7 +18,18 @@ Selecting a commit opens its changed files and read-only diff below the graph. T
 
 Code View retains the existing changed files/all files, search and current-file reader, including per-worktree reading positions and language navigation. Settings adjusts interface and code font sizes independently and provides an application-wide zoom. Unified and side-by-side patches keep the language colors of Code View. Background tints and gutter signs identify additions and deletions in both themes. The two sides use their own paths and source snapshots so a rename or a multiline comment can change how the same text is colored. File/text search switches to Code View. Historical editors never invoke current-source language navigation. Project/worktree opens return to the graph and reject old asynchronous history results. Footer: worktree path and loading/analysis status. The worktree sidebar has no explanatory footer caption.
 
+Graph reference badges use the available column width. A +N control opens the full reference list; each entry supports graph hover and branch context actions. Increasing the column width reveals more badges. A branch menu names the source and current destination before the existing merge confirmation.
+
+Code View offers explicit Edit, Save (Cmd-S), and Save + Commit controls in a separate wrapping toolbar. Saving changes only the working file; Save + Commit opens staging after the save. Dirty indicators and retained drafts survive refresh, navigation and restart, and stale disk contents cannot be overwritten silently. Historical previews remain read-only. The file tree has disclosure chevrons and whole-tree controls, with collapse state isolated by worktree. Search reveals matches independently of collapsed folders.
+
+Selected controls and rows use cool blue fills in dark mode. Git dialog controls have raised backgrounds, visible borders, pointer cursors and distinct hover, pressed, focused and disabled states. Settings includes copyable Claude/Codex launch commands and a CLI guide. Agent commands return JSON, require explicit worktree scope, and require --yes for writes; private local GUI commands navigate without granting language-analysis trust.
+
 ## Signature behavior
+
+Graph and Code share the worktree/ref sidebar, including branch context actions. Code uses working files versus HEAD and does not show a separate uncommitted/branch comparison switch. Sidebar and Code file-list visibility are stored per worktree. Persistent toolbar toggles and View menu actions restore hidden panes; Cmd-Option-B toggles the sidebar and Cmd-Shift-B toggles the Code files pane. Below 1040 logical pixels, the toolbar uses a second row to retain every action.
+
+The terminal panel contains multiple tabs per worktree. Adding and selecting tabs never changes another worktree's terminals. Hiding retains every session; closing a tab terminates only its owned shell and foreground process group. Closing the last tab hides the panel. Exited tabs retain their status and offer restart. Update/restart checks include hidden and inactive live sessions.
+
 Each worktree restores its exact reading context. The current comparison and worktree stay visible as the code reader moves through definitions and back. New filesystem data prompts refresh without yanking the current reading position.
 
 ## Empty and multiple projects

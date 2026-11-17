@@ -5,8 +5,10 @@ impl Pokarak {
     pub(in crate::ui) fn leave_git_graph(&mut self) {
         self.leave_inline_commit();
         self.clear_graph_hover();
+        if self.git_history.active {
+            self.git_history.request += 1;
+        }
         self.git_history.active = false;
-        self.git_history.request += 1;
         self.git_history.loading = false;
     }
 
@@ -21,6 +23,8 @@ impl Pokarak {
         if active {
             self.open_git_history(window, cx);
             self.refresh_inline_commit(window, cx);
+        } else {
+            self.load_code_sidebar(cx);
         }
     }
 
@@ -28,13 +32,21 @@ impl Pokarak {
         if self.opening_path.is_some() {
             return;
         }
-        if self.git_history.active {
+        let was_graph = self.git_history.active;
+        if was_graph {
             self.leave_git_graph();
-            if self.snapshot().is_none() {
+        }
+        let needs_snapshot = self
+            .current
+            .as_ref()
+            .and_then(|root| self.sessions.get_mut(root))
+            .is_some_and(Session::prepare_code_snapshot);
+        if needs_snapshot {
+            if !self.loading {
                 self.refresh(window, cx);
-            } else if let Some(path) = self.selected() {
-                self.open_file(path, false, None, window, cx);
             }
+        } else if was_graph && let Some(path) = self.selected() {
+            self.open_file(path, false, None, window, cx);
         }
         cx.notify();
     }

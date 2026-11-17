@@ -1,8 +1,41 @@
+use super::terminal_sessions::TerminalSessions;
 use super::*;
-use crate::terminal::{DockAction, TerminalDock};
+use crate::terminal::DockAction;
 use gpui_kit::component::resizable::v_resizable;
 
 impl Pokarak {
+    pub(super) fn has_live_terminals(&self, cx: &App) -> bool {
+        self.sessions
+            .values()
+            .filter_map(|session| session.terminal.as_ref())
+            .any(|terminals| terminals.read(cx).has_running_shell(cx))
+    }
+
+    pub(super) fn shutdown_terminals(&mut self, cx: &mut App) -> Vec<crate::terminal::Shutdown> {
+        for terminals in self
+            .sessions
+            .values_mut()
+            .filter_map(|session| session.terminal.take())
+        {
+            terminals.update(cx, |terminals, cx| {
+                terminals.shutdown(cx);
+            });
+        }
+        crate::terminal::finish_pending_shutdowns()
+    }
+
+    pub(super) fn close_worktree_terminals(&mut self, root: &Path, cx: &mut App) {
+        if let Some(terminals) = self
+            .sessions
+            .get_mut(root)
+            .and_then(|session| session.terminal.take())
+        {
+            terminals.update(cx, |terminals, cx| {
+                terminals.shutdown(cx);
+            });
+        }
+    }
+
     pub(super) fn open_worktree_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.current.clone().filter(|_| self.opening_path.is_none()) else {
             return;
@@ -17,7 +50,7 @@ impl Pokarak {
             return;
         }
         let terminal = session.terminal.get_or_insert_with(|| {
-            let dock = cx.new(|cx| TerminalDock::new(root.clone(), window, cx));
+            let dock = cx.new(|cx| TerminalSessions::new(root.clone(), window, cx));
             cx.subscribe_in(&dock, window, move |app, _, action, w, cx| {
                 let Some(session) = app.sessions.get_mut(&root) else {
                     return;

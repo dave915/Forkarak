@@ -81,15 +81,13 @@ pub(in crate::ui) fn branch_context_menu(
         let root = root.clone();
         let weak = weak.clone();
         menu.separator().item(
-            PopupMenuItem::new("작업 파일과 비교")
+            PopupMenuItem::new("그래프에서 보기")
                 .disabled(disabled)
                 .on_click(move |_, w, cx| {
                     let _ = weak.update(cx, |app, cx| {
                         if app.current.as_ref() == Some(&root) && !app.loading && !app.git_is_busy()
                         {
-                            app.base_input
-                                .update(cx, |input, cx| input.set_value(reference.clone(), w, cx));
-                            app.compare(true, w, cx);
+                            app.jump_to_graph_reference(&reference, w, cx);
                         }
                     });
                 }),

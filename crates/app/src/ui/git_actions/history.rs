@@ -142,25 +142,6 @@ pub(super) fn error_help(error: &str) -> ErrorHelp {
     let diagnostic = error.split("\nFor authentication failures, configure your existing credential helper or SSH agent in a terminal, then retry.").next().unwrap_or(error);
     let text = diagnostic.to_lowercase();
     let (message, action) = if [
-        "authentication",
-        "permission denied",
-        "could not read username",
-        "terminal prompts disabled",
-        "publickey",
-        "credential",
-        "http 401",
-        "http 403",
-        "returned error: 403",
-        "returned error: 401",
-    ]
-    .iter()
-    .any(|s| text.contains(s))
-    {
-        (
-            "인증에 실패했습니다. 워크트리 터미널에서 Git 인증 또는 SSH 키를 확인한 뒤 작업을 다시 열어 실행하세요.",
-            HelpAction::Terminal,
-        )
-    } else if [
         "diverg",
         "not possible to fast-forward",
         "fast-forward is not possible",
@@ -317,10 +298,12 @@ impl Pokarak {
                         .cloned()
                 })
                 .unwrap_or_else(|| record.clone());
-            let help = current
-                .kind
-                .map(classified_help)
-                .unwrap_or_else(|| error_help(&current.stderr));
+            let help = match current.kind {
+                Some(kind) if kind != pokarak_core::operations::errors::ErrorKind::Other => {
+                    classified_help(kind)
+                }
+                _ => error_help(&current.stderr),
+            };
             let mut buttons = div()
                 .flex()
                 .flex_wrap()
@@ -637,6 +620,28 @@ mod live_tests {
             pokarak_core::operations::errors::guidance(
                 pokarak_core::operations::errors::ErrorKind::FilesystemPermission
             )
+        );
+    }
+}
+
+#[cfg(test)]
+mod classification_tests {
+    use super::{HelpAction, error_help};
+    use pokarak_core::operations::errors::{ErrorKind, guidance};
+    #[test]
+    fn local_paths_and_locks_never_invent_authentication_failures() {
+        assert!(
+            error_help("fatal: cannot read credential-cache/data: No such file or directory")
+                .action
+                == HelpAction::None
+        );
+        assert_eq!(
+            error_help("fatal: Unable to create '.git/index.lock': Permission denied").message,
+            guidance(ErrorKind::FilesystemPermission)
+        );
+        assert_eq!(
+            error_help("fatal: Unable to create '.git/index.lock': File exists").message,
+            guidance(ErrorKind::RepositoryLock)
         );
     }
 }

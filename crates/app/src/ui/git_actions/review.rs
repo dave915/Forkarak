@@ -87,7 +87,9 @@ impl Pokarak {
             for commit in review.commits() {
                 commits = commits.child(div().child(format!("{} · {} · {}", &commit.oid[..8], commit.author, commit.subject)));
             }
-            body = body.child(format!("커밋 {}개", review.commits().len())).child(commits);
+            if !matches!(&review.source, ReviewSource::Comparison(_)) {
+                body = body.child(format!("커밋 {}개", review.commits().len())).child(commits);
+            }
             let mut files = div().id("git-review-files").max_h(ui_px(190.)).overflow_y_scroll().v_flex().gap_1();
             for (index, file) in review.files().iter().enumerate() {
                 let target = weak.clone(); let source = review.clone(); let path = file.path.clone();

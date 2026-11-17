@@ -31,7 +31,7 @@ pub(super) struct CommitUi {
     selected: Option<PathBuf>,
     preview: Option<Entity<EditorState>>,
     side: Option<Side>,
-    partial: Option<Arc<PartialPreview>>,
+    partial: Option<partial::PartialDiff>,
     split: Option<Entity<split_diff::SplitDiff>>,
     marked: std::collections::BTreeSet<usize>,
     messages: HashMap<PathBuf, Entity<EditorState>>,
@@ -239,7 +239,7 @@ impl Pokarak {
         let root = snapshot.root.clone();
         let task = cx.background_spawn(async move {
             match partial_index::preview(&snapshot, &path, side) {
-                Ok(preview) => Ok(preview),
+                Ok(preview) => Ok(partial::PartialDiff::new(&path, preview)),
                 Err(error) => {
                     let patch = if side == Side::Staged {
                         index::diff(&snapshot, &path)
@@ -264,7 +264,7 @@ impl Pokarak {
                     return;
                 }
                 match result {
-                    Ok(preview) => app.commit_ui.partial = Some(Arc::new(preview)),
+                    Ok(preview) => app.commit_ui.partial = Some(preview),
                     Err(text) => {
                         app.commit_ui.preview = Some(patch::editor(text, false, window, cx))
                     }

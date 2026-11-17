@@ -1,5 +1,5 @@
 //! Align both halves of a change on a single virtualized vertical list.
-use super::*;
+use super::{syntax::CodeSyntax, *};
 use gpui_kit::{
     base::ElementExt,
     component::{ActiveTheme, resizable::resize_handle},
@@ -7,15 +7,67 @@ use gpui_kit::{
 use pokarak_core::DiffLine;
 use std::{cell::OnceCell, ops::Deref};
 
-pub(super) struct ReviewDiff {
+/// The two revisions may use different languages (rename) and lexical state.
+#[derive(Default)]
+pub(super) struct DiffSyntax {
+    pub(super) old: CodeSyntax,
+    pub(super) new: CodeSyntax,
+}
+
+impl DiffSyntax {
+    pub(super) fn new(doc: &DiffDocument) -> Self {
+        if doc.binary || doc.truncated {
+            return Self::default();
+        }
+        Self {
+            old: CodeSyntax::new(doc.old_path.as_deref().unwrap_or(&doc.path), &doc.old_text),
+            new: CodeSyntax::new(&doc.path, &doc.new_text),
+        }
+    }
+
+    fn source_line(&self, line: &DiffLine, before: bool) -> Option<(&CodeSyntax, usize)> {
+        let (syntax, number) = if before {
+            (&self.old, line.old_line)
+        } else {
+            (&self.new, line.new_line)
+        };
+        Some((syntax, number?.checked_sub(1)?))
+    }
+
+    pub(super) fn unified_line(&self, line: &DiffLine, cx: &App) -> StyledText {
+        if let Some((syntax, index)) = self.source_line(line, line.new_line.is_none()) {
+            syntax.styled_line(index, &line.text, false, cx)
+        } else {
+            StyledText::new(line.text.clone())
+        }
+    }
+}
+
+pub(super) struct PreparedDiff {
     document: Arc<DiffDocument>,
+    syntax: Arc<DiffSyntax>,
+}
+
+impl PreparedDiff {
+    pub(super) fn new(document: DiffDocument) -> Self {
+        Self {
+            syntax: Arc::new(DiffSyntax::new(&document)),
+            document: Arc::new(document),
+        }
+    }
+}
+
+pub(super) struct ReviewDiff {
+    pub(super) document: Arc<DiffDocument>,
+    pub(super) syntax: Arc<DiffSyntax>,
     split: OnceCell<Entity<SplitDiff>>,
 }
 
-impl From<DiffDocument> for ReviewDiff {
-    fn from(document: DiffDocument) -> Self {
+impl From<PreparedDiff> for ReviewDiff {
+    fn from(prepared: PreparedDiff) -> Self {
         Self {
-            document: Arc::new(document),
+            document: prepared.document,
+            syntax: prepared.syntax,
             split: OnceCell::new(),
         }
     }
@@ -46,7 +98,7 @@ impl ReviewDiff {
                 .into_any_element();
         }
         self.split
-            .get_or_init(|| app.new_split_diff(self.document.clone(), cx))
+            .get_or_init(|| app.new_split_diff(self.document.clone(), self.syntax.clone(), cx))
             .clone()
             .into_any_element()
     }
@@ -101,6 +153,7 @@ fn align(lines: &[DiffLine]) -> Vec<Row> {
 
 pub(super) struct SplitDiff {
     doc: Arc<DiffDocument>,
+    syntax: Arc<DiffSyntax>,
     rows: Arc<[Row]>,
     scroll: UniformListScrollHandle,
     horizontal: f32,
@@ -116,11 +169,12 @@ impl Pokarak {
     pub(super) fn new_split_diff(
         &self,
         doc: Arc<DiffDocument>,
+        syntax: Arc<DiffSyntax>,
         cx: &mut Context<Self>,
     ) -> Entity<SplitDiff> {
         let owner = cx.weak_entity();
         let worktree = self.current.clone();
-        cx.new(|_| SplitDiff::new(doc, owner, worktree))
+        cx.new(|_| SplitDiff::new(doc, syntax, owner, worktree))
     }
 }
 
@@ -151,7 +205,12 @@ fn max_offset(columns: [usize; 2], advance: f32, gutter: f32, width: f32, ratio:
 }
 
 impl SplitDiff {
-    fn new(doc: Arc<DiffDocument>, owner: WeakEntity<Pokarak>, worktree: Option<PathBuf>) -> Self {
+    fn new(
+        doc: Arc<DiffDocument>,
+        syntax: Arc<DiffSyntax>,
+        owner: WeakEntity<Pokarak>,
+        worktree: Option<PathBuf>,
+    ) -> Self {
         let rows = align(&doc.lines).into();
         let mut max_columns = [0; 2];
         let mut last_number = 1;
@@ -181,6 +240,7 @@ impl SplitDiff {
         }
         Self {
             doc,
+            syntax,
             rows,
             scroll: UniformListScrollHandle::new(),
             horizontal: 0.,
@@ -238,14 +298,26 @@ impl SplitDiff {
     }
 }
 
-fn cell(line: Option<&DiffLine>, left: bool, offset: f32, gutter: Pixels, palette: Palette) -> Div {
+fn cell(
+    line: Option<&DiffLine>,
+    before: bool,
+    syntax: &DiffSyntax,
+    offset: f32,
+    gutter: Pixels,
+    palette: Palette,
+    cx: &App,
+) -> Div {
     let (bg, ink) = match line.map(|l| &l.kind) {
         Some(DiffKind::Deletion) => (patch::DELETE_BG, RED),
         Some(DiffKind::Addition) => (patch::ADD_BG, GREEN),
         None => (SIDE, MUTED),
         _ => (BG, TEXT),
     };
-    let number = line.and_then(|l| if left { l.old_line } else { l.new_line });
+    let source = line.and_then(|line| {
+        syntax
+            .source_line(line, before)
+            .map(|(syntax, index)| (line, syntax, index))
+    });
     let sign = match line.map(|l| &l.kind) {
         Some(DiffKind::Deletion) => " −",
         Some(DiffKind::Addition) => " +",
@@ -263,21 +335,25 @@ fn cell(line: Option<&DiffLine>, left: bool, offset: f32, gutter: Pixels, palett
                 .w(gutter)
                 .flex_none()
                 .pr_2()
-                .text_right()
+                .flex()
+                .justify_end()
                 .text_color(palette.rgb(MUTED))
                 .whitespace_nowrap()
-                .child(number.map(|n| format!("{n}{sign}")).unwrap_or_default()),
+                .when_some(source, |gutter, (_, _, index)| {
+                    gutter
+                        .child((index + 1).to_string())
+                        .child(div().text_color(palette.rgb(ink)).child(sign))
+                }),
         )
         .child(
             div().flex_1().min_w_0().overflow_hidden().child(
                 div()
                     .ml(px(-offset))
                     .whitespace_nowrap()
-                    .text_color(palette.rgb(ink))
-                    .child(
-                        line.map(|l| l.text.replace('\t', "    "))
-                            .unwrap_or_default(),
-                    ),
+                    .text_color(palette.rgb(TEXT))
+                    .when_some(source, |body, (line, syntax, index)| {
+                        body.child(syntax.styled_line(index, &line.text, true, cx))
+                    }),
             ),
         )
 }
@@ -287,6 +363,7 @@ impl Render for SplitDiff {
         let palette = Palette::new(cx);
         let rows = self.rows.clone();
         let doc = self.doc.clone();
+        let syntax = self.syntax.clone();
         let font_size = cx.theme().mono_font_size;
         let font_family = cx.theme().mono_font_family.clone();
         let text = cx.text_system();
@@ -364,7 +441,7 @@ impl Render for SplitDiff {
                 }
             }))
             .child(
-                uniform_list("split-diff-lines", rows.len(), move |range, _, _| {
+                uniform_list("split-diff-lines", rows.len(), move |range, _, cx| {
                     range
                         .map(|i| {
                             let row = div()
@@ -387,9 +464,11 @@ impl Render for SplitDiff {
                                         cell(
                                             l.map(|i| &doc.lines[i]),
                                             true,
+                                            &syntax,
                                             offset,
                                             px(gutter),
                                             palette,
+                                            cx,
                                         )
                                         .flex_none()
                                         .w(relative(ratio)),
@@ -398,9 +477,11 @@ impl Render for SplitDiff {
                                         cell(
                                             r.map(|i| &doc.lines[i]),
                                             false,
+                                            &syntax,
                                             offset,
                                             px(gutter),
                                             palette,
+                                            cx,
                                         )
                                         .flex_1(),
                                     ),
@@ -439,6 +520,76 @@ impl Render for SplitDiff {
 #[cfg(test)]
 mod tests {
     use super::{Row, align, max_offset, split_ratio};
+
+    #[test]
+    fn rows_use_their_own_revision_and_original_file_line() {
+        use super::{PreparedDiff, ReviewDiff};
+        use pokarak_core::{CompareMode, diff, snapshot};
+        use std::{fs, process::Command, ptr};
+
+        let repo = tempfile::tempdir().unwrap();
+        let path = repo.path().join("release.ts");
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(repo.path())
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgSign=false",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "--quiet"]);
+        let old = "/* résumé\n1\n2\n3\n4\n5\n*/\nconst n = 10;\nuse(n);\n";
+        let new = old.replace("const n = 10;", "const s = \"새 버전\";\nconst n = 20;");
+        fs::write(&path, old).unwrap();
+        git(&["add", "--", "release.ts"]);
+        git(&["commit", "-qm", "original"]);
+        fs::write(path, &new).unwrap();
+
+        let mode = CompareMode::Uncommitted;
+        let state = snapshot(repo.path(), &mode).unwrap();
+        let review: ReviewDiff =
+            PreparedDiff::new(diff(repo.path(), &state.changes[0], &mode).unwrap()).into();
+        let row = |text: &str| review.lines.iter().find(|line| line.text == text).unwrap();
+        let (syntax, index) = review
+            .syntax
+            .source_line(row("const n = 10;"), true)
+            .unwrap();
+        assert!(ptr::eq(syntax, &review.syntax.old));
+        assert_eq!(old.lines().nth(index), Some("const n = 10;"));
+        assert!(
+            review
+                .syntax
+                .source_line(row("const n = 10;"), false)
+                .is_none()
+        );
+        let (syntax, index) = review
+            .syntax
+            .source_line(row("const n = 20;"), false)
+            .unwrap();
+        assert!(ptr::eq(syntax, &review.syntax.new));
+        assert_eq!(new.lines().nth(index), Some("const n = 20;"));
+        assert!(
+            review
+                .syntax
+                .source_line(row("const n = 20;"), true)
+                .is_none()
+        );
+        let context = row("use(n);");
+        assert_eq!(review.syntax.source_line(context, true).unwrap().1, 8);
+        assert_eq!(review.syntax.source_line(context, false).unwrap().1, 9);
+    }
 
     #[test]
     fn divider_respects_each_pane_at_all_widths() {

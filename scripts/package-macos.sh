@@ -17,11 +17,11 @@ Usage: ./scripts/package-macos.sh [--debug] [--run] [--binary PATH]
 
   (default)      cargo build --release for aarch64-apple-darwin, then package
   --debug        Build the debug profile instead
-  --run          Open dist/Pokarak.app after packaging
+  --run          Open dist/Forkarak.app after packaging
   --binary PATH  Package an existing arm64 executable; skip all Cargo commands
   -h, --help     Show this help
 
-Output: dist/Pokarak.app (dev.pokarak.app, version from Cargo.toml)
+Output: dist/Forkarak.app (dev.pokarak.app, version from Cargo.toml)
 Honors CARGO_TARGET_DIR. Ad-hoc signing by default. Set SIGNING_IDENTITY to a
 Developer ID Application identity for hardened-runtime signing with timestamp.
 USAGE
@@ -48,7 +48,7 @@ done
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Invalid workspace version: $VERSION"
 [[ -z "$BINARY" || "$PROFILE" == release ]] || fail "--debug cannot be combined with --binary"
 PLIST="$ROOT_DIR/assets/macos/Info.plist"
-ICON="$ROOT_DIR/assets/icons/Pokarak.icns"
+ICON="$ROOT_DIR/assets/icons/Forkarak.icns"
 [[ -f "$ICON" ]] || fail "Missing icon; run ./scripts/build-icons.sh"
 /usr/bin/plutil -lint "$PLIST"
 
@@ -74,15 +74,16 @@ ARCHS="$(/usr/bin/lipo -archs "$BINARY")"
 [[ "$ARCHS" == arm64 ]] || fail "Expected an arm64-only executable, found: $ARCHS"
 
 DIST_DIR="$ROOT_DIR/dist"
-APP_PATH="$DIST_DIR/Pokarak.app"
+APP_PATH="$DIST_DIR/Forkarak.app"
 mkdir -p "$DIST_DIR"
 [[ ! -L "$APP_PATH" ]] || fail "Refusing to replace a symlink: $APP_PATH"
 if [[ -e "$APP_PATH" ]]; then
     EXISTING_ID="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$APP_PATH/Contents/Info.plist")"
-    [[ "$EXISTING_ID" == dev.pokarak.app ]] || fail "Destination is not a Pokarak bundle: $APP_PATH"
+    EXISTING_EXECUTABLE="$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$APP_PATH/Contents/Info.plist")"
+    [[ "$EXISTING_ID" == dev.pokarak.app && "$EXISTING_EXECUTABLE" == forkarak ]] || fail "Destination is not a Forkarak bundle: $APP_PATH"
 fi
 
-WORK_DIR="$(mktemp -d "$DIST_DIR/.pokarak-package.XXXXXX")"
+WORK_DIR="$(mktemp -d "$DIST_DIR/.forkarak-package.XXXXXX")"
 cleanup() {
     # Restore the previous bundle if publication was interrupted between moves.
     if [[ -d "$WORK_DIR/previous.app" && ! -e "$APP_PATH" ]]; then
@@ -96,15 +97,15 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-STAGED_APP="$WORK_DIR/Pokarak.app"
+STAGED_APP="$WORK_DIR/Forkarak.app"
 CONTENTS="$STAGED_APP/Contents"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
-/bin/cp "$BINARY" "$CONTENTS/MacOS/pokarak"
-/bin/chmod 755 "$CONTENTS/MacOS/pokarak"
+/bin/cp "$BINARY" "$CONTENTS/MacOS/forkarak"
+/bin/chmod 755 "$CONTENTS/MacOS/forkarak"
 /bin/cp "$PLIST" "$CONTENTS/Info.plist"
 /usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$CONTENTS/Info.plist"
 /usr/bin/plutil -replace CFBundleVersion -string "$VERSION" "$CONTENTS/Info.plist"
-/bin/cp "$ICON" "$CONTENTS/Resources/Pokarak.icns"
+/bin/cp "$ICON" "$CONTENTS/Resources/Forkarak.icns"
 /bin/cp "$ROOT_DIR/assets/icons/spork.svg" "$CONTENTS/Resources/spork.svg"
 /bin/cp "$ROOT_DIR/LICENSE" "$CONTENTS/Resources/LICENSE"
 /usr/bin/ditto "$ROOT_DIR/assets/licenses" "$CONTENTS/Resources/licenses"
@@ -112,7 +113,7 @@ mkdir -p "$CONTENTS/Resources/vscode-icons"
 /bin/cp "$ROOT_DIR/assets/icons/vscode/NOTICE.md" "$ROOT_DIR/assets/icons/vscode/LICENSE.txt" "$CONTENTS/Resources/vscode-icons/"
 /usr/bin/ditto "$ROOT_DIR/assets/fonts" "$CONTENTS/Resources/fonts"
 /bin/cp "$ROOT_DIR/scripts/install.sh" "$ROOT_DIR/scripts/update-handoff.sh" "$CONTENTS/Resources/"
-/bin/cp "$ROOT_DIR/scripts/pokarak-cli.sh" "$CONTENTS/Resources/pokarak-cli.sh"
+/bin/cp "$ROOT_DIR/scripts/forkarak-cli.sh" "$CONTENTS/Resources/forkarak-cli.sh"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
 if [[ -n "${SIGNING_IDENTITY:-}" ]]; then

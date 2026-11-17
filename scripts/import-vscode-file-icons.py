@@ -8,7 +8,7 @@ from zipfile import ZipFile
 ROOT = Path(__file__).resolve().parents[1] / "assets/icons/vscode"
 SHA256 = "0f38ea41a7a9395d79d2ca712b5930009416fa609b9a77f9eb90247125258983"
 
-# Standalone clients do not have VS Code language detection. Preserve Pokarak's
+# Standalone clients do not have VS Code language detection. Preserve Forkarak's
 # build-file conventions and resolve common language-only associations by name.
 NAMES = {
     "cargo.toml": "_f_cargo", "cargo.lock": "_f_cargo",

@@ -7,13 +7,13 @@ if [[ "$(uname -s)" != Darwin ]]; then
     exit 1
 fi
 
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pokarak-icons.XXXXXX")"
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/forkarak-icons.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
-ICONSET="$WORK_DIR/Pokarak.iconset"
+ICONSET="$WORK_DIR/Forkarak.iconset"
 
 /usr/bin/xcrun swift "$ROOT_DIR/scripts/render-icon.swift" \
     "$ROOT_DIR/assets/icons/app-icon.svg" "$ICONSET"
-/usr/bin/iconutil --convert icns --output "$WORK_DIR/Pokarak.icns" "$ICONSET"
-/bin/cp "$WORK_DIR/Pokarak.icns" "$ROOT_DIR/assets/icons/Pokarak.icns"
+/usr/bin/iconutil --convert icns --output "$WORK_DIR/Forkarak.icns" "$ICONSET"
+/bin/cp "$WORK_DIR/Forkarak.icns" "$ROOT_DIR/assets/icons/Forkarak.icns"
 /bin/cp "$ICONSET/icon_512x512@2x.png" "$ROOT_DIR/assets/icons/app-icon-1024.png"
-echo "Generated assets/icons/Pokarak.icns and app-icon-1024.png"
+echo "Generated assets/icons/Forkarak.icns and app-icon-1024.png"

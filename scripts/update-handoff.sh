@@ -3,12 +3,12 @@
 # Publishing is a single macOS rename swap. The old bundle remains available
 # for a second swap until LaunchServices accepts the new bundle.
 bundle_identity() {
-    /usr/bin/stat -f '%d:%i' "$1" "$1/Contents/MacOS/pokarak"
+    /usr/bin/stat -f '%d:%i' "$1" "$1/Contents/MacOS/forkarak"
 }
 
 bundle_users() {
     # lsof returns 1 without output when no process maps the executable.
-    local executable="$1/Contents/MacOS/pokarak" result rc
+    local executable="$1/Contents/MacOS/forkarak" result rc
     [[ -f "$executable" ]] || return 2
     if result="$(/usr/sbin/lsof -nP -t -a -d txt "$executable" 2>&1)"; then
         [[ "$result" =~ ^[[:digit:][:space:]]+$ ]] || return 2
@@ -25,8 +25,8 @@ require_origin() {
     users="$(bundle_users "$APP_PATH")" || fail "Cannot verify which processes are using $APP_PATH"
     case "$users" in
         "$WAIT_PID") ;;
-        *$'\n'*) fail "Quit other Pokarak instances using $APP_PATH, then retry" ;;
-        *) fail "The specified process is not the running Pokarak at $APP_PATH" ;;
+        *$'\n'*) fail "Quit other Forkarak instances using $APP_PATH, then retry" ;;
+        *) fail "The specified process is not the running Forkarak at $APP_PATH" ;;
     esac
 }
 
@@ -57,9 +57,9 @@ ORIGINAL_ID="$3"
 SESSION_DIR="$4"
 WORK_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 APP_DIR="${APP_PATH%/*}"
-LOCK_DIR="$APP_DIR/.pokarak-install.lock"
-STAGED_APP="$WORK_DIR/unpacked/포카락.app"
-[[ "${WORK_DIR%/*}" == "$APP_DIR" && "${WORK_DIR##*/}" == .pokarak-install.?????? &&
+LOCK_DIR="$APP_DIR/.forkarak-install.lock"
+STAGED_APP="$WORK_DIR/unpacked/Forkarak.app"
+[[ "${WORK_DIR%/*}" == "$APP_DIR" && "${WORK_DIR##*/}" == .forkarak-install.?????? &&
     -f "$LOCK_DIR/work-dir" && "$(<"$LOCK_DIR/work-dir")" == "$WORK_DIR" ]] || fail "Invalid update staging directory"
 ACKNOWLEDGED=false
 COMPLETED=false
@@ -82,10 +82,10 @@ finish() {
         if [[ "$(bundle_identity "$STAGED_APP" 2>/dev/null)" == "$ORIGINAL_ID" ]]; then
             if [[ "$(bundle_identity "$APP_PATH" 2>/dev/null)" == "$STAGED_ID" ]] &&
                 users="$(bundle_users "$APP_PATH")" && [[ -z "$users" ]] && swap_bundles "$APP_PATH" "$STAGED_APP"; then
-                echo "Restored the previous Pokarak at $APP_PATH"
+                echo "Restored the previous Forkarak at $APP_PATH"
             else
                 keep_stage=true
-                echo "Restore the previous Pokarak from $STAGED_APP" >&2
+                echo "Restore the previous Forkarak from $STAGED_APP" >&2
             fi
         fi
         if [[ "$(bundle_identity "$APP_PATH" 2>/dev/null)" == "$ORIGINAL_ID" ]] &&
@@ -108,9 +108,9 @@ trap 'exit 141' PIPE
 
 STAGED_ID="$(bundle_identity "$STAGED_APP")"
 /bin/mkdir "$WORK_DIR/swap-a" "$WORK_DIR/swap-b"
-swap_bundles "$WORK_DIR/swap-a" "$WORK_DIR/swap-b" "$APP_PATH" || fail "Cannot safely replace Pokarak at $APP_PATH"
+swap_bundles "$WORK_DIR/swap-a" "$WORK_DIR/swap-b" "$APP_PATH" || fail "Cannot safely replace Forkarak at $APP_PATH"
 umask 077
-LOG_DIR="$HOME/Library/Logs/Pokarak"
+LOG_DIR="$HOME/Library/Logs/Forkarak"
 /bin/mkdir -p "$LOG_DIR" || fail "Cannot create the update log directory"
 LOG="$LOG_DIR/update.log"
 [[ ! -L "$LOG" && ( ! -e "$LOG" || -f "$LOG" ) ]] || fail "Cannot open the update log at $LOG"
@@ -133,16 +133,16 @@ deadline=$((SECONDS + 30))
 while /bin/kill -0 "$WAIT_PID" 2>/dev/null; do
     state="$(/bin/ps -o stat= -p "$WAIT_PID" 2>/dev/null)" || break
     [[ "$state" != *Z* ]] || break
-    (( SECONDS < deadline )) || fail "Timed out waiting for Pokarak to quit. The installed app was preserved."
+    (( SECONDS < deadline )) || fail "Timed out waiting for Forkarak to quit. The installed app was preserved."
     /bin/sleep 0.2
 done
-[[ "$(bundle_identity "$APP_PATH")" == "$ORIGINAL_ID" ]] || fail "The destination changed while waiting for Pokarak to quit"
-users="$(bundle_users "$APP_PATH")" || fail "Cannot verify whether Pokarak has quit"
+[[ "$(bundle_identity "$APP_PATH")" == "$ORIGINAL_ID" ]] || fail "The destination changed while waiting for Forkarak to quit"
+users="$(bundle_users "$APP_PATH")" || fail "Cannot verify whether Forkarak has quit"
 [[ -z "$users" ]] || fail "Another instance opened $APP_PATH. The installed app was preserved."
 [[ "$(bundle_identity "$STAGED_APP")" == "$STAGED_ID" ]] || fail "The staged update changed during restart"
 swap_bundles "$APP_PATH" "$STAGED_APP" || fail "Could not replace $APP_PATH"
 users="$(bundle_users "$STAGED_APP")" || fail "Cannot verify whether another instance opened the previous bundle"
-[[ -z "$users" ]] || fail "Another instance opened the previous Pokarak during replacement"
+[[ -z "$users" ]] || fail "Another instance opened the previous Forkarak during replacement"
 users="$(bundle_users "$APP_PATH")" || fail "Cannot verify whether the updated app is already running"
 if [[ -z "$users" ]]; then
     reopen_app || fail "LaunchServices could not reopen the update"

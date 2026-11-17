@@ -1,12 +1,9 @@
 #!/bin/bash
 # Public release installer. Runs on macOS's system Bash without developer tools.
 set -euo pipefail
-REPOSITORY="dave915/pokarak"
-ASSET="pokarak-macos-arm64.tar.gz"
-APP_NAME="Pokarak.app"
-ARCHIVE_NAME="포카락.app"
-# APFS/HFS+ directory enumeration commonly returns decomposed Korean names.
-ARCHIVE_NAME_NFD="포카락.app"
+REPOSITORY="dave915/Forkarak"
+ASSET="forkarak-macos-arm64.tar.gz"
+APP_NAME="Forkarak.app"
 APP_DIR=""
 BIN_DIR=""
 TAG=""
@@ -36,9 +33,9 @@ Usage: bash install.sh [--version vX.Y.Z] [--app-dir DIRECTORY] [--bin-dir DIREC
        bash install.sh --update-running-app APP_BUNDLE --wait-pid PID --version vX.Y.Z
                        [--relaunch-session-dir ABSOLUTE_DIRECTORY]
 
-Installs the latest public dave915/pokarak release for Apple Silicon macOS 13+.
-Defaults: ~/Applications/Pokarak.app and ~/.local/bin/pokarak.
-Use `pokarak update` to update the same installation. Quit the app first.
+Installs the latest public dave915/Forkarak release for Apple Silicon macOS 13+.
+Defaults: ~/Applications/Forkarak.app and ~/.local/bin/forkarak.
+Use `forkarak update` to update the same installation. Quit the app first.
 No sudo, Rust, Xcode, Homebrew, or GitHub login is needed.
 USAGE
 }
@@ -124,7 +121,7 @@ if [[ -n "$RUNNING_APP" ]]; then
     [[ -z "$SESSION_DIR" || "$SESSION_DIR" == /* ]] || fail "Expected an absolute session directory"
     APP_DIR="$(cd -P -- "${RUNNING_APP%/*}/" && pwd -P)" || fail "Cannot access the app's parent directory"
     APP_PATH="${APP_DIR%/}/${RUNNING_APP##*/}"
-    [[ -d "$APP_PATH" && -w "$APP_DIR" ]] || fail "Move Pokarak into a writable application directory and try again"
+    [[ -d "$APP_PATH" && -w "$APP_DIR" ]] || fail "Move Forkarak into a writable application directory and try again"
     HELPER="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/update-handoff.sh"
     [[ -f "$HELPER" && ! -L "$HELPER" ]] || fail "The installed update helper is missing"
     source "$HELPER"
@@ -139,10 +136,9 @@ else
     APP_DIR="$(cd "$APP_DIR" && pwd -P)"
     BIN_DIR="$(cd "$BIN_DIR" && pwd -P)"
     APP_PATH="$APP_DIR/$APP_NAME"
-    LEGACY_PATH="$APP_DIR/$ARCHIVE_NAME"
-    CLI_PATH="$BIN_DIR/pokarak"
+    CLI_PATH="$BIN_DIR/forkarak"
 fi
-LOCK_DIR="$APP_DIR/.pokarak-install.lock"
+LOCK_DIR="$APP_DIR/.forkarak-install.lock"
 mkdir "$LOCK_DIR" 2>/dev/null || fail "Another install is active, or a stale lock exists at $LOCK_DIR"
 
 cleanup() {
@@ -151,9 +147,6 @@ cleanup() {
         if "$APP_PUBLISHED" && [[ -e "$APP_PATH" ]]; then /bin/rm -rf "$APP_PATH"; fi
         if [[ -d "$WORK_DIR/previous.app" ]]; then
             /bin/mv "$WORK_DIR/previous.app" "$APP_PATH" || { echo "Previous app preserved at $WORK_DIR/previous.app" >&2; return 1; }
-        fi
-        if [[ -d "$WORK_DIR/legacy.app" ]]; then
-            /bin/mv "$WORK_DIR/legacy.app" "$LEGACY_PATH" || { echo "Previous app preserved at $WORK_DIR/legacy.app" >&2; return 1; }
         fi
         if [[ -n "$CLI_BACKUP" && -e "$CLI_BACKUP" ]]; then
             /bin/mv -f "$CLI_BACKUP" "$CLI_PATH" || { echo "Previous CLI preserved at $CLI_BACKUP" >&2; return 1; }
@@ -175,39 +168,34 @@ trap 'exit 141' PIPE
 [[ ! -L "$APP_PATH" ]] || fail "Refusing to replace a symlink: $APP_PATH"
 if [[ -e "$APP_PATH" ]]; then
     [[ -d "$APP_PATH" ]] || fail "Destination is not an app: $APP_PATH"
-    EXISTING_ID="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$APP_PATH/Contents/Info.plist" 2>/dev/null)" || fail "Destination is not a Pokarak bundle"
-    [[ "$EXISTING_ID" == dev.pokarak.app ]] || fail "Destination is not a Pokarak bundle"
+    EXISTING_ID="$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$APP_PATH/Contents/Info.plist" 2>/dev/null)" || fail "Destination is not a Forkarak bundle"
+    EXISTING_EXECUTABLE="$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$APP_PATH/Contents/Info.plist" 2>/dev/null)" || fail "Destination is not a Forkarak bundle"
+    [[ "$EXISTING_ID" == dev.pokarak.app && "$EXISTING_EXECUTABLE" == forkarak ]] || fail "Destination is not a Forkarak bundle"
 fi
-managed_legacy_app() {
-    [[ -d "$LEGACY_PATH" && ! -L "$LEGACY_PATH" ]] &&
-        [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$LEGACY_PATH/Contents/Info.plist" 2>/dev/null)" == dev.pokarak.app ]]
-}
 require_app_closed() {
     # Match the executable's inode even when the caller used a normalized path.
-    if [[ -f "$1/Contents/MacOS/pokarak" ]] && /usr/sbin/lsof -t -a -d txt "$1/Contents/MacOS/pokarak" >/dev/null 2>&1; then
-        fail "Quit Pokarak at $1, then retry the update"
+    if [[ -f "$1/Contents/MacOS/forkarak" ]] && /usr/sbin/lsof -t -a -d txt "$1/Contents/MacOS/forkarak" >/dev/null 2>&1; then
+        fail "Quit Forkarak at $1, then retry the update"
     fi
 }
 if [[ -n "$RUNNING_APP" ]]; then
     [[ ! -L "$APP_PATH/Contents" && ! -L "$APP_PATH/Contents/Info.plist" && ! -L "$APP_PATH/Contents/MacOS" ]] ||
         fail "The installed bundle contains an unexpected symlink"
-    EXECUTABLE="$APP_PATH/Contents/MacOS/pokarak"
-    [[ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$APP_PATH/Contents/Info.plist")" == pokarak &&
-        -f "$EXECUTABLE" && -x "$EXECUTABLE" && ! -L "$EXECUTABLE" ]] || fail "Unexpected installed bundle executable"
+    EXECUTABLE="$APP_PATH/Contents/MacOS/forkarak"
+    [[ -f "$EXECUTABLE" && -x "$EXECUTABLE" && ! -L "$EXECUTABLE" ]] || fail "Unexpected installed bundle executable"
     ORIGINAL_ID="$(bundle_identity "$APP_PATH")"
     require_origin
 else
     [[ ! -L "$CLI_PATH" ]] || fail "Refusing to replace a symlink: $CLI_PATH"
     if [[ -e "$CLI_PATH" ]]; then
-        [[ -f "$CLI_PATH" ]] && /usr/bin/grep -Fq '# Pokarak managed launcher' "$CLI_PATH" || fail "Refusing to replace an unrelated command: $CLI_PATH"
+        [[ -f "$CLI_PATH" ]] && /usr/bin/grep -Fq '# Forkarak managed launcher' "$CLI_PATH" || fail "Refusing to replace an unrelated command: $CLI_PATH"
     fi
     require_app_closed "$APP_PATH"
-    if managed_legacy_app; then require_app_closed "$LEGACY_PATH"; fi
     resolve_tag
 fi
-WORK_DIR="$(mktemp -d "$APP_DIR/.pokarak-install.XXXXXX")"
+WORK_DIR="$(mktemp -d "$APP_DIR/.forkarak-install.XXXXXX")"
 RELEASE_URL="$RELEASES_URL/download/$TAG"
-echo "Downloading Pokarak ${TAG}..."
+echo "Downloading Forkarak ${TAG}..."
 release_request "App archive download" "$RELEASE_URL/$ASSET" --location --output "$WORK_DIR/$ASSET" >/dev/null
 release_request "Checksum download" "$RELEASE_URL/SHA256SUMS" --location --output "$WORK_DIR/SHA256SUMS" >/dev/null
 EXPECTED="$(/usr/bin/awk -v name="$ASSET" '$2 == name { print $1 }' "$WORK_DIR/SHA256SUMS")"
@@ -221,26 +209,26 @@ ACTUAL="$(/usr/bin/shasum -a 256 "$WORK_DIR/$ASSET")"
 /usr/bin/awk 'substr($0,1,1) != "-" && substr($0,1,1) != "d" { exit 1 }' "$WORK_DIR/types" || fail "Archive contains links or special files"
 while IFS= read -r entry; do
     case "$entry" in
-        "$ARCHIVE_NAME"|"$ARCHIVE_NAME/"|"$ARCHIVE_NAME/"*|"$ARCHIVE_NAME_NFD"|"$ARCHIVE_NAME_NFD/"|"$ARCHIVE_NAME_NFD/"*) ;;
+        "$APP_NAME"|"$APP_NAME/"*) ;;
         *) fail "Unexpected archive entry: $entry" ;;
     esac
     case "/${entry%/}/" in *'/../'*|*'/./'*|*'//'*) fail "Unsafe archive entry: $entry" ;; esac
 done < "$WORK_DIR/entries"
 mkdir "$WORK_DIR/unpacked"
 /usr/bin/tar -xzf "$WORK_DIR/$ASSET" -C "$WORK_DIR/unpacked"
-STAGED_APP="$WORK_DIR/unpacked/$ARCHIVE_NAME"
+STAGED_APP="$WORK_DIR/unpacked/$APP_NAME"
 [[ -d "$STAGED_APP" && ! -L "$STAGED_APP" ]] || fail "Release does not contain an app bundle"
 # Our bundles have no symlinks. Refuse any before traversing signed resources.
 [[ -z "$(/usr/bin/find "$STAGED_APP" -type l -print -quit)" ]] || fail "Release bundle contains a symlink"
 PLIST="$STAGED_APP/Contents/Info.plist"
 [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$PLIST")" == dev.pokarak.app ]] || fail "Unexpected bundle identifier"
 [[ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$PLIST")" == "${TAG#v}" ]] || fail "Bundle version does not match release tag"
-[[ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$PLIST")" == pokarak ]] || fail "Unexpected bundle executable"
-[[ -x "$STAGED_APP/Contents/MacOS/pokarak" ]] || fail "Release executable is missing"
+[[ "$(/usr/bin/plutil -extract CFBundleExecutable raw -o - "$PLIST")" == forkarak ]] || fail "Unexpected bundle executable"
+[[ -x "$STAGED_APP/Contents/MacOS/forkarak" ]] || fail "Release executable is missing"
 # lipo is an Xcode/Command Line Tools shim on clean Macs. file ships with macOS
 # and identifies the thin Mach-O executable without invoking developer tools.
-[[ "$(LC_ALL=C /usr/bin/file -b "$STAGED_APP/Contents/MacOS/pokarak")" == 'Mach-O 64-bit executable arm64' ]] || fail "Release executable is not an arm64 Mach-O executable"
-[[ -f "$STAGED_APP/Contents/Resources/pokarak-cli.sh" && -f "$STAGED_APP/Contents/Resources/install.sh" ]] || fail "Release CLI resources are missing"
+[[ "$(LC_ALL=C /usr/bin/file -b "$STAGED_APP/Contents/MacOS/forkarak")" == 'Mach-O 64-bit executable arm64' ]] || fail "Release executable is not an arm64 Mach-O executable"
+[[ -f "$STAGED_APP/Contents/Resources/forkarak-cli.sh" && -f "$STAGED_APP/Contents/Resources/install.sh" ]] || fail "Release CLI resources are missing"
 /usr/bin/codesign --verify --strict "$STAGED_APP" || fail "App signature verification failed"
 
 if [[ -n "$RUNNING_APP" ]]; then
@@ -263,22 +251,18 @@ if [[ -n "$RUNNING_APP" ]]; then
 fi
 
 APP_STAGE="$STAGED_APP"
-CLI_STAGE="$(mktemp "$BIN_DIR/.pokarak-cli.XXXXXX")"
+CLI_STAGE="$(mktemp "$BIN_DIR/.forkarak-cli.XXXXXX")"
 {
-    printf '#!/bin/bash\n# Pokarak managed launcher\n'
-    printf 'POKARAK_APP_PATH=%s\n' "$(shell_quote "$APP_PATH")"
-    printf 'POKARAK_BIN_DIR=%s\n' "$(shell_quote "$BIN_DIR")"
-    /bin/cat "$APP_STAGE/Contents/Resources/pokarak-cli.sh"
+    printf '#!/bin/bash\n# Forkarak managed launcher\n'
+    printf 'FORKARAK_APP_PATH=%s\n' "$(shell_quote "$APP_PATH")"
+    printf 'FORKARAK_BIN_DIR=%s\n' "$(shell_quote "$BIN_DIR")"
+    /bin/cat "$APP_STAGE/Contents/Resources/forkarak-cli.sh"
 } > "$CLI_STAGE"
 /bin/chmod 755 "$CLI_STAGE"
 require_app_closed "$APP_PATH"
-if managed_legacy_app; then
-    require_app_closed "$LEGACY_PATH"
-    /bin/mv "$LEGACY_PATH" "$WORK_DIR/legacy.app"
-fi
 if [[ -e "$APP_PATH" ]]; then /bin/mv "$APP_PATH" "$WORK_DIR/previous.app"; fi
 if [[ -e "$CLI_PATH" ]]; then
-    CLI_BACKUP="$(mktemp "$BIN_DIR/.pokarak-previous.XXXXXX")"
+    CLI_BACKUP="$(mktemp "$BIN_DIR/.forkarak-previous.XXXXXX")"
     /bin/rm "$CLI_BACKUP"
     /bin/mv "$CLI_PATH" "$CLI_BACKUP"
 fi
@@ -286,11 +270,11 @@ fi
 APP_PUBLISHED=true
 /bin/mv -f "$CLI_STAGE" "$CLI_PATH"
 COMMITTED=true
-echo "Installed Pokarak ${TAG#v}: $APP_PATH"
+echo "Installed Forkarak ${TAG#v}: $APP_PATH"
 echo "Command: $CLI_PATH"
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) printf 'Add the command to this shell: export PATH=%s:"$PATH"\n' "$(shell_quote "$BIN_DIR")" ;;
 esac
-echo 'Update after quitting the app: pokarak update'
+echo 'Update after quitting the app: forkarak update'
 echo 'This build may be ad-hoc signed; Apple Developer ID signing and notarization are separate.'

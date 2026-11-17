@@ -132,7 +132,7 @@ do {
     }
     // Existing CFBundleIconFile/package copy already consumes this exact default path.
     let fm = FileManager.default
-    for (source, destination) in [("app/charcoal.icns", "Forkarak.icns"), ("app/charcoal.png", "Forkarak-1024.png")] {
+    for (source, destination) in [("app/charcoal.icns", "Forkarak.icns"), ("app/charcoal.png", "Forkarak-1024.png"), ("app/charcoal.png", "app-icon-1024.png")] {
         let target = icons.appendingPathComponent(destination)
         if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
         try fm.copyItem(at: icons.appendingPathComponent(source), to: target)

@@ -46,6 +46,10 @@ representations after an `iconutil` round trip. Optional QA sheets show actual
 `../Forkarak.icns` is an exact copy of `charcoal.icns` and is already consumed
 by `CFBundleIconFile` and the existing macOS packaging copy.
 `../Forkarak-1024.png` is the corresponding shipped-default preview/export.
+`../app-icon-1024.png` is the same image at the existing README asset path.
+Use this dedicated helper to regenerate application icons; the older
+`scripts/build-icons.sh` still renders the separate legacy SVG and is not part
+of the packaging/CI path.
 
 ## Runtime behavior
 

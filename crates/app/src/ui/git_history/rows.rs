@@ -101,7 +101,23 @@ impl Pokarak {
                 .unwrap_or_default()
         });
         let weak = cx.entity().downgrade();
-        uniform_list("history-commits", entries.len(), move |range, _, _| {
+        let can_prefetch = !self.loading
+            && !self.git_is_busy()
+            && ui.cursor.is_some()
+            && matches!(ui.next_page, NextPage::Idle);
+        let count = entries.len();
+        uniform_list("history-commits", count, move |range, w, cx| {
+            if can_prefetch && near_history_end(&range, count) {
+                let view = weak.clone();
+                let rows = Arc::downgrade(&entries);
+                w.defer(cx, move |_, cx| {
+                    let _ = view.update(cx, |app, cx| {
+                        if rows.ptr_eq(&Arc::downgrade(&app.git_history.entries)) {
+                            app.load_next_history_page(cx);
+                        }
+                    });
+                });
+            }
             range
                 .map(|index| {
                     let entry = &entries[index];
@@ -235,6 +251,17 @@ impl Pokarak {
                 .collect()
         })
         .track_scroll(&ui.scroll)
+        .when(can_prefetch, |list| {
+            list.on_scroll(cx.listener(|app, event: &ScrollEvent, _, cx| {
+                // A tall viewport can fit the whole first page. A downward gesture
+                // there requests one page; simply opening or resizing it never does.
+                if event.delta.pixel_delta(px(1.)).y < px(0.)
+                    && !app.git_history.scroll.is_scrollable()
+                {
+                    app.load_next_history_page(cx);
+                }
+            }))
+        })
         .flex_1()
         .min_h_0()
         .w_full()
@@ -249,4 +276,25 @@ fn metadata_cell(width: f32, text: String, palette: Palette) -> Div {
         .text_color(palette.rgb(MUTED))
         .text_ellipsis()
         .child(text)
+}
+
+// The list can request a measurement row or the whole first viewport without
+// scrolling. Only prefetch once that viewport has moved into the last 12 rows.
+fn near_history_end(visible: &std::ops::Range<usize>, loaded: usize) -> bool {
+    !visible.is_empty() && visible.start > 0 && loaded.saturating_sub(visible.end) <= 12
+}
+
+#[cfg(test)]
+mod tests {
+    use super::near_history_end;
+    #[test]
+    fn prefetch_only_after_the_viewport_moves_near_the_loaded_end() {
+        assert!(!near_history_end(&(0..1), 100));
+        assert!(!near_history_end(&(0..100), 100));
+        assert!(!near_history_end(&(80..80), 90));
+        assert!(!near_history_end(&(77..87), 100));
+        assert!(near_history_end(&(78..88), 100));
+        assert!(near_history_end(&(90..100), 100));
+        assert!(!near_history_end(&(90..100), 200));
+    }
 }

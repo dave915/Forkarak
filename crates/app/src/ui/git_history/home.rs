@@ -89,6 +89,8 @@ impl Pokarak {
         .unwrap_or_else(|| "미커밋 변경".into());
         let status = if self.loading || ui.loading {
             "읽는 중…".into()
+        } else if matches!(ui.next_page, NextPage::Loading) {
+            "다음 커밋을 읽는 중…".into()
         } else if ui.limit_reached {
             format!("{}개 · 표시 한도 도달", ui.entries.len())
         } else {
@@ -144,16 +146,6 @@ impl Pokarak {
                             |app, window, cx| app.refresh(window, cx),
                         )
                         .ghost(),
-                    )
-                    .child(
-                        history_button(
-                            &weak,
-                            "history-more",
-                            "다음 100개",
-                            busy || ui.cursor.is_none(),
-                            |app, window, cx| app.load_history_page(false, window, cx),
-                        )
-                        .ghost(),
                     ),
             )
             .child(
@@ -186,6 +178,46 @@ impl Pokarak {
                     })),
             )
             .child(table)
+            .when_some(
+                match &ui.next_page {
+                    NextPage::Failed(error) => Some(error.clone()),
+                    _ => None,
+                },
+                |view, error| {
+                    view.child(
+                        div()
+                            .flex_none()
+                            .px_3()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .text_ellipsis()
+                                    .text_color(palette.rgb(RED))
+                                    .child(format!("다음 커밋을 읽을 수 없습니다 · {error}")),
+                            )
+                            .child(
+                                history_button(
+                                    &weak,
+                                    "history-page-retry",
+                                    "다시 시도",
+                                    self.loading || self.git_is_busy(),
+                                    |app, _, cx| {
+                                        if matches!(app.git_history.next_page, NextPage::Failed(_))
+                                        {
+                                            app.git_history.next_page = NextPage::Idle;
+                                            app.load_next_history_page(cx);
+                                        }
+                                    },
+                                )
+                                .ghost(),
+                            ),
+                    )
+                },
+            )
             .when_some(ui.error.clone(), |view, error| {
                 view.child(
                     div()

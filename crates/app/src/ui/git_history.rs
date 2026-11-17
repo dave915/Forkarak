@@ -10,8 +10,18 @@ mod rows;
 use super::*;
 use context_actions::commit_context_menu;
 use lanes::{BranchTrace, graph_view, reference_name, track_color};
-use pokarak_core::history::{self, Commit, CommitDetail, GraphRow, HistoryCursor, HistoryEntry};
+use pokarak_core::history::{
+    self, Commit, CommitDetail, GraphRow, HistoryCursor, HistoryEntry, HistoryPage,
+};
 use pokarak_core::operations::history_actions::{HistoryAction, HistoryTarget};
+
+#[derive(Default)]
+enum NextPage {
+    #[default]
+    Idle,
+    Loading,
+    Failed(String),
+}
 
 #[derive(Default)]
 pub(super) struct HistoryUi {
@@ -26,6 +36,7 @@ pub(super) struct HistoryUi {
     hover_lookup: Option<Task<()>>,
     in_neighborhood: bool,
     cursor: Option<HistoryCursor>,
+    next_page: NextPage,
     limit_reached: bool,
     shallow: bool,
     detail: Option<CommitDetail>,
@@ -135,6 +146,7 @@ impl Pokarak {
         self.git_history.in_neighborhood = false;
         self.git_history.nav.catalog = None;
         self.git_history.cursor = None;
+        self.git_history.next_page = NextPage::Idle;
         self.git_history.detail = None;
         self.git_history.selected = None;
         self.git_history.document = None;
@@ -145,32 +157,20 @@ impl Pokarak {
         self.git_history.limit_reached = false;
         self.git_history.shallow = false;
         self.show_history_list(window, cx);
-        self.load_history_page(true, window, cx);
+        self.load_first_history_page(window, cx);
     }
-    fn load_history_page(&mut self, first: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let cursor = self.git_history.cursor.clone();
+
+    fn load_first_history_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let branch = self.graph_branch().map(str::to_owned);
         self.history_read(
             move |root| {
-                if first {
-                    if let Some(name) = &branch
-                        && let Some((page, catalog)) =
-                            history::navigation::open_branch(root, name, 100)?
-                    {
-                        return Ok((page, Some(catalog), None));
-                    }
-                    history::navigation::open(root, 100)
-                        .map(|(page, catalog)| (page, Some(catalog), branch))
-                } else {
-                    history::next_page(
-                        root,
-                        cursor
-                            .as_ref()
-                            .ok_or_else(|| anyhow::anyhow!("No further page"))?,
-                        100,
-                    )
-                    .map(|page| (page, None, None))
+                if let Some(name) = &branch
+                    && let Some((page, catalog)) =
+                        history::navigation::open_branch(root, name, 100)?
+                {
+                    return Ok((page, catalog, None));
                 }
+                history::navigation::open(root, 100).map(|(page, catalog)| (page, catalog, branch))
             },
             move |app, (page, catalog, missing_branch), window, cx| {
                 if let Some(name) = missing_branch {
@@ -180,18 +180,12 @@ impl Pokarak {
                         branch_filter::branch_label(&name)
                     );
                 }
-                if let Some(catalog) = catalog {
-                    app.git_history.nav.catalog = Some(Arc::new(catalog));
-                }
-                Arc::make_mut(&mut app.git_history.entries).extend(page.entries);
-                app.refresh_graph_hover(cx);
-                app.git_history.cursor = page.next;
-                app.git_history.limit_reached = page.limit_reached;
-                app.git_history.shallow = page.shallow;
-                if first && app.graph_fingerprint.is_none() {
+                app.git_history.nav.catalog = Some(Arc::new(catalog));
+                app.append_history_page(page, cx);
+                if app.graph_fingerprint.is_none() {
                     app.check_graph_changes(cx);
                 }
-                if first && !app.inline_commit_active() {
+                if !app.inline_commit_active() {
                     let head = app
                         .active_worktree()
                         .filter(|_| app.graph_branch().is_none())
@@ -212,6 +206,60 @@ impl Pokarak {
             cx,
         );
     }
+    fn append_history_page(&mut self, page: HistoryPage, cx: &mut Context<Self>) {
+        Arc::make_mut(&mut self.git_history.entries).extend(page.entries);
+        self.git_history.cursor = page.next;
+        self.git_history.limit_reached = page.limit_reached;
+        self.git_history.shallow = page.shallow;
+        self.refresh_graph_hover(cx);
+    }
+
+    fn load_next_history_page(&mut self, cx: &mut Context<Self>) {
+        if !self.git_history.active
+            || self.loading
+            || self.git_is_busy()
+            || self.current != self.git_history.root
+            || !matches!(self.git_history.next_page, NextPage::Idle)
+        {
+            return;
+        }
+        let (Some(root), Some(cursor)) = (self.current.clone(), self.git_history.cursor.clone())
+        else {
+            return;
+        };
+        // A detail selection may run concurrently. Bind pagination to these graph
+        // rows instead: scope changes, refreshes and search neighborhoods replace them.
+        let rows = Arc::downgrade(&self.git_history.entries);
+        let generation = self.request;
+        self.git_history.next_page = NextPage::Loading;
+        let worktree = root.clone();
+        let task = cx.background_spawn(async move { history::next_page(&worktree, &cursor, 100) });
+        cx.spawn(async move |view, cx| {
+            let result = task.await;
+            let _ = view.update(cx, |app, cx| {
+                if !rows.ptr_eq(&Arc::downgrade(&app.git_history.entries)) {
+                    return;
+                }
+                app.git_history.next_page = NextPage::Idle;
+                if app.git_history.active
+                    && app.current.as_ref() == Some(&root)
+                    && app.request == generation
+                    && !app.active_worktree_has_git_job()
+                {
+                    match result {
+                        Ok(page) => app.append_history_page(page, cx),
+                        Err(error) => {
+                            app.git_history.next_page = NextPage::Failed(format!("{error:#}"))
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn show_history_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.git_history.active = true;
         self.results_open = false;

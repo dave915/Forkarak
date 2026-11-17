@@ -142,7 +142,7 @@ fn absolute_directory(path: PathBuf) -> Result<PathBuf, String> {
     if path.is_absolute() {
         Ok(path)
     } else {
-        Err("언어 도구 폴더는 절대 경로여야 합니다.".into())
+        Err("언어 지원 저장 폴더는 절대 경로여야 합니다.".into())
     }
 }
 fn bundled_resources() -> Option<PathBuf> {
@@ -244,7 +244,7 @@ impl Pokarak {
         };
         self.language_manager.refresh();
         if let Some(error) = self.language_manager.error.clone() {
-            self.error = Some(format!("언어 도구 상태를 읽지 못했습니다: {error}"));
+            self.error = Some(format!("언어 지원 상태를 읽지 못했습니다: {error}"));
             cx.notify();
             return true;
         }

@@ -92,20 +92,39 @@ impl Pokarak {
                 match result {
                     Ok(snapshot) => {
                         let side = app.commit_ui.side.unwrap_or(Side::Staged);
-                        let files = if side==Side::Staged {&snapshot.staged} else {&snapshot.unstaged};
-                        let selected = app.commit_ui.selected.clone()
+                        let files = if side == Side::Staged {
+                            &snapshot.staged
+                        } else {
+                            &snapshot.unstaged
+                        };
+                        let selected = app
+                            .commit_ui
+                            .selected
+                            .clone()
                             .filter(|path| files.iter().any(|f| &f.path == path))
-                            .map(|path|(path, side))
-                            .or_else(||snapshot.staged.first().map(|f|(f.path.clone(),Side::Staged)))
-                            .or_else(||snapshot.unstaged.first().map(|f|(f.path.clone(),Side::Unstaged)));
+                            .map(|path| (path, side))
+                            .or_else(|| {
+                                snapshot
+                                    .staged
+                                    .first()
+                                    .map(|f| (f.path.clone(), Side::Staged))
+                            })
+                            .or_else(|| {
+                                snapshot
+                                    .unstaged
+                                    .first()
+                                    .map(|f| (f.path.clone(), Side::Unstaged))
+                            });
                         app.commit_ui.snapshot = Some(Arc::new(snapshot));
-                        app.commit_ui.selected=None;
-                        app.commit_ui.side=None;
-                        app.commit_ui.preview=None;
-                        app.commit_ui.partial=None;
-                        app.commit_ui.split=None;
+                        app.commit_ui.selected = None;
+                        app.commit_ui.side = None;
+                        app.commit_ui.preview = None;
+                        app.commit_ui.partial = None;
+                        app.commit_ui.split = None;
                         app.commit_ui.marked.clear();
-                        if let Some((path,side))=selected {app.select_index_preview(path,side,window,cx);}
+                        if let Some((path, side)) = selected {
+                            app.select_index_preview(path, side, window, cx);
+                        }
                     }
                     Err(error) => {
                         app.commit_ui.snapshot = None;
@@ -119,7 +138,13 @@ impl Pokarak {
         cx.notify();
     }
 
-    fn select_index_preview(&mut self, path: PathBuf, side:Side, window: &mut Window, cx: &mut Context<Self>) {
+    fn select_index_preview(
+        &mut self,
+        path: PathBuf,
+        side: Side,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(snapshot) = self.commit_ui.snapshot.clone() else {
             return;
         };
@@ -127,18 +152,27 @@ impl Pokarak {
         let token = self.commit_ui.preview_request;
         let generation = self.commit_ui.request;
         self.commit_ui.selected = Some(path.clone());
-        self.commit_ui.side=Some(side);
-        self.commit_ui.partial=None;
-        self.commit_ui.split=None;
+        self.commit_ui.side = Some(side);
+        self.commit_ui.partial = None;
+        self.commit_ui.split = None;
         self.commit_ui.marked.clear();
         self.commit_ui.preview = None;
         let root = snapshot.root.clone();
         let task = cx.background_spawn(async move {
-            match partial_index::preview(&snapshot,&path,side) {
-                Ok(preview)=>Ok(preview),
-                Err(error)=>{
-                    let patch=if side==Side::Staged {index::diff(&snapshot,&path).ok().map(|doc|doc.patch).unwrap_or_default()} else {String::new()};
-                    Err(format!("부분 선택을 사용할 수 없습니다. {error:#}\n{patch}"))
+            match partial_index::preview(&snapshot, &path, side) {
+                Ok(preview) => Ok(preview),
+                Err(error) => {
+                    let patch = if side == Side::Staged {
+                        index::diff(&snapshot, &path)
+                            .ok()
+                            .map(|doc| doc.patch)
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    Err(format!(
+                        "부분 선택을 사용할 수 없습니다. {error:#}\n{patch}"
+                    ))
                 }
             }
         });
@@ -151,8 +185,10 @@ impl Pokarak {
                     return;
                 }
                 match result {
-                    Ok(preview)=>app.commit_ui.partial=Some(Arc::new(preview)),
-                    Err(text)=>app.commit_ui.preview=Some(commit_editor(&text,true,window,cx)),
+                    Ok(preview) => app.commit_ui.partial = Some(Arc::new(preview)),
+                    Err(text) => {
+                        app.commit_ui.preview = Some(commit_editor(&text, true, window, cx))
+                    }
                 }
                 cx.notify();
             });

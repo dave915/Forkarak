@@ -8,14 +8,14 @@ mod git_workflow;
 mod reader_navigation;
 mod split_diff;
 mod toolbar;
-use split_diff::ReviewDiff;
 use analysis_feedback::AnalysisFeedback;
+use split_diff::ReviewDiff;
 
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
 use crate::theme::{self, Palette, ThemeChoice};
+use git_actions::integration::IntegrationKind;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
-use git_actions::integration::IntegrationKind;
 use gpui_kit::component::{
     Disableable, Icon, Selectable, Sizable, StyledExt, WindowExt,
     button::{Button, ButtonVariants},
@@ -1807,10 +1807,18 @@ impl Pokarak {
                         cx.notify();
                     })),
             )
-            .when(!self.prefs.show_branches,|row|row.child(div().flex_1()).child(
-                Button::new("manage-worktrees").icon(IconName::Settings).small().ghost().tooltip("워크트리 생성·정리").accessibility_label("워크트리 관리")
-                    .disabled(self.git_is_busy() || self.loading).on_click(cx.listener(|app,_,w,cx|app.open_worktree_manager(w,cx)))
-            ))
+            .when(!self.prefs.show_branches, |row| {
+                row.child(div().flex_1()).child(
+                    Button::new("manage-worktrees")
+                        .icon(IconName::Settings)
+                        .small()
+                        .ghost()
+                        .tooltip("워크트리 생성·정리")
+                        .accessibility_label("워크트리 관리")
+                        .disabled(self.git_is_busy() || self.loading)
+                        .on_click(cx.listener(|app, _, w, cx| app.open_worktree_manager(w, cx))),
+                )
+            })
             .into_any_element()
     }
 
@@ -1864,10 +1872,10 @@ impl Pokarak {
                                     this.compare(true, window, cx);
                                 });
                             };
-                            let menu_target=weak.clone();
-                            let menu_scope=root.clone();
-                            let menu_branch=name.clone();
-                            let can_integrate=name!=current;
+                            let menu_target = weak.clone();
+                            let menu_scope = root.clone();
+                            let menu_branch = name.clone();
+                            let can_integrate = name != current;
                             let a11y_activate = activate.clone();
                             let key_activate = activate.clone();
                             div()
@@ -1954,13 +1962,40 @@ impl Pokarak {
                                                     .child("현재"),
                                             )
                                         })
-                                        .context_menu(move |mut menu,_,_| {
+                                        .context_menu(move |mut menu, _, _| {
                                             if can_integrate {
-                                                for (kind,label) in [(IntegrationKind::Merge,"현재 브랜치에 Merge…"),(IntegrationKind::Rebase,"이 브랜치 위로 Rebase…")] {
-                                                    let target=menu_target.clone(); let scope=menu_scope.clone(); let branch=menu_branch.clone();
-                                                    menu=menu.item(PopupMenuItem::new(label).on_click(move |_,w,cx|{
-                                                        let _=target.update(cx,|app,cx|{if app.current==scope {app.open_integration(kind,Some(branch.clone()),w,cx);}});
-                                                    }));
+                                                for (kind, label) in [
+                                                    (
+                                                        IntegrationKind::Merge,
+                                                        "현재 브랜치에 Merge…",
+                                                    ),
+                                                    (
+                                                        IntegrationKind::Rebase,
+                                                        "이 브랜치 위로 Rebase…",
+                                                    ),
+                                                ] {
+                                                    let target = menu_target.clone();
+                                                    let scope = menu_scope.clone();
+                                                    let branch = menu_branch.clone();
+                                                    menu = menu.item(
+                                                        PopupMenuItem::new(label).on_click(
+                                                            move |_, w, cx| {
+                                                                let _ =
+                                                                    target.update(cx, |app, cx| {
+                                                                        if app.current == scope {
+                                                                            app.open_integration(
+                                                                                kind,
+                                                                                Some(
+                                                                                    branch.clone(),
+                                                                                ),
+                                                                                w,
+                                                                                cx,
+                                                                            );
+                                                                        }
+                                                                    });
+                                                            },
+                                                        ),
+                                                    );
                                                 }
                                             }
                                             menu
@@ -2464,12 +2499,23 @@ impl Pokarak {
                     .small()
                     .selected(!code && !self.prefs.split_diff)
                     .disabled(diff.is_none())
-                    .on_click(cx.listener(|this, _, _, cx| {this.set_split_diff(false); this.toggle_code(false, cx)})),
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_split_diff(false);
+                        this.toggle_code(false, cx)
+                    })),
             )
             .child(
-                Button::new("work-split").label("좌우").tooltip("변경 전후를 좌우로 비교").small().ghost()
-                    .selected(!code && self.prefs.split_diff).disabled(diff.is_none_or(|d| d.binary))
-                    .on_click(cx.listener(|app, _, _, cx| {app.set_split_diff(true); app.toggle_code(false, cx)})),
+                Button::new("work-split")
+                    .label("좌우")
+                    .tooltip("변경 전후를 좌우로 비교")
+                    .small()
+                    .ghost()
+                    .selected(!code && self.prefs.split_diff)
+                    .disabled(diff.is_none_or(|d| d.binary))
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        app.set_split_diff(true);
+                        app.toggle_code(false, cx)
+                    })),
             )
             .child(
                 Button::new("code")
@@ -2479,35 +2525,51 @@ impl Pokarak {
                     .selected(code)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_code(true, cx))),
             )
-            .when_some(self.current.as_ref().and_then(|root| {
-                let relative = if path.is_absolute() {path.strip_prefix(root).ok()?} else {path};
-                Some(file_inspector::Target {
-                    path:relative.to_owned(), revision:None,
-                    blame_revision: session.snapshot.as_ref().filter(|_|deleted)
-                        .map(|s|s.worktree.head.clone()).filter(|s|!s.is_empty()),
-                })
-            }), |bar,target| bar.child(self.file_inspection_buttons(target,cx)))
-            .when(code, |bar| bar.child(
-                Button::new("refs")
-                    .label("사용처")
-                    .ghost()
-                    .small()
-                    .disabled(!code || deleted || self.navigating)
-                    .tooltip("선택한 심볼의 사용처  ⌥F7")
-                    .on_click(cx.listener(|this, _, w, cx| {
-                        this.request_navigation(NavigationKind::References, None, w, cx)
-                    })),
-            ))
-            .when(code, |bar| bar.child(
-                Button::new("impl")
-                    .label("구현체")
-                    .ghost()
-                    .small()
-                    .disabled(!code || deleted || self.navigating)
-                    .on_click(cx.listener(|this, _, w, cx| {
-                        this.request_navigation(NavigationKind::Implementation, None, w, cx)
-                    })),
-            ));
+            .when_some(
+                self.current.as_ref().and_then(|root| {
+                    let relative = if path.is_absolute() {
+                        path.strip_prefix(root).ok()?
+                    } else {
+                        path
+                    };
+                    Some(file_inspector::Target {
+                        path: relative.to_owned(),
+                        revision: None,
+                        blame_revision: session
+                            .snapshot
+                            .as_ref()
+                            .filter(|_| deleted)
+                            .map(|s| s.worktree.head.clone())
+                            .filter(|s| !s.is_empty()),
+                    })
+                }),
+                |bar, target| bar.child(self.file_inspection_buttons(target, cx)),
+            )
+            .when(code, |bar| {
+                bar.child(
+                    Button::new("refs")
+                        .label("사용처")
+                        .ghost()
+                        .small()
+                        .disabled(!code || deleted || self.navigating)
+                        .tooltip("선택한 심볼의 사용처  ⌥F7")
+                        .on_click(cx.listener(|this, _, w, cx| {
+                            this.request_navigation(NavigationKind::References, None, w, cx)
+                        })),
+                )
+            })
+            .when(code, |bar| {
+                bar.child(
+                    Button::new("impl")
+                        .label("구현체")
+                        .ghost()
+                        .small()
+                        .disabled(!code || deleted || self.navigating)
+                        .on_click(cx.listener(|this, _, w, cx| {
+                            this.request_navigation(NavigationKind::Implementation, None, w, cx)
+                        })),
+                )
+            });
         let content = if diff.map(|d| d.binary).unwrap_or(false) {
             div()
                 .p_6()
@@ -2895,8 +2957,13 @@ impl Render for Pokarak {
         let palette = Palette::new(cx);
         let body = if self.current.is_some() && self.git_history.active {
             h_resizable("graph-main-panes")
-                .child(resizable_panel().size(px(210.)).size_range(px(160.)..px(420.)).child(self.render_worktrees(cx)))
-                .child(resizable_panel().child(self.render_git_graph(window,cx)))
+                .child(
+                    resizable_panel()
+                        .size(px(210.))
+                        .size_range(px(160.)..px(420.))
+                        .child(self.render_worktrees(cx)),
+                )
+                .child(resizable_panel().child(self.render_git_graph(window, cx)))
                 .into_any_element()
         } else if self.current.is_some() {
             h_resizable("main-panes")

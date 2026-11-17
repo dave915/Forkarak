@@ -30,6 +30,7 @@ pub(super) struct LanguageManager {
     running: BTreeMap<String, InstallControl>,
     expanded: HashSet<String>,
     error: Option<String>,
+    status_failed: bool,
     pending: Option<PreparedRequest>,
     timer: Option<Task<()>>,
 }
@@ -47,6 +48,7 @@ impl Default for LanguageManager {
             running: BTreeMap::new(),
             expanded: HashSet::new(),
             error: None,
+            status_failed: false,
             pending: None,
             timer: None,
         }
@@ -81,8 +83,9 @@ impl LanguageManager {
             }
             Ok::<_, String>(())
         })();
+        self.status_failed = result.is_err();
         self.error = result.err();
-        if self.error.is_some() {
+        if self.status_failed {
             // A corrupt/unreadable manifest cannot leave a cached version marked
             // ready or enable Continue. Failed updates with a valid old manifest
             // still refresh normally and retain that active version.

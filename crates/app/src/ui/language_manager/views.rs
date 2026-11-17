@@ -46,7 +46,7 @@ impl Pokarak {
             if let Some(pending) = &manager.pending {
                 let name = manager.packages.iter().find(|p| p.id == pending.package).map(|p| p.name.as_str()).unwrap_or(&pending.package);
                 body = body.child(div().p_2().bg(palette.rgb(0x293848))
-                    .child(format!("{name} 준비가 필요합니다. 설치 후 ‘원래 요청 계속’을 선택하면 원래 파일·선택·분석 허용을 다시 확인합니다.")));
+                    .child(format!("{name} {} ‘원래 요청 계속’을 선택하면 원래 파일·선택·분석 허용을 다시 확인합니다.", if manager.ready(&pending.package) && !manager.running.contains_key(&pending.package) { "준비가 완료되었습니다." } else { "준비가 필요합니다. 설치 후" })));
             }
             let mut packages = manager.packages.iter().collect::<Vec<_>>();
             packages.sort_by_key(|p| (!manager.pending.as_ref().is_some_and(|r| r.package == p.id), p.name.clone()));
@@ -109,7 +109,7 @@ impl Pokarak {
                     " · 준비됨"
                 }
             ),
-            None if manager.error.is_some() => format!("{distribution} · 상태 확인 필요"),
+            None if manager.status_failed => format!("{distribution} · 상태 확인 필요"),
             None => format!("{distribution} · 미설치"),
         };
         let (details_view, id) = (view.clone(), package.id.clone());

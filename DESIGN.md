@@ -25,6 +25,11 @@ Code View offers explicit Edit, Save (Cmd-S), and Save + Commit controls in a se
 Selected controls and rows use cool blue fills in dark mode. Git dialog controls have raised backgrounds, visible borders, pointer cursors and distinct hover, pressed, focused and disabled states. Settings includes copyable Claude/Codex launch commands and a CLI guide. Agent commands return JSON, require explicit worktree scope, and require --yes for writes; private local GUI commands navigate without granting language-analysis trust.
 
 ## Signature behavior
+
+Graph and Code share the worktree/ref sidebar, including branch context actions. Code uses working files versus HEAD and does not show a separate uncommitted/branch comparison switch. Sidebar and Code file-list visibility are stored per worktree. Persistent toolbar toggles and View menu actions restore hidden panes; Cmd-Option-B toggles the sidebar and Cmd-Shift-B toggles the Code files pane. Below 1040 logical pixels, the toolbar uses a second row to retain every action.
+
+The terminal panel contains multiple tabs per worktree. Adding and selecting tabs never changes another worktree's terminals. Hiding retains every session; closing a tab terminates only its owned shell and foreground process group. Closing the last tab hides the panel. Exited tabs retain their status and offer restart. Update/restart checks include hidden and inactive live sessions.
+
 Each worktree restores its exact reading context. The current comparison and worktree stay visible as the code reader moves through definitions and back. New filesystem data prompts refresh without yanking the current reading position.
 
 ## Empty and multiple projects

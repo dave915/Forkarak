@@ -217,3 +217,38 @@ Native checks used isolated debug bundles, a separate bundle identifier and sess
 The native smoke run caught a graph badge that combined a custom hover listener with its managed tooltip on one Button. The custom listener now belongs to the existing context wrapper, and subsequent graph startup/reference rendering passed. It also caught the transient 32px refresh notice resizing the reader and explicit Diff switches leaving focus in a hidden editor; both were fixed and retested before the final build.
 
 The local deliverable is `dist/Forkarak.app`, packaged from the optimized executable. Strict deep code-signature verification passed, architecture is `arm64`, dynamic dependencies are system libraries/frameworks only, and the packaged icon matches the existing icon asset. The packaged executable SHA-256 is `dec20fa5d718063dcbd026e429becaa7e64d69f7bbc3584e530c764c08e840e8`. Packaging uses the existing ad-hoc signing path. No release was published, no user repository was used for write/network-operation tests, and no language-analysis trust was granted by refresh or review.
+
+## Git basics and Pop — 2026-11-17
+
+The integrated application source is `4d4271b5ca6869997fdd0d7c284dd2aa7f032d25`. Feature work used separate branches/worktrees with interactive Codex workers in Herdr; `main` was used for integration and verification. Official Herdr 0.1.16 and hc 0.1.21 were prepared as requested. Long checks used `hc run --bg` and `hc wait`, an explicit Cargo PATH, the existing checkout target cache and `/tmp` as the test process working directory. The final checks used `CARGO_INCREMENTAL=0` and `MACOSX_DEPLOYMENT_TARGET=13.0`.
+
+| Automated check | Observed result |
+| --- | --- |
+| `cargo test --workspace` | 280 passed, zero failures: app 143, core unit 101, core integration 26, navigation unit 10 |
+| Opt-in real language servers | 7 JVM and 1 TypeScript test ignored; not claimed in this pass |
+| `cargo clippy --workspace --all-targets -- -D warnings` | Passed |
+| `cargo fmt --all --check` | Passed |
+| `cargo build --release -p pokarak` | Passed |
+| Packaged app `codesign --verify --deep --strict` | Passed, using local ad-hoc signing |
+
+Tests and Clippy ran at `74aa24f`; the only later application change in `4d4271b` was rustfmt output. Formatting and the release build ran after that commit. This run did not enable the separate mock-server feature suite. Logs under `/tmp/forkarak-git-basics/` are `workspace-tests.log`, `workspace-clippy.log` and `native-release-build.log`; they are local ephemeral receipts. The counts and source identifiers here are the durable record.
+
+The release executable SHA-256 before packaging is `15af378e254fea7412efee8b2b7133e6d044181e1ee6b27b7f31d6c042e726cb`. The signed packaged executable in `dist/Forkarak.app` is `0c5a6855a0858c367362954cdcf218b79a3e0803d439bee48d1daa29a72f8301`. Signing changes executable bytes. The Cargo executable, packaged app and separate native QA bundle all have Mach-O UUID `1F9EBFEB-45FC-3D0E-AF6F-A8B22EA2828B` (`arm64`). No version change, release publication or replacement of an installed app was part of this pass.
+
+Native interaction checks used a separate QA bundle identifier and isolated session directories. All writes targeted authored disposable repositories under `/tmp/forkarak-git-basics/fixtures`; network-operation checks used local bare remotes. No user's repository or remote was used as a write/network test fixture.
+
+| Native flow | Observation and verification |
+| --- | --- |
+| Separate Pop, 1440×900 | Chose the older of two stashes, confirmed its exact identity and worktree, then executed Pop. Git showed only the newer stash remained, the older stash's file content was applied and the index stayed empty. |
+| Upstream-aware Pull | With local `main` tracking `origin/trunk` and a different remote listed first, the form defaulted to `origin` / `trunk`. Dirty-worktree rejection retained the working bytes and reported local changes rather than an authentication error. |
+| Explicit Push source/destination | Changing the source from `main` to `unpublished` cleared the old remote selection and reset the destination to `unpublished`. Explicitly chose `origin`, destination `qa/unpublished` and upstream setup. Git verified the local bare remote's exact source OID and `unpublished@{upstream}` = `origin/qa/unpublished`; current `main` and its `origin/trunk` tracking stayed unchanged. |
+| Local synchronization status | Footer showed `main → origin/trunk ↑1 ↓1`; its detail named the local-reference scope and relative last Fetch time. No background network operation was needed to read it. |
+| Tracking branch creation | Right-clicked `origin/feature/team`, created `qa/feature-team` with tracking and switching disabled. Git verified its OID and upstream `origin/feature/team`, with current branch still `main`. |
+| Operation history | The running app retained both the failed Pull diagnostics and successful Pop output. The successful record displayed real stdout. |
+| Multiple-file Stage/Unstage, 940×580 | Explicitly marked file 1 and file 3. Stage changed exactly those two index paths; selected Unstage returned the index to empty and retained working bytes. |
+| Conflict comparison and retained result, 940×580 | Both source panes and footer actions were visible. Next-marker navigation reached opening marker line 15. An edited result survived moving to another unresolved file and back. Explicit draft discard changed no disk/index bytes; both fixture files remained unresolved. |
+| Final release layout, both sizes | The icon toolbar included separate Stash and Pop at 1440×900; at 940×580 all actions remained available in the existing second row, and Pop opened a usable selection dialog. |
+
+The selected-file and conflict interaction checks used the earlier integrated debug build at `94624f4`; their implementation was unchanged in the final release. The other rows and final size checks used the release executable identified above. Backend fixtures additionally cover immutable source/remote revalidation, missing/local/custom upstream mappings, tracking creation, rename guards, stash conflict retention and stale conflict saves. Native branch rename, successful Pull, every recovery action, and exhaustive concurrent-worktree races were not separately exercised in this interaction pass. History and resolution drafts are bounded/in-memory for the running app; these checks do not claim persistence across process restart.
+
+Visual receipts are copied to the ignored local artifact directory `dist/previews/git-basics/`: `toolbar-wide.png`, `toolbar-small.png`, `pop-picker-wide.png`, `pop-picker-small.png`, `pull-upstream-wide.png`, `push-target-wide.png`, `branch-create-wide.png` and `pop-output-wide.png`. The separate QA process was closed after verification; existing user app instances were left running. Completed feature worker panes were closed after validation and integration, while their branches/worktrees were preserved.

@@ -1,4 +1,14 @@
-# Stash and conflict workflow
+# Git operations and conflict workflow
+
+## Synchronization and branch starts
+
+`operations::sync` adds local-only upstream metadata and explicit push destinations. `branch_sync()` reads the selected branch's full upstream reference, remote/source reference, locally known ahead/behind counts and this worktree's `FETCH_HEAD` modification time. It never fetches. Missing upstream objects or tracking metadata produce unavailable counts, not zero. A local upstream keeps its recorded remote `.` rather than becoming a guessed network destination.
+
+`push_branch()` sends one explicitly selected local branch to one remote branch. Upstream registration is a separate explicit option. Force, mirror, tag-following, pruning and implicit upstream setup remain disabled. Existing `Operation` variants and CLI signatures remain compatible.
+
+`operations::branches` lists immutable starts from HEAD and full local/remote branch references. Branch creation binds the source OID and current worktree HEAD/branch to its confirmation. It supports branch-only creation, explicit create-and-switch, an exact commit OID and tracking an unambiguous remote fetch mapping. Branch rename rejects an existing destination, a stale source or a branch occupied in another worktree. Viewing refs never creates or switches branches.
+
+## Stash and conflicts
 
 `operations::workflow` adds inherent methods to `GitOperations`; existing basic-operation methods and types remain compatible. All explicit writes must use the application's single `run_git_job` guard. Inspection never starts an operation.
 
@@ -16,6 +26,14 @@ Resolution is bounded to 128 KiB per file/stage. Binary sides can be chosen byte
 
 Temporary-repository tests cover tracked/untracked/ignored stash behavior, patch/content inspection, linked-worktree sharing, stale stash selections, apply/pop retention, stage contents, edited save and stage, stale disk/index protection, add/add and delete/modify, binary/size limits, traversal and symlinks, partial stage recovery, and continue/abort for merge/rebase/cherry-pick/revert. Fixture identity and configuration are isolated; tests use no real user repositories or remotes.
 
-The native UI entry is **File → Stash / 충돌 해결…** (`Cmd+Shift+G`). The hub names repository-wide stash scope and the current worktree for conflicts. Stash details show the patch, tracked/untracked file-content lookup, and separate apply/pop/drop actions. The conflict dialog has read-only Base/Ours/Theirs tabs, a result editor, explicit side-selection buttons (including named deletion when absent), and a separate save-and-stage action. Continue and abort have operation/worktree confirmation. All writes go through `run_git_job`; no second mutation guard or lifecycle handler was added. Continue/abort use the parent's cancellable `run_command` with noninteractive editors.
+The native UI entry is **File → Stash / 충돌 해결…** (`Cmd+Shift+G`). The hub names repository-wide stash scope and the current worktree for conflicts. The separate toolbar **Pop** entry requires choosing a shared stash identity before confirming its application to the current worktree. Stash details show the patch, tracked/untracked file-content lookup, and separate **Apply · 보관 유지**, **Pop · 적용 후 제거** and drop actions. Continue and abort have operation/worktree confirmation. All writes go through `run_git_job`; no second mutation guard or lifecycle handler was added. Continue/abort use the parent's cancellable `run_command` with noninteractive editors.
 
-Dialogs use widths 620–820 px, bounded scroll areas and editor heights to fit 940×580. Native visual validation is assigned to the integrating/root agent; this worker did not launch or package the application. Suggested visual checks: long stash subject/path, empty stash list, add/add absent base, delete/modify deletion choice, binary side preview, text editing and save, named drop/abort confirmations, and switching worktree while a read completes.
+The conflict dialog displays read-only Ours/Theirs source panes together, optional Base, and a separate editable result. Opening-marker navigation uses editor line positions rather than estimated pixel offsets. Moving to another unresolved file or closing the dialog retains the editor and original snapshot under its worktree/file key. Manual results survive side previews and can be restored. These drafts are in memory for the current app process; update/restart checks include dirty inactive drafts. Reopening a retained result never silently adopts changed disk/index contents. The original save guards remain authoritative; explicit confirmed draft discard does not change repository files or the index.
+
+## Operation diagnostics and staging selection
+
+Git actions retain the last 20 operation records per worktree in memory, with bounded successful stdout/stderr and failed error chains. The running status reports elapsed time, not a simulated network progress percentage. Recovery help classifies the actual diagnostic before the core's common authentication advice footer, so a non-fast-forward rejection is not mislabeled as an authentication failure. Recovery navigation never retries or mutates automatically.
+
+Staging's multiple-file marks are separate from the single preview and partial-line marks. Cmd toggles, Shift ranges and keyboard-accessible mark controls feed selected-only Stage/Unstage. The selection binds the worktree, side and snapshot generation; replacement, close or index writes clear it. Renames include both old/new paths. Explicit batch marks defer automatic refresh; ordinary preview selection keeps live refresh active.
+
+Dialogs use widths 620–820 px, bounded scroll areas and editor heights to fit 940×580. The integrating native checks and their exact source/build scope are recorded in [verification](verification.md#git-basics-and-pop--2026-11-17). They cover representative workflows; exhaustive binary, deletion, long-path and concurrent-worktree UI combinations remain outside that interaction pass.

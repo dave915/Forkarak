@@ -6,6 +6,7 @@
 //! are not recursive.
 pub mod commit_actions;
 pub mod history_actions;
+pub mod integration;
 pub mod workflow;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -445,11 +446,13 @@ impl GitOperations {
     }
 
     fn current_branch(&self) -> Result<Option<String>> {
-        let result = self.run(&["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+        let result = self.run(&["symbolic-ref", "--quiet", "HEAD"])?;
         match result.code {
             Some(0) => Ok(Some(
                 std::str::from_utf8(&result.stdout)?
                     .trim_end_matches('\n')
+                    .strip_prefix("refs/heads/")
+                    .context("HEAD is not attached to a local branch")?
                     .to_owned(),
             )),
             Some(1) => Ok(None),
@@ -954,6 +957,11 @@ mod tests {
                 .unwrap();
             remote
         }
+    }
+
+    mod branch_integration {
+        use super::*;
+        include!("operations/integration/tests.rs");
     }
 
     #[test]

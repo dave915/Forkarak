@@ -514,7 +514,8 @@ pub fn resolve_stack_location(root: &Path, text: &str) -> Option<StackLocation> 
                 continue;
             }
             if let Ok(path) = root.join(file).canonicalize()
-                && path.is_file() && path.starts_with(&root)
+                && path.is_file()
+                && path.starts_with(&root)
             {
                 return Some(StackLocation {
                     path,
@@ -543,7 +544,8 @@ pub fn resolve_stack_location(root: &Path, text: &str) -> Option<StackLocation> 
                     "src/test/kotlin",
                 ] {
                     if let Ok(path) = root.join(source).join(&package).join(file).canonicalize()
-                        && path.is_file() && path.starts_with(&root)
+                        && path.is_file()
+                        && path.starts_with(&root)
                     {
                         return Some(StackLocation {
                             path,

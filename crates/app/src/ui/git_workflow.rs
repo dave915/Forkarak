@@ -236,7 +236,14 @@ impl Pokarak {
         let target = root.clone();
         self.workflow_read(
             root,
-            move |ops| ops.stash_patch(&selected),
+            move |ops| {
+                let output = ops.stash_patch(&selected)?;
+                let mut text = output.stdout;
+                if output.truncated {
+                    text.push_str("\n[Patch 일부 생략 — 출력 제한]");
+                }
+                Ok(patch::Prepared::new(text, None))
+            },
             move |app, patch, w, cx| app.show_stash(target, entry, patch, w, cx),
             window,
             cx,
@@ -246,20 +253,11 @@ impl Pokarak {
         &mut self,
         root: PathBuf,
         entry: StashEntry,
-        patch: OperationOutput,
+        patch: patch::Prepared,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = format!(
-            "{}{}",
-            patch.stdout,
-            if patch.truncated {
-                "\n[Patch 일부 생략 — 출력 제한]"
-            } else {
-                ""
-            }
-        );
-        let preview = patch::editor(text, true, window, cx);
+        let preview = patch::editor(patch, true, window, cx);
         let path =
             cx.new(|cx| InputState::new(window, cx).placeholder("내용을 볼 저장소 상대 파일 경로"));
         let weak = cx.entity().downgrade();

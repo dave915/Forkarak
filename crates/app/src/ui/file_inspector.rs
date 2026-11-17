@@ -126,8 +126,9 @@ impl Inspector {
                 .as_deref()
                 .map(|oid| &oid[..8])
                 .unwrap_or("빈 트리");
+            let syntax = Arc::new(split_diff::DiffSyntax::new(&patch));
             anyhow::Ok((
-                patch.patch,
+                patch::Prepared::new(patch.patch, Some(syntax)),
                 format!(
                     "{} → {}  ·  {}  ·  {}",
                     parent,

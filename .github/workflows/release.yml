@@ -40,7 +40,9 @@ jobs:
           rustup default stable
           rustup target add aarch64-apple-darwin
       - name: Test installation and updates
-        run: python3 scripts/test-distribution.py
+        run: |
+          python3 scripts/test-distribution.py
+          python3 scripts/test-cli-launcher.py
       - name: Test application
         run: cargo test --locked --workspace --features pokarak-navigation/test-server
       - name: Build release

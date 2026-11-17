@@ -1,4 +1,5 @@
 //! Explicit Git actions; branch-sidebar selection remains comparison-only.
+mod worktree_manager;
 use super::*;
 use gpui_kit::component::{
     IndexPath,
@@ -49,6 +50,7 @@ pub(super) fn request_app_quit(_: &Quit, cx: &mut App) {
 
 #[derive(Clone, Copy)]
 enum Page {
+    Worktrees,
     Create,
     Checkout,
     Delete,
@@ -245,6 +247,10 @@ impl Pokarak {
     }
 
     pub(super) fn open_git_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.load_git_page(None,window,cx);
+    }
+
+    fn load_git_page(&mut self,page:Option<Page>,window:&mut Window,cx:&mut Context<Self>){
         if self.git_is_busy() || self.loading {
             return;
         }
@@ -268,7 +274,7 @@ impl Pokarak {
                     return;
                 }
                 match result {
-                    Ok(state) => this.show_git_home(Arc::new(state), window, cx),
+                    Ok(state) => match page {Some(page)=>this.show_git_page(Arc::new(state),page,window,cx),None=>this.show_git_home(Arc::new(state),window,cx)},
                     Err(error) => {
                         this.error = Some(format!(
                             "Git 작업 정보 읽기 실패\n{}\n{error:#}",
@@ -296,6 +302,7 @@ impl Pokarak {
             for (heading, actions) in [
                 ("브랜치", vec![("만들기…", Page::Create), ("체크아웃…", Page::Checkout), ("삭제…", Page::Delete)]),
                 ("원격 동기화", vec![("Fetch…", Page::Fetch), ("Push…", Page::Push), ("Pull (ff-only)…", Page::Pull)]),
+                ("워크트리", vec![("워크트리 관리…", Page::Worktrees)]),
                 ("저장소 Git 설정", vec![("원격 저장소 관리…", Page::Remotes), ("작성자 이름·이메일…", Page::Identity)]),
             ] {
                 let mut row = div().flex().flex_wrap().gap_2();
@@ -323,6 +330,7 @@ impl Pokarak {
         cx: &mut Context<Self>,
     ) {
         match page {
+            Page::Worktrees => self.show_worktree_manager(state,window,cx),
             Page::Create | Page::Checkout | Page::Delete => {
                 self.show_branch_form(state, page, window, cx)
             }

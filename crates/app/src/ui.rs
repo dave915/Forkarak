@@ -1982,6 +1982,10 @@ impl Pokarak {
                         cx.notify();
                     })),
             )
+            .when(!self.prefs.show_branches,|row|row.child(div().flex_1()).child(
+                Button::new("manage-worktrees").icon(IconName::Settings).small().ghost().tooltip("워크트리 생성·정리").accessibility_label("워크트리 관리")
+                    .disabled(self.git_is_busy() || self.loading).on_click(cx.listener(|app,_,w,cx|app.open_worktree_manager(w,cx)))
+            ))
             .into_any_element()
     }
 

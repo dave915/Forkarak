@@ -349,6 +349,10 @@ pub(crate) fn blob(root: &Path, entry: &Entry) -> Result<(Vec<u8>, bool)> {
 
 pub(crate) fn worktrees(root: &Path) -> Result<Vec<Worktree>> {
     let bytes = words(root, &["worktree", "list", "--porcelain", "-z"])?;
+    Ok(parse_worktrees(&bytes))
+}
+
+pub(crate) fn parse_worktrees(bytes: &[u8]) -> Vec<Worktree> {
     let mut result = Vec::new();
     let mut current = Worktree::default();
     for field in bytes.split(|b| *b == 0) {
@@ -387,7 +391,7 @@ pub(crate) fn worktrees(root: &Path) -> Result<Vec<Worktree>> {
             current.is_prunable = true;
         }
     }
-    Ok(result)
+    result
 }
 
 pub(crate) fn branches(root: &Path) -> Result<Vec<String>> {

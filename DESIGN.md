@@ -24,5 +24,8 @@ Each worktree restores its exact reading context. The current comparison and wor
 ## Empty and multiple projects
 Closing all projects restores the welcome screen with project-open action and recent-project list. Worktree sessions, search and reading positions remain isolated within each project. Project close never deletes a repository or worktree.
 
+## In-app updates
+The installed app checks for stable releases in the background. A compact banner on the welcome screen or workspace offers the download. Settings also shows the installed version and a manual check. Download and verification leave the window usable. Once ready, the user chooses when to restart. The app remembers the active worktree, reading view and commit drafts, and asks for confirmation if restarting would end a live terminal or discard conflict-editor input.
+
 ## Native verification
 Inspect the actual macOS window at 1440×900 and a smaller window. Web-only detectors do not apply. Check open/empty/error/loading, long file paths, keyboard navigation, diff/code switch, worktree isolation, and external modifications.

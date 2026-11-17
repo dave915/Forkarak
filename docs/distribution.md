@@ -16,24 +16,26 @@
 
 v0.2.0까지의 `포카락.app`은 앱을 종료한 뒤 위 설치 명령을 한 번 실행하면 `Pokarak.app`으로 이동한다. 사용자 지정 경로는 기존과 같은 `--app-dir`, `--bin-dir`을 지정한다.
 
-앱을 종료하고 업데이트한다. 설치 때 지정한 앱·명령 경로를 다시 사용한다.
+v0.2.5부터 설치된 앱은 실행 중 새 정식 릴리스를 확인한다. 새 버전 알림이나 설정에서 **업데이트 다운로드**를 누르면 현재 앱을 계속 사용하는 동안 패키지를 받아 검증한다. **업데이트하고 재시작**을 누르면 실행 중인 앱과 같은 위치에 설치하고 이전 워크트리를 다시 연다.
+
+터미널에서 업데이트하려면 앱을 종료하고 다음 명령을 실행한다. 설치 때 지정한 앱·명령 경로를 다시 사용한다.
 
 ```sh
 ~/.local/bin/pokarak update
 ```
 
-v0.2.1 이하에서 최신 버전 확인이 403으로 실패하면 `~/.local/bin/pokarak update --version v0.2.4`로 해당 조회를 건너뛸 수 있다. v0.2.2부터는 공개 릴리스 페이지의 리디렉션으로 태그를 확인한다. 패키지 또는 체크섬 다운로드 자체가 거부되면 설치 프로그램이 실패한 URL을 표시한다.
+v0.2.1 이하에서 최신 버전 확인이 403으로 실패하면 `~/.local/bin/pokarak update --version v0.2.5`로 해당 조회를 건너뛸 수 있다. v0.2.2부터는 공개 릴리스 페이지의 리디렉션으로 태그를 확인한다. 패키지 또는 체크섬 다운로드 자체가 거부되면 설치 프로그램이 실패한 URL을 표시한다.
 
 설치 스크립트를 내려받아 옵션을 지정할 수도 있다. `--version`은 버전을 고정할 때 사용하며 해당 GitHub 릴리스가 있어야 한다.
 
 ```sh
 installer="$(mktemp)"
 curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh -o "$installer" && \
-  /bin/bash "$installer" --version v0.2.4 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
+  /bin/bash "$installer" --version v0.2.5 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
 rm -f "$installer"
 ```
 
-업데이트는 사용자 저장소, `~/.config/pokarak/session.json`, 분석 도구와 인덱스를 수정하지 않는다. 언어 서버 설치는 기존 `scripts/setup-language-servers.sh`의 별도 명시적 작업이다.
+앱에서 재시작하면 세션 설정에 현재 작업 위치와 작성 중인 커밋 메시지를 저장한다. 저장소 파일과 Git 인덱스는 그대로 유지된다. 언어 서버 설치는 기존 `scripts/setup-language-servers.sh`의 별도 명시적 작업이다.
 
 ## 다운로드와 교체
 
@@ -69,8 +71,8 @@ git push origin HEAD v0.2.0
 로컬 패키징은 다음과 같다. `--binary`는 기존 arm64 실행 파일을 사용하며 다시 빌드하지 않는다.
 
 ```sh
-./scripts/release-macos.sh --version v0.2.4
-./scripts/release-macos.sh --version v0.2.4 --binary /absolute/path/to/pokarak
+./scripts/release-macos.sh --version v0.2.5
+./scripts/release-macos.sh --version v0.2.5 --binary /absolute/path/to/pokarak
 python3 scripts/test-distribution.py
 ```
 
@@ -83,7 +85,7 @@ python3 scripts/test-distribution.py
 ```sh
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 NOTARY_KEYCHAIN_PROFILE='pokarak-notary' \
-./scripts/release-macos.sh --version v0.2.4
+./scripts/release-macos.sh --version v0.2.5
 ```
 
 이 경로는 hardened runtime과 timestamp로 서명하고, `notarytool submit --wait` 성공 후 ticket을 staple한 번들을 배포한다. 실제 계정이 없어 공증 경로의 Apple 서비스 연동은 검증되지 않았다. 기본 GitHub 워크플로는 인증서와 공증 자격 증명을 구성하지 않으며 ad-hoc 빌드를 게시한다. 공증에는 [Apple이 요구하는 Developer ID 서명](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)이 필요하다. 공증한 앱에도 일반적인 첫 실행 확인창은 남을 수 있다.

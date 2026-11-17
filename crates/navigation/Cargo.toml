@@ -12,6 +12,12 @@ pokarak-core = { path = "../core" }
 url = "2"
 tempfile = "3"
 roxmltree = "0.21"
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+fs2 = "0.4"
+toml = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

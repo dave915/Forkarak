@@ -70,10 +70,10 @@ pub(crate) fn merge_user_config(
     }
     for config in configs {
         config.language = normalize_language(&config.language).into();
-        if !matches!(
-            config.language.as_str(),
-            "typescript" | "typescriptreact" | "javascript" | "javascriptreact" | "java" | "kotlin"
-        ) {
+        if !crate::language_catalog()
+            .iter()
+            .any(|entry| entry.language == config.language && entry.package.is_some())
+        {
             bail!("Unsupported language-server language {:?}", config.language);
         }
         if config.program.trim().is_empty() {
@@ -90,27 +90,22 @@ pub(crate) fn normalize_language(language: &str) -> &str {
         "js" => "javascript",
         "jsx" => "javascriptreact",
         "kt" | "kts" => "kotlin",
+        "rs" => "rust",
+        "py" => "python",
+        "sh" | "bash" | "shell" => "shellscript",
+        "yml" => "yaml",
+        "md" => "markdown",
+        "make" => "makefile",
+        "gradle" => "groovy",
         other => other,
     }
 }
 
 pub(crate) fn language(path: &Path) -> Option<&'static str> {
-    match path.extension()?.to_str()? {
-        "ts" | "mts" | "cts" => Some("typescript"),
-        "tsx" => Some("typescriptreact"),
-        "js" | "mjs" | "cjs" => Some("javascript"),
-        "jsx" => Some("javascriptreact"),
-        "java" => Some("java"),
-        "kt" | "kts" => Some("kotlin"),
-        _ => None,
-    }
+    crate::language_for_path(path)
 }
-
 pub(crate) fn family(language: &str) -> &str {
-    match language {
-        "typescriptreact" | "javascript" | "javascriptreact" => "typescript",
-        other => other,
-    }
+    crate::language_family(language)
 }
 
 /// Discover an executable on the inherited PATH. Never searches project node_modules,
@@ -335,6 +330,29 @@ pub fn default_configs() -> Vec<ServerConfig> {
         args: args.into_iter().map(str::to_owned).collect(),
     })
     .collect::<Vec<_>>();
+    for recipe in crate::languages::RECIPES
+        .iter()
+        .filter(|r| !matches!(r.id, "typescript" | "java" | "kotlin"))
+    {
+        let entries: Vec<(&str, &str)> = if recipe.id == "web" {
+            vec![
+                ("html", "vscode-html-language-server"),
+                ("css", "vscode-css-language-server"),
+                ("json", "vscode-json-language-server"),
+            ]
+        } else {
+            vec![(recipe.languages[0], recipe.executable)]
+        };
+        for (language, program) in entries {
+            configs.push(ServerConfig {
+                language: language.into(),
+                program: discover_program(program)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| program.into()),
+                args: recipe.args.iter().map(|a| (*a).into()).collect(),
+            });
+        }
+    }
     if let Some(home) = env::var_os("HOME") {
         apply_managed_configs(
             &mut configs,
@@ -357,6 +375,9 @@ fn apply_managed_configs(configs: &mut Vec<ServerConfig>, tools_directory: &Path
 
 /// Read setup's manifest only. No downloads, scripts, or server startup.
 pub fn installed_configs(tools_directory: &Path) -> Result<Vec<ServerConfig>> {
+    if tools_directory.join("managed-tools.json").is_file() {
+        return crate::ManagedTools::new(tools_directory.to_path_buf(), None)?.server_configs();
+    }
     let configs = read_manifest(tools_directory)?;
     for config in &configs {
         if let Some(missing) = missing_managed_program(config) {
@@ -413,7 +434,12 @@ fn env_kotlin_payload(config: &ServerConfig) -> Option<&Path> {
     if config.program != "/usr/bin/env" {
         return None;
     }
-    let payload = Path::new(config.args.iter().find(|arg| !arg.contains('='))?);
+    let payload = Path::new(
+        config
+            .args
+            .iter()
+            .find(|arg| !arg.contains('=') && !arg.starts_with('-'))?,
+    );
     kotlin_launcher(payload).then_some(payload)
 }
 

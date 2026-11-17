@@ -74,6 +74,21 @@ impl Pokarak {
             None if self.count_pending => "변경 수 확인 중…".into(),
             None => "변경 수 미확인".into(),
         };
+        let working_title = if self.graph_branch().is_some() {
+            self.active_worktree().map(|tree| {
+                format!(
+                    "미커밋 변경 · {}",
+                    if tree.is_detached {
+                        short(&tree.head)
+                    } else {
+                        &tree.branch
+                    }
+                )
+            })
+        } else {
+            None
+        }
+        .unwrap_or_else(|| "미커밋 변경".into());
         let status = if self.loading || ui.loading {
             "읽는 중…".into()
         } else if ui.limit_reached {
@@ -99,7 +114,7 @@ impl Pokarak {
                     .gap_2()
                     .border_b_1()
                     .border_color(palette.rgb(LINE))
-                    .child(div().font_weight(FontWeight::MEDIUM).child("커밋 그래프"))
+                    .child(self.branch_filter_control(cx))
                     .child(
                         div()
                             .text_size(px(11.))
@@ -151,7 +166,7 @@ impl Pokarak {
                     .w_full()
                     .selected(self.inline_commit_active())
                     .disabled(self.loading || self.git_is_busy())
-                    .accessibility_label(format!("미커밋 변경 {count}"))
+                    .accessibility_label(format!("{working_title} {count}"))
                     .child(
                         div()
                             .w_full()
@@ -163,7 +178,7 @@ impl Pokarak {
                                     .size(px(15.))
                                     .text_color(palette.rgb(BLUE)),
                             )
-                            .child("미커밋 변경")
+                            .child(working_title)
                             .child(div().text_color(palette.rgb(MUTED)).child(count)),
                     )
                     .tooltip("변경 사항 검토 · 스테이징 · 커밋")

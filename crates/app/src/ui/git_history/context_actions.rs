@@ -1,6 +1,7 @@
 //! Row actions capture the clicked commit independently of the detail reader.
 use super::*;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use pokarak_core::operations::branches::BranchStart;
 
 pub(super) fn commit_context_menu(
     weak: WeakEntity<Pokarak>,
@@ -8,6 +9,15 @@ pub(super) fn commit_context_menu(
     commit: Commit,
 ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu {
     move |mut menu, _, cx| {
+        let branch_disabled = weak.upgrade().is_none_or(|view| {
+            let app = view.read(cx);
+            app.git_is_busy()
+                || app.loading
+                || app.current != root
+                || root
+                    .as_deref()
+                    .is_none_or(|root| app.git_history.branch_start(root, &commit.oid).is_none())
+        });
         let disabled = weak.upgrade().is_none_or(|view| {
             let app = view.read(cx);
             app.git_is_busy()
@@ -20,6 +30,26 @@ pub(super) fn commit_context_menu(
                     .is_none_or(|tree| tree.is_detached || tree.head.is_empty())
         });
         menu = menu.label(format!("커밋 {}", short(&commit.oid)));
+        let (branch_weak, branch_root, oid) = (weak.clone(), root.clone(), commit.oid.clone());
+        menu = menu.item(
+            PopupMenuItem::new("여기서 브랜치 만들기…")
+                .disabled(branch_disabled)
+                .on_click(move |_, w, cx| {
+                    if let Some(root) = &branch_root {
+                        let _ = branch_weak.update(cx, |app, cx| {
+                            if app.current.as_ref() != Some(root)
+                                || app.loading
+                                || app.git_is_busy()
+                            {
+                                return;
+                            }
+                            if let Some(start) = app.git_history.branch_start(root, &oid) {
+                                app.open_branch_create(Some(start), w, cx);
+                            }
+                        });
+                    }
+                }),
+        );
         for (action, label) in [
             (HistoryAction::CherryPick, "Cherry-pick…"),
             (HistoryAction::Revert, "Revert…"),
@@ -42,6 +72,19 @@ pub(super) fn commit_context_menu(
 }
 
 impl HistoryUi {
+    fn branch_start(&self, root: &Path, oid: &str) -> Option<BranchStart> {
+        if !self.active || self.root.as_deref() != Some(root) {
+            return None;
+        }
+        self.entries
+            .iter()
+            .find(|entry| entry.commit.oid == oid)
+            .map(|entry| BranchStart {
+                reference: entry.commit.oid.clone(),
+                oid: entry.commit.oid.clone(),
+            })
+    }
+
     fn action_commit(&self, root: &Path, oid: &str) -> Option<&Commit> {
         if !self.active || self.root.as_deref() != Some(root) {
             return None;
@@ -118,10 +161,15 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(ui.action_commit(root, "b").unwrap().oid, "b");
+        assert_eq!(ui.branch_start(root, "b").unwrap().oid, "b");
+        assert_eq!(ui.branch_start(root, "merge").unwrap().reference, "merge");
+        assert!(ui.branch_start(Path::new("/other"), "b").is_none());
+        assert!(ui.branch_start(root, "stale").is_none());
         assert!(ui.action_commit(root, "merge").is_none());
         assert!(ui.action_commit(Path::new("/other"), "b").is_none());
         assert!(ui.action_commit(root, "stale").is_none());
         ui.active = false;
         assert!(ui.action_commit(root, "b").is_none());
+        assert!(ui.branch_start(root, "b").is_none());
     }
 }

@@ -57,6 +57,18 @@ pub(in crate::ui) fn branch_context_menu(
             }
         }
         if let Some(local) = local {
+            let rename_root = root.clone();
+            let rename_ref = reference.clone();
+            let rename_weak = weak.clone();
+            menu = menu.item(
+                PopupMenuItem::new(format!("{local} 이름 변경…"))
+                    .disabled(disabled)
+                    .on_click(move |_, w, cx| {
+                        let _ = rename_weak.update(cx, |app, cx| {
+                            app.open_branch_rename(rename_root.clone(), rename_ref.clone(), w, cx);
+                        });
+                    }),
+            );
             let branch = local.to_owned();
             let weak = weak.clone();
             let root = root.clone();
@@ -70,6 +82,24 @@ pub(in crate::ui) fn branch_context_menu(
                                 root.clone(),
                                 branch.clone(),
                                 current.clone(),
+                                w,
+                                cx,
+                            );
+                        });
+                    }),
+            );
+        } else if reference.starts_with("refs/remotes/") {
+            let target_root = root.clone();
+            let target_ref = reference.clone();
+            let target_weak = weak.clone();
+            menu = menu.item(
+                PopupMenuItem::new("로컬 추적 브랜치 만들기…")
+                    .disabled(disabled)
+                    .on_click(move |_, w, cx| {
+                        let _ = target_weak.update(cx, |app, cx| {
+                            app.review_remote_branch_create(
+                                target_root.clone(),
+                                target_ref.clone(),
                                 w,
                                 cx,
                             );
@@ -96,6 +126,29 @@ pub(in crate::ui) fn branch_context_menu(
 }
 
 impl Pokarak {
+    fn review_remote_branch_create(
+        &mut self,
+        root: PathBuf,
+        reference: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.loading || self.opening_path.is_some() {
+            return;
+        }
+        self.workflow_read(
+            root,
+            move |ops| {
+                ops.branch_starts()?.into_iter()
+                    .find(|start| start.reference == reference && start.reference.starts_with("refs/remotes/"))
+                    .ok_or_else(|| anyhow::anyhow!("선택한 원격 참조가 변경되었거나 없어졌습니다. 새로고침 후 다시 선택하세요."))
+            },
+            |app, start, w, cx| app.open_branch_create(Some(start), w, cx),
+            window,
+            cx,
+        );
+    }
+
     fn review_branch_integration(
         &mut self,
         kind: IntegrationKind,

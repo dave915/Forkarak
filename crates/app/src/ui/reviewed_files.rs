@@ -704,10 +704,21 @@ impl Pokarak {
     }
 
     pub(super) fn reviewed_files_notice(&self, cx: &App) -> Option<AnyElement> {
+        let has_file = if self.git_history.active {
+            self.git_history
+                .review_data()
+                .is_some_and(|(_, doc)| doc.is_some())
+        } else {
+            self.selected().is_some()
+        };
+        let reason =
+            (has_file && self.opening_path.is_none() && !self.loading && !self.file_loading)
+                .then(|| self.review_disabled_reason())
+                .flatten();
         self.reviewed_files
             .error
             .as_deref()
-            .or_else(|| self.review_disabled_reason())
+            .or(reason)
             .map(|error| {
                 div()
                     .px_3()

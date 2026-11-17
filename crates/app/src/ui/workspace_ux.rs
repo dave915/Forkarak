@@ -1,6 +1,6 @@
 //! Worktree-scoped screen restoration and searchable native navigation.
 use super::*;
-use crate::prefs::{SavedCommit, UpdateView};
+use crate::prefs::UpdateView;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -73,6 +73,25 @@ impl Pokarak {
             "workspace.restore_last",
             true,
         );
+        if !restore && restart.is_none() {
+            if let Some(root) = &self.current
+                && let Some(session) = self.sessions.get_mut(root)
+            {
+                session.saved.selected = None;
+                session.saved.tabs.clear();
+                session.saved.positions.clear();
+                session.saved.line = 0;
+                session.saved.column = 0;
+                session.saved.diff_row = 0;
+                session.saved.scroll_x = 0.;
+                session.saved.scroll_y = 0.;
+                session.documents.clear();
+                session.diffs.clear();
+                session.history.clear();
+                session.forward.clear();
+                session.restoring = false;
+            }
+        }
         let view = restart.or_else(|| {
             restore
                 .then(|| {
@@ -181,6 +200,7 @@ impl Pokarak {
                             .map(|(i, _)| i)
                             .collect();
                         this.cursor = 0;
+                        this.scroll.scroll_to_item(0, ScrollStrategy::Top);
                         cx.notify();
                     }
                     InputEvent::PressEnter { .. } => this.choose(this.cursor, w, cx),
@@ -188,6 +208,7 @@ impl Pokarak {
                 },
             );
             Picker {
+                scroll: UniformListScrollHandle::new(),
                 owner,
                 root,
                 generation,
@@ -239,6 +260,7 @@ impl Pokarak {
                         .text_size(ui_text(11.))
                         .child(self.visible_comparison_label()),
                 )
+                .children(self.branch_review_controls(cx))
                 .into_any_element(),
         )
     }
@@ -277,6 +299,7 @@ pub(super) struct Choice {
     pub action: ChoiceAction,
 }
 struct Picker {
+    scroll: UniformListScrollHandle,
     owner: WeakEntity<Pokarak>,
     root: PathBuf,
     generation: u64,
@@ -326,35 +349,54 @@ impl Picker {
 }
 impl Render for Picker {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut rows = div()
-            .id("workspace-choice-rows")
-            .h(ui_px(310.))
-            .overflow_y_scroll()
-            .v_flex();
-        if self.matches.is_empty() {
-            rows = rows.child("일치하는 항목이 없습니다.");
-        }
-        for (index, &ix) in self.matches.iter().enumerate() {
-            let row = &self.rows[ix];
-            rows = rows.child(
-                Button::new(("workspace-choice", index))
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .min_h(ui_px(48.))
-                    .justify_start()
-                    .selected(index == self.cursor)
-                    .child(
-                        div().v_flex().min_w_0().child(row.label.clone()).child(
-                            div()
-                                .text_size(ui_text(10.))
-                                .text_ellipsis()
-                                .child(row.detail.clone()),
-                        ),
-                    )
-                    .on_click(cx.listener(move |this, _, w, cx| this.choose(index, w, cx))),
+        let rows: AnyElement = if self.matches.is_empty() {
+            div()
+                .p_2()
+                .child("일치하는 항목이 없습니다.")
+                .into_any_element()
+        } else {
+            let entries = Arc::new(
+                self.matches
+                    .iter()
+                    .map(|&index| self.rows[index].clone())
+                    .collect::<Vec<_>>(),
             );
-        }
+            let weak = cx.weak_entity();
+            let cursor = self.cursor;
+            uniform_list(
+                "workspace-choice-rows",
+                entries.len(),
+                move |range, _, _| {
+                    range
+                        .map(|index| {
+                            let row = &entries[index];
+                            let target = weak.clone();
+                            Button::new(("workspace-choice", index))
+                                .ghost()
+                                .small()
+                                .w_full()
+                                .h(ui_px(48.))
+                                .justify_start()
+                                .selected(index == cursor)
+                                .child(
+                                    div().v_flex().min_w_0().child(row.label.clone()).child(
+                                        div()
+                                            .text_size(ui_text(10.))
+                                            .text_ellipsis()
+                                            .child(row.detail.clone()),
+                                    ),
+                                )
+                                .on_click(move |_, w, cx| {
+                                    let _ = target.update(cx, |this, cx| this.choose(index, w, cx));
+                                })
+                        })
+                        .collect::<Vec<_>>()
+                },
+            )
+            .track_scroll(&self.scroll)
+            .h(ui_px(310.))
+            .into_any_element()
+        };
         div()
             .v_flex()
             .gap_2()
@@ -368,6 +410,8 @@ impl Render for Picker {
                     "up" => this.cursor = this.cursor.saturating_sub(1),
                     _ => return,
                 }
+                this.scroll
+                    .scroll_to_item(this.cursor, ScrollStrategy::Nearest);
                 cx.stop_propagation();
                 cx.notify();
             }))
@@ -378,7 +422,8 @@ impl Render for Picker {
 
 #[cfg(test)]
 mod tests {
-    use super::{HashMap, Path, PathBuf, SavedCommit, Screen, UpdateView, tab_label};
+    use super::{HashMap, Path, PathBuf, Screen, UpdateView, tab_label};
+    use crate::prefs::SavedCommit;
     #[test]
     fn duplicate_tab_names_use_shortest_unique_suffix() {
         let tabs = vec![

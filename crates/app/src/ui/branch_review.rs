@@ -43,22 +43,12 @@ impl Pokarak {
                 .id("branch-review-controls")
                 .flex_none()
                 .min_h(ui_px(32.))
-                .px_3()
+                .px_1()
                 .py_1()
                 .flex()
                 .flex_wrap()
                 .items_center()
                 .gap_2()
-                .border_b_1()
-                .border_color(Palette::new(cx).rgb(LINE))
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .text_size(ui_text(11.))
-                        .text_ellipsis()
-                        .child(self.visible_comparison_label()),
-                )
                 .child(
                     Button::new("compare-branch")
                         .label("브랜치 비교…")

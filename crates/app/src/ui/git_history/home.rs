@@ -2,6 +2,18 @@ use super::*;
 use gpui_kit::component::resizable::v_resizable;
 
 impl Pokarak {
+    pub(in crate::ui) fn history_blame_editor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<EditorState>> {
+        if !self.git_history.code {
+            self.git_history.code = true;
+            self.update_history_editor(window, cx);
+        }
+        self.git_history.editor.clone()
+    }
+
     pub(in crate::ui) fn open_review_history_file(
         &mut self,
         path: PathBuf,
@@ -509,12 +521,16 @@ impl Pokarak {
         {
             doc.unified(self, None, true, cx)
         } else if let Some(editor) = &ui.editor {
-            Editor::new(editor)
-                .readonly(true)
-                .bordered(false)
-                .h_full()
-                .w_full()
-                .into_any_element()
+            self.with_inline_blame(
+                editor,
+                Editor::new(editor)
+                    .readonly(true)
+                    .bordered(false)
+                    .h_full()
+                    .w_full()
+                    .into_any_element(),
+                cx,
+            )
         } else {
             div()
                 .size_full()
@@ -619,6 +635,7 @@ impl Pokarak {
                         ))
                     }),
             )
+            .children(self.inline_blame_controls(cx))
             .when(!ui.code, |reader| {
                 reader.children(
                     ui.document

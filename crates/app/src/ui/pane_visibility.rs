@@ -118,7 +118,10 @@ impl Pokarak {
 
     pub(super) fn pane_toggles(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let saved = self.session().map(|session| &session.saved);
-        let sidebar = saved.is_none_or(|saved| !saved.hide_sidebar);
+        let sidebar = saved.is_none_or(|saved| !saved.hide_sidebar)
+            && self
+                .session()
+                .is_none_or(|s| !s.compact_window || s.compact_sidebar.unwrap_or(false));
         let files = saved.is_none_or(|saved| !saved.hide_files);
         let pending = self.opening_path.is_some() || saved.is_none();
         let sidebar_label = if sidebar {

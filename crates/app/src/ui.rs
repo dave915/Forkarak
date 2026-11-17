@@ -16,6 +16,7 @@ mod git_workflow;
 mod pane_visibility;
 mod patch;
 mod reader_navigation;
+mod result_presentation;
 mod reviewed_files;
 mod settings;
 mod split_diff;
@@ -73,18 +74,6 @@ type FileRevision = (u64, SystemTime);
 
 struct ResultExcerpt {
     location: SourceLocation,
-    // Search providers return a bounded preview. Each visible fragment has its
-    // own parse context; unrelated hits and files must not share parser state.
-    syntax: std::sync::OnceLock<syntax::CodeSyntax>,
-}
-
-impl ResultExcerpt {
-    fn styled(&self, cx: &App) -> StyledText {
-        let hit = &self.location;
-        self.syntax
-            .get_or_init(|| syntax::CodeSyntax::new(&hit.path, &hit.preview))
-            .styled_line(0, &hit.preview, true, cx)
-    }
 }
 
 fn file_revision(path: &Path) -> Option<FileRevision> {
@@ -238,6 +227,7 @@ struct Session {
     restoring: bool,
     unreviewed_only: bool,
     compact_sidebar: Option<bool>,
+    compact_window: bool,
 }
 impl Session {
     fn new(saved: SavedView) -> Self {
@@ -258,11 +248,13 @@ impl Session {
             restoring,
             unreviewed_only: false,
             compact_sidebar: None,
+            compact_window: false,
         }
     }
 }
 
 pub struct Pokarak {
+    inline_blame: Option<Entity<file_inspector::InlineBlame>>,
     reviewed_files: reviewed_files::ReviewedFiles,
     auto_refresh: auto_refresh::AutoRefresh,
     code_edits: code_edit::CodeEdits,
@@ -303,6 +295,10 @@ pub struct Pokarak {
     result_semantic: bool,
     results_open: bool,
     result_scroll: UniformListScrollHandle,
+    result_surface: result_presentation::Surface,
+    result_rows: Arc<Vec<result_presentation::Row>>,
+    result_anchor: Option<Bounds<Pixels>>,
+    results_root: Option<PathBuf>,
     file_scroll: UniformListScrollHandle,
     file_cursor: usize,
     file_tree_focus: FocusHandle,
@@ -424,8 +420,9 @@ impl Pokarak {
                 }
                 _ => return,
             }
+            let row = self.result_rows.iter().position(|row| matches!(row, result_presentation::Row::Line { hit: Some(index), .. } if *index == self.result_cursor)).unwrap_or(0);
             self.result_scroll
-                .scroll_to_item(self.result_cursor, ScrollStrategy::Nearest);
+                .scroll_to_item(row, ScrollStrategy::Nearest);
             cx.stop_propagation();
             cx.notify();
         }
@@ -599,6 +596,7 @@ impl Pokarak {
             }
         }));
         let mut this = Self {
+            inline_blame: None,
             reviewed_files: reviewed_files::ReviewedFiles::load(),
             auto_refresh: auto_refresh::AutoRefresh::default(),
             code_edits: code_edit::CodeEdits::load(),
@@ -639,6 +637,10 @@ impl Pokarak {
             result_semantic: false,
             results_open: false,
             result_scroll: UniformListScrollHandle::new(),
+            result_surface: result_presentation::Surface::Popover,
+            result_rows: Arc::new(vec![]),
+            result_anchor: None,
+            results_root: None,
             file_scroll: UniformListScrollHandle::new(),
             file_cursor: 0,
             file_tree_focus: cx.focus_handle(),
@@ -1639,6 +1641,9 @@ impl Pokarak {
         };
         let position = target.position;
         let displayed_text = editor.read(cx).value().to_string();
+        let navigation_anchor = editor
+            .read(cx)
+            .range_to_bounds(&(editor.read(cx).cursor()..editor.read(cx).cursor()));
         let _symbol_start = target.symbol_start;
         let absolute = root.join(&path);
         let navigator = self.navigation.as_ref().unwrap().clone();
@@ -1675,7 +1680,8 @@ impl Pokarak {
                         std::fs::read_to_string(&absolute)? == displayed_text,
                         "파일이 외부에서 변경되었습니다. 새로고침 후 다시 탐색하세요."
                     );
-                    let result = nav.navigate(&absolute, position.line, position.character, kind)?;
+                    let result =
+                        nav.navigate(&absolute, position.line, position.character, kind)?;
                     anyhow::ensure!(
                         std::fs::read_to_string(&absolute)? == displayed_text,
                         "탐색 중 파일이 변경되었습니다. 새로고침 후 다시 탐색하세요."
@@ -1710,19 +1716,14 @@ impl Pokarak {
                     Ok((result, revisions)) => {
                         this.error = None;
                         this.result_revisions = revisions;
+                        this.results_root = Some(root.clone());
                         this.status = result.status.clone();
-                        if is_definition
-                            && result.semantic
-                            && result.locations.len() == 1
-                        {
+                        if is_definition && result.semantic && result.locations.len() == 1 {
+                            this.results_open = false;
                             this.open_location(result.locations[0].clone(), window, cx);
                         } else {
-                            this.show_results(
-                                title,
-                                result,
-                                window,
-                                cx,
-                            );
+                            this.show_results(title, result, window, cx);
+                            this.result_anchor = navigation_anchor;
                         }
                     }
                     Err(error) => {
@@ -1752,14 +1753,30 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.result_anchor = self.active_editor().and_then(|e| {
+            let editor = e.read(cx);
+            editor.range_to_bounds(&(editor.cursor()..editor.cursor()))
+        });
+        self.results_root = self.current.clone();
+        self.result_surface = result_presentation::Surface::from_option(&self.prefs.option_string(
+            self.current_project.as_deref(),
+            "navigation.results_placement",
+            "popover",
+        ));
         self.results = result
             .locations
             .into_iter()
-            .map(|location| ResultExcerpt {
-                location,
-                syntax: Default::default(),
-            })
+            .map(|location| ResultExcerpt { location })
             .collect();
+        self.result_title = title.clone();
+        self.prepare_result_rows(cx);
+        if self.result_surface == result_presentation::Surface::Files {
+            if let Some(root) = &self.current
+                && let Some(session) = self.sessions.get_mut(root)
+            {
+                session.saved.hide_files = false;
+            }
+        }
         self.result_semantic = result.semantic;
         self.result_title = title;
         self.results_open = true;
@@ -1776,6 +1793,16 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .results_root
+            .as_ref()
+            .is_some_and(|root| self.current.as_ref() != Some(root))
+        {
+            return;
+        }
+        if self.result_surface == result_presentation::Surface::Popover {
+            self.results_open = false;
+        }
         if let Some(expected) = self.result_revisions.get(&location.path).copied() {
             if file_revision(&location.path) != Some(expected) {
                 self.error = Some(
@@ -1809,7 +1836,7 @@ impl Pokarak {
             return;
         };
         let query = self.filter.trim().to_string();
-        if query.len() < 2 {
+        if query.chars().count() < 2 {
             self.status = "본문 검색어를 두 글자 이상 입력하세요".into();
             cx.notify();
             return;
@@ -1838,7 +1865,11 @@ impl Pokarak {
                     Ok((locations, revisions)) => {
                         this.result_revisions = revisions;
                         this.error = None;
-                        this.status = if locations.len() >= 300 { "본문 검색 완료 · 최대 300개 결과".into() } else { format!("본문 검색 완료 · {}개", locations.len()) };
+                        this.status = if locations.len() >= 300 {
+                            "본문 검색 완료 · 최대 300개 결과".into()
+                        } else {
+                            format!("본문 검색 완료 · {}개", locations.len())
+                        };
                         this.show_results(
                             format!("본문 검색: {expected_query}"),
                             NavigationResult {
@@ -1854,6 +1885,10 @@ impl Pokarak {
                         this.error = Some(format!("본문 검색 실패 · {error:#}"));
                         this.status = "본문 검색 실패 · 검색창에서 Enter로 다시 시도".into();
                         this.result_title = "본문 검색 실패".into();
+                        this.result_semantic = false;
+                        this.results_root = this.current.clone();
+                        this.result_surface = result_presentation::Surface::Files;
+                        this.result_rows = Arc::new(vec![]);
                         this.results = Arc::from([]);
                         this.results_open = true;
                     }
@@ -1871,7 +1906,9 @@ impl Pokarak {
         self.show_code_view(window, cx);
         self.text_search = text;
         if let Some(root) = &self.current {
-            if let Some(session) = self.sessions.get_mut(root) { session.saved.hide_files = false; }
+            if let Some(session) = self.sessions.get_mut(root) {
+                session.saved.hide_files = false;
+            }
         }
         if !text && let Some(root) = &self.current {
             self.sessions.get_mut(root).unwrap().saved.all_files = true;
@@ -2105,28 +2142,32 @@ impl Pokarak {
         } else if code {
             if let Some(editor) = editor {
                 let clicked_editor = editor.clone();
-                div()
-                    .size_full()
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseUpEvent, window, cx| {
-                            if event.modifiers.platform && !deleted && !dirty {
-                                this.request_clicked_definition(
-                                    &clicked_editor,
-                                    event.position,
-                                    window,
-                                    cx,
-                                );
-                            }
-                        }),
-                    )
-                    .child(
-                        Editor::new(&editor)
-                            .readonly(!editing)
-                            .bordered(false)
-                            .h(relative(1.)),
-                    )
-                    .into_any_element()
+                self.with_inline_blame(
+                    &editor,
+                    div()
+                        .size_full()
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(move |this, event: &MouseUpEvent, window, cx| {
+                                if event.modifiers.platform && !deleted && !dirty {
+                                    this.request_clicked_definition(
+                                        &clicked_editor,
+                                        event.position,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }),
+                        )
+                        .child(
+                            Editor::new(&editor)
+                                .readonly(!editing)
+                                .bordered(false)
+                                .h(relative(1.)),
+                        )
+                        .into_any_element(),
+                    cx,
+                )
             } else {
                 div()
                     .p_4()
@@ -2159,8 +2200,19 @@ impl Pokarak {
             .v_flex()
             .overflow_hidden()
             .child(tabs)
-            .child(div().id("reader-file-path").flex_none().min_h(ui_px(28.)).px_3().py_1().text_size(ui_text(11.)).font_family("JetBrains Mono").child(path.to_string_lossy().to_string()))
+            .child(
+                div()
+                    .id("reader-file-path")
+                    .flex_none()
+                    .min_h(ui_px(28.))
+                    .px_3()
+                    .py_1()
+                    .text_size(ui_text(11.))
+                    .font_family("JetBrains Mono")
+                    .child(path.to_string_lossy().to_string()),
+            )
             .child(head)
+            .children(self.inline_blame_controls(cx))
             .when(!code, |reader| {
                 reader.children(diff.and_then(|doc| self.diff_reading_controls(doc, false, cx)))
             })
@@ -2193,123 +2245,7 @@ impl Pokarak {
     }
 
     fn render_results(&self, cx: &mut Context<Self>) -> AnyElement {
-        let palette = Palette::new(cx);
-        let results = self.results.clone();
-        let weak = cx.entity().downgrade();
-        let root = self.current.clone().unwrap_or_default();
-        let cursor = self.result_cursor;
-        div()
-            .id("results-panel")
-            .max_h(relative(0.3))
-            .min_h_0()
-            .track_focus(&self.results_focus)
-            .h(ui_px(210.))
-            .flex_none()
-            .v_flex()
-            .border_t_1()
-            .border_color(palette.rgb(LINE))
-            .bg(palette.rgb(SIDE))
-            .child(
-                div()
-                    .h(ui_px(34.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(format!("{}  {}", self.result_title, self.results.len()))
-                    .child(
-                        div()
-                            .text_size(ui_text(11.))
-                            .text_color(palette.rgb(MUTED))
-                            .child(if self.result_semantic {
-                                "언어 분석 결과"
-                            } else {
-                                "텍스트 검색 결과"
-                            }),
-                    )
-                    .child(div().flex_1())
-                    .child(self.output_button("results-output", cx))
-                    .child(
-                        Button::new("close-results")
-                            .icon(IconName::X)
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.results_open = false;
-                                this.navigation_request += 1;
-                                this.navigating = false;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(if results.is_empty() {
-                div()
-                    .p_3()
-                    .text_color(palette.rgb(MUTED))
-                    .child("검색 결과가 없습니다.")
-                    .into_any_element()
-            } else {
-                uniform_list("results", results.len(), move |range, _, cx| {
-                    range
-                        .map(|ix| {
-                            let preview = &results[ix];
-                            let hit = preview.location.clone();
-                            let target = weak.clone();
-                            let accessible_target = weak.clone();
-                            let accessible_hit = hit.clone();
-                            let label = format!(
-                                "{}:{}",
-                                hit.path.strip_prefix(&root).unwrap_or(&hit.path).display(),
-                                hit.line + 1
-                            );
-                            div()
-                                .id(("hit", ix))
-                                .role(accesskit::Role::Button)
-                                .aria_label(label.clone())
-                                .bg(if ix == cursor {
-                                    palette.rgb(PANEL)
-                                } else {
-                                    palette.rgb(SIDE)
-                                })
-                                .on_a11y_action(accesskit::Action::Click, move |_, window, cx| {
-                                    let _ = accessible_target.update(cx, |this, cx| {
-                                        this.open_location(accessible_hit.clone(), window, cx)
-                                    });
-                                })
-                                .h(ui_px(40.))
-                                .px_3()
-                                .cursor_pointer()
-                                .hover(|s| s.bg(palette.rgb(PANEL)))
-                                .child(
-                                    div()
-                                        .text_size(ui_text(11.))
-                                        .text_color(palette.rgb(BLUE))
-                                        .text_ellipsis()
-                                        .child(label),
-                                )
-                                .child(
-                                    div()
-                                        .font_family("JetBrains Mono")
-                                        .text_size(ui_text(11.))
-                                        .text_color(palette.rgb(MUTED))
-                                        .text_ellipsis()
-                                        .child(preview.styled(cx)),
-                                )
-                                .on_click(move |_, w, cx| {
-                                    let _ = target.update(cx, |this, cx| {
-                                        this.open_location(hit.clone(), w, cx)
-                                    });
-                                })
-                                .into_any_element()
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .track_scroll(&self.result_scroll)
-                .h_full()
-                .flex_1()
-                .into_any_element()
-            })
-            .into_any_element()
+        self.render_result_surface(cx)
     }
 
     fn render_welcome(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2400,6 +2336,17 @@ impl Pokarak {
 impl Render for Pokarak {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.observe_feedback();
+        let compact = theme::logical_px(window.viewport_size().width) < 1100.
+            && self.prefs.option_bool(
+                self.current_project.as_deref(),
+                "layout.auto_collapse",
+                true,
+            );
+        if let Some(root) = &self.current
+            && let Some(session) = self.sessions.get_mut(root)
+        {
+            session.compact_window = compact;
+        }
         let palette = Palette::new(cx);
         let pending = self
             .opening_path
@@ -2507,7 +2454,6 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.select_reader_mode(code,w,cx)}}))
             .child(self.render_toolbar(window, cx))
             .children(self.workspace_context(cx))
-            .children(self.branch_review_controls(cx))
             .children(self.update_banner(cx))
             .children(self.code_drafts_banner(cx))
             .children(self.reviewed_files_notice(cx))
@@ -2523,7 +2469,8 @@ impl Render for Pokarak {
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
             .when(self.error.is_some(), |d| d.child(self.render_error_summary(cx)))
             .when(self.analysis_feedback.output_open, |d| d.child(self.render_output(cx)))
-            .when(self.results_open && !self.analysis_feedback.output_open,|d|d.child(self.render_results(cx)))
+            .when(self.results_open && self.result_surface == result_presentation::Surface::Bottom && !self.analysis_feedback.output_open,|d|d.child(div().h(ui_px(240.)).max_h(relative(0.4)).child(self.render_results(cx))))
+            .children(self.result_popover(window, cx))
             .child(div().h(ui_px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(palette.rgb(LINE)).bg(palette.rgb(SIDE)).text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
                 .child(div().flex_1().min_w_0().text_ellipsis().child(context))
                 .when(self.current.is_some(), |row| row.child(self.git_sync_button(cx)))

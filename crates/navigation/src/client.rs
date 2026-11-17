@@ -171,7 +171,7 @@ impl Client {
             }
             let response = client.request("initialize", json!({
                 "processId": std::process::id(),
-                "clientInfo": {"name": "pokarak", "version": env!("CARGO_PKG_VERSION")},
+                "clientInfo": {"name": "Forkarak", "version": env!("CARGO_PKG_VERSION")},
                 "rootPath": import_root, "rootUri": path_to_uri(import_root)?,
                 "workspaceFolders": client.workspace_folders()?,
                 "capabilities": {
@@ -199,7 +199,7 @@ impl Client {
                 && encoding != "utf-16"
             {
                 bail!(
-                    "Server selected unsupported position encoding {encoding}; Pokarak requires UTF-16"
+                    "Server selected unsupported position encoding {encoding}; Forkarak requires UTF-16"
                 );
             }
             let sync = &client.capabilities["textDocumentSync"];
@@ -394,7 +394,7 @@ impl Client {
             }
             "workspace/workspaceFolders" => self.workspace_folders()?,
             "window/workDoneProgress/create" | "window/showMessageRequest" => Value::Null,
-            "workspace/applyEdit" => json!({"applied": false, "failureReason": "Pokarak is a read-only viewer"}),
+            "workspace/applyEdit" => json!({"applied": false, "failureReason": "Forkarak only reads source files during language analysis"}),
             _ => return self.transport.send(&json!({"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32601, "message": format!("Unsupported client method: {method}")}}), deadline),
         };
         self.transport.send(

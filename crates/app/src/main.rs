@@ -12,7 +12,7 @@ use std::borrow::Cow;
 fn main() {
     if std::env::args_os().any(|arg| arg == "--help" || arg == "-h") {
         println!(
-            "Pokarak — native Git worktree review\nUsage: pokarak [PROJECT ...] [--window-size WIDTHxHEIGHT]"
+            "Forkarak — a native macOS Git client\nBrowse commit graphs across worktrees, compare changes, and stage individual lines or hunks.\n\nUsage: forkarak [--window-size WIDTHxHEIGHT] [--session-dir DIR] [--] [PROJECT ...]"
         );
         return;
     }
@@ -73,11 +73,11 @@ fn main() {
                 },
                 cx,
                 move |window, cx| {
-                    window.set_window_title("Pokarak");
+                    window.set_window_title("Forkarak");
                     cx.new(|cx| ui::Pokarak::new(initial.clone(), window, cx))
                 },
             )
-            .expect("Pokarak 창을 열 수 없습니다");
+            .expect("포카락 창을 열 수 없습니다");
             cx.activate(true);
         });
 }

@@ -33,7 +33,7 @@ impl Pokarak {
                     div()
                         .text_size(ui_text(16.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("Pokarak"),
+                        .child("Forkarak"),
                 )
             })
             .when(has_projects, |bar| {

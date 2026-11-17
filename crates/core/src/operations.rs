@@ -501,7 +501,7 @@ impl GitOperations {
                 "--"
             ])?
             .is_empty(),
-            "Pull requires a clean worktree. Commit or move local changes first; Pokarak never stashes or discards them."
+            "Pull requires a clean worktree. Commit or move local changes first; Forkarak never stashes or discards them."
         );
         Ok(())
     }

@@ -120,10 +120,10 @@ pub fn bind_keys(cx: &mut App) {
     crate::terminal::bind_keys(cx);
     cx.on_action(git_actions::request_app_quit);
     cx.set_menus([
-        Menu::new("Pokarak").items([
+        Menu::new("Forkarak").items([
             MenuItem::action("설정…", OpenSettings),
             MenuItem::separator(),
-            MenuItem::action("Pokarak 종료", Quit),
+            MenuItem::action("Forkarak 종료", Quit),
         ]),
         Menu::new("파일").items([
             MenuItem::action("저장소 열기…", OpenRepository),
@@ -3057,12 +3057,12 @@ impl Pokarak {
                 div()
                     .text_size(ui_text(24.))
                     .font_weight(FontWeight::MEDIUM)
-                    .child("변경된 코드를, 가볍게."),
+                    .child("포카락"),
             )
             .child(
                 div()
                     .text_color(palette.rgb(MUTED))
-                    .child("워크트리를 오가며 diff와 코드를 읽으세요."),
+                    .child("워크트리의 커밋 그래프에서 변경사항을 비교하고, 필요한 줄이나 블록을 골라 Stage하세요."),
             )
             .child(
                 Button::new("welcome-open")

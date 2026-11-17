@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
   <title>포카락 앱 아이콘</title>
-  <desc>A silver spork on a cool charcoal macOS icon tile.</desc>
+  <desc>The Forkarak app icon, a silver spork on a charcoal tile.</desc>
   <rect x="64" y="64" width="896" height="896" rx="200" fill="#20252c"/>
   <g transform="translate(96 96) scale(13)" stroke="#e5eaf0" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
     <path d="M20 9V20C20 29 24 34 32 34C40 34 44 29 44 20V9"/>

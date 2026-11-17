@@ -88,7 +88,7 @@ impl GitOperations {
         ])?;
         self.guard_ignored_paths(&affected)?;
         // Read the confirmation target again after all preflight work. The shared
-        // UI job guard serializes Pokarak writes; Git owns the repository locks.
+        // UI job guard serializes Forkarak writes; Git owns the repository locks.
         ensure!(
             self.history_target()? == *target,
             "The target branch or HEAD changed during validation; confirm again"

@@ -5,11 +5,11 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>ko</string>
     <key>CFBundleDisplayName</key>
-    <string>Pokarak</string>
+    <string>Forkarak</string>
     <key>CFBundleName</key>
-    <string>Pokarak</string>
+    <string>Forkarak</string>
     <key>CFBundleExecutable</key>
-    <string>pokarak</string>
+    <string>forkarak</string>
     <key>CFBundleIdentifier</key>
     <string>dev.pokarak.app</string>
     <key>CFBundleInfoDictionaryVersion</key>
@@ -21,7 +21,7 @@
     <key>CFBundleVersion</key>
     <string>0.1.0</string>
     <key>CFBundleIconFile</key>
-    <string>Pokarak.icns</string>
+    <string>Forkarak.icns</string>
     <key>CFBundleSupportedPlatforms</key>
     <array>
         <string>MacOSX</string>

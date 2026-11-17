@@ -101,7 +101,7 @@ impl Shell {
             ("TERM".into(), "xterm-256color".into()),
             ("COLORTERM".into(), "truecolor".into()),
             ("SHELL".into(), "/bin/zsh".into()),
-            ("TERM_PROGRAM".into(), "Pokarak".into()),
+            ("TERM_PROGRAM".into(), "Forkarak".into()),
             (
                 "TERM_PROGRAM_VERSION".into(),
                 env!("CARGO_PKG_VERSION").into(),
@@ -302,14 +302,14 @@ mod tests {
         let root = tmp.path().canonicalize().unwrap().join("repo ' 한");
         fs::create_dir(&root).unwrap();
         let shell = fixture(&root);
-        shell.write(b"print -r -- \"$PWD|$SESSION_VALUE|$TERM|$FIXTURE_PROFILE|$FIXTURE_RC\" > env.out; print -ru2 STDERR_FIXTURE\r".to_vec());
+        shell.write(b"print -r -- \"$PWD|$SESSION_VALUE|$TERM|$TERM_PROGRAM|$FIXTURE_PROFILE|$FIXTURE_RC\" > env.out; print -ru2 STDERR_FIXTURE\r".to_vec());
         wait_for("stderr should reach the terminal", || {
             text(&shell).contains("STDERR_FIXTURE") && root.join("env.out").is_file()
         });
         assert_eq!(
             fs::read_to_string(root.join("env.out")).unwrap().trim(),
             format!(
-                "{}|hello 꿀|xterm-256color|login|interactive",
+                "{}|hello 꿀|xterm-256color|Forkarak|login|interactive",
                 root.display()
             )
         );

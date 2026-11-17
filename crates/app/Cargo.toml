@@ -1,5 +1,7 @@
 [package]
 name = "pokarak"
+description = "Forkarak, a native macOS Git client for browsing commit graphs across worktrees, comparing changes, and staging individual lines or hunks."
+repository = "https://github.com/dave915/Forkarak"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

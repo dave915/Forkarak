@@ -404,7 +404,7 @@ impl Pokarak {
             Some(error.clone())
         } else if let Some(r) = &self.updates.release {
             if !self.updates.packaged {
-                Some("설치는 배포용 Pokarak.app에서 사용할 수 있습니다.".into())
+                Some("설치는 배포용 Forkarak.app에서 사용할 수 있습니다.".into())
             } else if matches!(r.package, Package::Ready(_)) && self.git_is_busy() {
                 Some("Git 작업이 끝나면 재시작할 수 있습니다.".into())
             } else {

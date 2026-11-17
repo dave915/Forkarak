@@ -27,7 +27,7 @@ fn bundle_for_executable(executable: &Path) -> Option<PathBuf> {
     let macos = exe.parent()?;
     let contents = macos.parent()?;
     let bundle = contents.parent()?;
-    (exe.file_name()? == "pokarak"
+    (exe.file_name()? == "forkarak"
         && macos.file_name()? == "MacOS"
         && contents.file_name()? == "Contents"
         && bundle.extension()? == "app"
@@ -126,7 +126,7 @@ pub(crate) fn prepare(tag: &str) -> Result<Prepared, String> {
     if !newer(tag, env!("CARGO_PKG_VERSION"))? {
         return Err("현재 버전보다 새로운 릴리스만 설치할 수 있습니다.".into());
     }
-    let bundle = installed_bundle().ok_or("설치된 Pokarak.app에서 업데이트할 수 있습니다.")?;
+    let bundle = installed_bundle().ok_or("설치된 Forkarak.app에서 업데이트할 수 있습니다.")?;
     let command = update_command(&bundle, tag, crate::prefs::explicit_session_dir())?;
     Prepared::start(command, PREPARE_TIMEOUT)
 }
@@ -405,12 +405,15 @@ mod tests {
         let resources = app.join("Contents/Resources");
         fs::create_dir_all(&macos).unwrap();
         fs::create_dir_all(&resources).unwrap();
-        fs::write(macos.join("pokarak"), "").unwrap();
+        fs::write(macos.join("forkarak"), "").unwrap();
         fs::write(app.join("Contents/Info.plist"), "").unwrap();
         assert_eq!(
-            bundle_for_executable(&macos.join("pokarak")).as_deref(),
+            bundle_for_executable(&macos.join("forkarak")).as_deref(),
             Some(app.as_path())
         );
+        let other_executable = macos.join("pokarak");
+        fs::write(&other_executable, "").unwrap();
+        assert!(bundle_for_executable(&other_executable).is_none());
         assert!(bundle_for_executable(&env::current_exe().unwrap()).is_none());
         let script = resources.join("install.sh");
         fs::write(

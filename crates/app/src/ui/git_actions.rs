@@ -80,6 +80,9 @@ impl Pokarak {
     }
 
     fn block_git_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.updates.restarting() {
+            return true;
+        }
         if let Some((root, label)) = &self.git_ui.busy {
             self.status = format!(
                 "{label} 진행 중 — 완료 후 창을 닫거나 종료하세요. {}",
@@ -113,7 +116,7 @@ impl Pokarak {
     }
 
     pub(super) fn git_is_busy(&self) -> bool {
-        self.git_ui.busy.is_some() || self.git_ui.loading
+        self.git_ui.busy.is_some() || self.git_ui.loading || self.updates.restarting()
     }
 
     pub(super) fn run_git_job(
@@ -241,6 +244,7 @@ impl Pokarak {
                 {
                     session.snapshot = Some(snapshot);
                 }
+                this.finish_resolution_save(succeeded);
                 this.commit_job_finished(&root, succeeded, window, cx);
                 cx.notify();
             });

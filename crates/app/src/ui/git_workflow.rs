@@ -10,6 +10,7 @@ use pokarak_core::operations::{GitOperations, OperationOutput};
 pub(super) struct WorkflowUi {
     request: u64,
     include_untracked: bool,
+    saving_resolution: bool,
     draft: Option<ResolutionDraft>,
 }
 struct ResolutionDraft {
@@ -86,6 +87,25 @@ impl WorkflowWrite {
     }
 }
 impl Pokarak {
+    pub(super) fn finish_resolution_save(&mut self, success: bool) {
+        if std::mem::take(&mut self.workflow.saving_resolution) && success {
+            self.workflow.draft = None;
+        }
+    }
+
+    pub(super) fn has_unsaved_conflict(&self, cx: &App) -> bool {
+        self.workflow.draft.as_ref().is_some_and(|draft| {
+            let original = draft
+                .snapshot
+                .working
+                .as_ref()
+                .and_then(ConflictContent::text)
+                .unwrap_or("");
+            draft.can_edit
+                && (draft.side.is_some() || draft.result.read(cx).value().as_ref() != original)
+        })
+    }
+
     pub(super) fn workflow_read<T: Send + 'static>(
         &mut self,
         root: PathBuf,
@@ -156,6 +176,7 @@ impl Pokarak {
         if self.git_is_busy() || self.current.as_ref() != Some(&root) {
             return;
         }
+        self.workflow.saving_resolution = matches!(job, WorkflowWrite::Resolve { .. });
         self.workflow.request += 1; // Invalidate any older workflow read.
         window.close_all_dialogs(cx);
         self.run_git_job(root, label.into(), move |ops| job.run(ops), window, cx);

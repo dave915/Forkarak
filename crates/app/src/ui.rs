@@ -1,5 +1,6 @@
 mod analysis_feedback;
 mod file_icons;
+mod file_inspector;
 mod git_actions;
 mod git_commit;
 mod git_history;
@@ -2634,7 +2635,15 @@ impl Pokarak {
                     .selected(code)
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_code(true, cx))),
             )
-            .child(
+            .when_some(self.current.as_ref().and_then(|root| {
+                let relative = if path.is_absolute() {path.strip_prefix(root).ok()?} else {path};
+                Some(file_inspector::Target {
+                    path:relative.to_owned(), revision:None,
+                    blame_revision: session.snapshot.as_ref().filter(|_|deleted)
+                        .map(|s|s.worktree.head.clone()).filter(|s|!s.is_empty()),
+                })
+            }), |bar,target| bar.child(self.file_inspection_buttons(target,cx)))
+            .when(code, |bar| bar.child(
                 Button::new("refs")
                     .label("사용처")
                     .ghost()
@@ -2644,8 +2653,8 @@ impl Pokarak {
                     .on_click(cx.listener(|this, _, w, cx| {
                         this.request_navigation(NavigationKind::References, None, w, cx)
                     })),
-            )
-            .child(
+            ))
+            .when(code, |bar| bar.child(
                 Button::new("impl")
                     .label("구현체")
                     .ghost()
@@ -2654,7 +2663,7 @@ impl Pokarak {
                     .on_click(cx.listener(|this, _, w, cx| {
                         this.request_navigation(NavigationKind::Implementation, None, w, cx)
                     })),
-            );
+            ));
         let content = if diff.map(|d| d.binary).unwrap_or(false) {
             div()
                 .p_6()

@@ -267,3 +267,169 @@ fn history_real_fixture_enforces_page_and_total_limits() {
     assert!(page.limit_reached);
     assert_eq!(page.loaded, HISTORY_LIMIT);
 }
+
+#[test]
+fn file_history_follows_renames_with_literal_paths_and_a_fixed_start() {
+    use crate::file_history::{file_blame, file_history};
+    let f = Fixture::new();
+    let original = ":(glob)*\told\nfile";
+    let renamed = "--new path";
+    let base = f.commit(original, "base\nsecond\n");
+    f.git(&["mv", "--", original, renamed]);
+    f.git(&["commit", "-m", "rename"]);
+    let rename = f.git(&["rev-parse", "HEAD"]);
+    let changed = f.commit(renamed, "base\nedited\n");
+    f.git(&["mv", "--", renamed, "staged name"]);
+    fs::write(f.root.join("staged name"), "extra\nbase\nedited\n").unwrap();
+
+    let index = fs::read(f.root.join(".git/index")).unwrap();
+    let working = file_history(&f.root, Path::new("staged name"), None).unwrap();
+    assert!(!working.truncated);
+    assert_eq!(
+        working
+            .entries
+            .iter()
+            .map(|e| (&e.oid, e.path.as_path()))
+            .collect::<Vec<_>>(),
+        [
+            (&changed, Path::new(renamed)),
+            (&rename, Path::new(renamed)),
+            (&base, Path::new(original))
+        ]
+    );
+    let current_blame = file_blame(&f.root, Path::new("staged name"), None).unwrap();
+    assert_eq!(
+        current_blame
+            .iter()
+            .map(|l| (l.line, l.oid.as_ref()))
+            .collect::<Vec<_>>(),
+        [(1, None), (2, Some(&base)), (3, Some(&changed))]
+    );
+    let before = file_history(&f.root, Path::new(renamed), Some(&rename)).unwrap();
+    assert_eq!(before.entries.len(), 2);
+    let previous = file_blame(&f.root, Path::new(renamed), Some(&rename)).unwrap();
+    assert_eq!(previous[1].oid.as_ref(), Some(&base));
+    assert_eq!(previous[1].text, "second");
+    assert_eq!(previous[1].author, "History Fixture");
+    assert_eq!(previous[1].date, &before.entries[1].date[..10]);
+    assert_eq!(fs::read(f.root.join(".git/index")).unwrap(), index);
+    f.git(&["commit", "-m", "staged rename"]);
+    f.git(&["rm", "-f", "--", "staged name"]);
+    f.git(&["commit", "-m", "delete"]);
+    let removed = file_history(&f.root, Path::new("staged name"), None).unwrap();
+    assert!(removed.entries[0].deleted);
+    assert_eq!(removed.entries.len(), 5);
+}
+
+#[test]
+fn file_blame_uses_raw_contents_and_handles_untracked_binary_and_unsafe_paths() {
+    use crate::file_history::{file_blame, file_history};
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    let path = Path::new("new file");
+    fs::write(f.root.join(path), "first\r\n\nlast").unwrap();
+    assert!(
+        file_history(&f.root, path, None)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    let untracked = file_blame(&f.root, path, None).unwrap();
+    assert_eq!(
+        untracked
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "", "last"]
+    );
+    assert!(untracked.iter().all(|l| l.oid.is_none()));
+    fs::write(
+        f.root.join(".gitattributes"),
+        "* -text diff=tripwire filter=tripwire\n",
+    )
+    .unwrap();
+    f.git(&["add", "--", "."]);
+    f.git(&["commit", "-m", "baseline"]);
+    let head = f.git(&["rev-parse", "HEAD"]);
+    f.git(&[
+        "config",
+        "diff.tripwire.textconv",
+        "touch textconv-fired && cat",
+    ]);
+    f.git(&[
+        "config",
+        "filter.tripwire.clean",
+        "touch filter-fired && cat",
+    ]);
+    fs::write(f.root.join(path), "working\n\nlast").unwrap();
+    assert_eq!(file_blame(&f.root, path, None).unwrap()[0].oid, None);
+    assert_eq!(
+        file_blame(&f.root, path, Some(&head)).unwrap()[0].text,
+        "first"
+    );
+    assert_eq!(
+        file_history(&f.root, path, None).unwrap().entries[0].oid,
+        head
+    );
+    assert!(!f.root.join("filter-fired").exists());
+    assert!(!f.root.join("textconv-fired").exists());
+    fs::write(f.root.join(path), [0, 255]).unwrap();
+    assert!(file_blame(&f.root, path, None).is_err());
+    fs::write(f.root.join(path), "\n".repeat(50_001)).unwrap();
+    assert!(file_blame(&f.root, path, None).is_err());
+    assert!(file_blame(&f.root, path, Some("--all")).is_err());
+    assert!(file_history(&f.root, Path::new("../x"), Some(&head)).is_err());
+    let outside = f._dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("private"), "outside content").unwrap();
+    symlink(&outside, f.root.join("link")).unwrap();
+    assert!(file_blame(&f.root, Path::new("link/private"), None).is_err());
+}
+
+#[test]
+fn file_history_and_blame_are_isolated_between_linked_worktrees() {
+    use crate::file_history::{file_blame, file_history};
+    let f = Fixture::new();
+    let base = f.commit("tracked", "base\n");
+    let linked = f._dir.path().join("linked");
+    f.git(&[
+        "worktree",
+        "add",
+        "-b",
+        "side",
+        "--",
+        linked.to_str().unwrap(),
+        "HEAD",
+    ]);
+    let main = f.commit("tracked", "main\n");
+    fs::write(linked.join("tracked"), "base\nside\n").unwrap();
+    let path = Path::new("tracked");
+    assert_eq!(
+        file_history(&linked, path, None).unwrap().entries[0].oid,
+        base
+    );
+    assert_eq!(
+        file_history(&f.root, path, None).unwrap().entries[0].oid,
+        main
+    );
+    let side = file_blame(&linked, path, None).unwrap();
+    assert_eq!(side[0].oid.as_ref(), Some(&base));
+    assert_eq!(side[1].oid, None);
+    assert_eq!(
+        file_blame(&f.root, path, None).unwrap()[0].oid.as_ref(),
+        Some(&main)
+    );
+}
+
+#[test]
+fn file_blame_keeps_git_line_boundaries_with_embedded_cr() {
+    use crate::file_history::file_blame;
+    let f = Fixture::new();
+    let base = f.commit("file", "first\rcontinued\nsecond\n");
+    fs::write(f.root.join("file"), "first\rcontinued\ninserted\nsecond\n").unwrap();
+    let lines = file_blame(&f.root, Path::new("file"), None).unwrap();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0].text, "first\rcontinued");
+    assert_eq!(lines[1].oid, None);
+    assert_eq!(lines[2].oid.as_ref(), Some(&base));
+}

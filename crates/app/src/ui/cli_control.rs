@@ -17,6 +17,13 @@ enum Phase {
     },
 }
 impl Pokarak {
+    pub(super) fn cli_opens_project_file(&self, root: &Path, generation: u64) -> bool {
+        self.cli_open.as_ref().is_some_and(|opening| {
+            opening.target.repo == root
+                && opening.target.path.is_some()
+                && matches!(opening.phase, Phase::Project(request) if request == generation)
+        })
+    }
     pub(crate) fn queue_cli_targets(&mut self, targets: Vec<crate::cli::OpenTarget>) {
         self.cli_targets = targets.into();
     }

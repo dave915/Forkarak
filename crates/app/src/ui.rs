@@ -1010,7 +1010,12 @@ impl Pokarak {
                             let view = update_view
                                 .filter(|(path, _)| *path == root)
                                 .map(|(_, view)| view);
-                            this.open_workspace_screen(view, window, cx);
+                            // An exact CLI file request owns the next screen. Restoring
+                            // Code here would start another snapshot generation before
+                            // its guarded file handoff, or briefly restore an old file.
+                            if !this.cli_opens_project_file(&root, token) {
+                                this.open_workspace_screen(view, window, cx);
+                            }
                             this.refresh_branch_sync(window, cx);
                             this.restore_git_completion(cx);
                         }

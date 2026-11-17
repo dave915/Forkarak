@@ -1,6 +1,8 @@
 //! A separate index reader and native commit form. No semantic navigation here.
 //! Every write is owned by the existing git_actions runner and cancellation.
+mod partial;
 use super::*;
+use pokarak_core::index::partial::{self as partial_index, PartialPreview, Side};
 use pokarak_core::{
     index::{self, IndexSnapshot},
     operations::commit_actions::{CommitMode, StageScope},
@@ -18,6 +20,9 @@ pub(super) struct CommitUi {
     snapshot: Option<Arc<IndexSnapshot>>,
     selected: Option<PathBuf>,
     preview: Option<Entity<EditorState>>,
+    side: Option<Side>,
+    partial: Option<Arc<PartialPreview>>,
+    marked: std::collections::BTreeSet<usize>,
     messages: HashMap<PathBuf, Entity<EditorState>>,
     error: Option<String>,
     clear_message_on_success: Option<PathBuf>,
@@ -41,6 +46,9 @@ impl Pokarak {
         self.commit_ui.snapshot = None;
         self.commit_ui.selected = None;
         self.commit_ui.preview = None;
+        self.commit_ui.partial = None;
+        self.commit_ui.marked.clear();
+        self.commit_ui.side = None;
         self.read_commit_index(window, cx);
         self.show_commit_dialog(window, cx);
     }
@@ -81,18 +89,20 @@ impl Pokarak {
                 }
                 match result {
                     Ok(snapshot) => {
-                        let selected = app
-                            .commit_ui
-                            .selected
-                            .clone()
-                            .filter(|path| snapshot.staged.iter().any(|file| &file.path == path))
-                            .or_else(|| snapshot.staged.first().map(|file| file.path.clone()));
+                        let side = app.commit_ui.side.unwrap_or(Side::Staged);
+                        let files = if side==Side::Staged {&snapshot.staged} else {&snapshot.unstaged};
+                        let selected = app.commit_ui.selected.clone()
+                            .filter(|path| files.iter().any(|f| &f.path == path))
+                            .map(|path|(path, side))
+                            .or_else(||snapshot.staged.first().map(|f|(f.path.clone(),Side::Staged)))
+                            .or_else(||snapshot.unstaged.first().map(|f|(f.path.clone(),Side::Unstaged)));
                         app.commit_ui.snapshot = Some(Arc::new(snapshot));
-                        app.commit_ui.preview = None;
-                        app.commit_ui.selected = None;
-                        if let Some(path) = selected {
-                            app.select_index_preview(path, window, cx);
-                        }
+                        app.commit_ui.selected=None;
+                        app.commit_ui.side=None;
+                        app.commit_ui.preview=None;
+                        app.commit_ui.partial=None;
+                        app.commit_ui.marked.clear();
+                        if let Some((path,side))=selected {app.select_index_preview(path,side,window,cx);}
                     }
                     Err(error) => {
                         app.commit_ui.snapshot = None;
@@ -106,7 +116,7 @@ impl Pokarak {
         cx.notify();
     }
 
-    fn select_index_preview(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    fn select_index_preview(&mut self, path: PathBuf, side:Side, window: &mut Window, cx: &mut Context<Self>) {
         let Some(snapshot) = self.commit_ui.snapshot.clone() else {
             return;
         };
@@ -114,9 +124,20 @@ impl Pokarak {
         let token = self.commit_ui.preview_request;
         let generation = self.commit_ui.request;
         self.commit_ui.selected = Some(path.clone());
+        self.commit_ui.side=Some(side);
+        self.commit_ui.partial=None;
+        self.commit_ui.marked.clear();
         self.commit_ui.preview = None;
         let root = snapshot.root.clone();
-        let task = cx.background_spawn(async move { index::diff(&snapshot, &path) });
+        let task = cx.background_spawn(async move {
+            match partial_index::preview(&snapshot,&path,side) {
+                Ok(preview)=>Ok(preview),
+                Err(error)=>{
+                    let patch=if side==Side::Staged {index::diff(&snapshot,&path).ok().map(|doc|doc.patch).unwrap_or_default()} else {String::new()};
+                    Err(format!("부분 선택을 사용할 수 없습니다. {error:#}\n{patch}"))
+                }
+            }
+        });
         cx.spawn_in(window, async move |view, cx| {
             let result = task.await;
             let _ = view.update_in(cx, |app, window, cx| {
@@ -125,11 +146,10 @@ impl Pokarak {
                 {
                     return;
                 }
-                let text = match result {
-                    Ok(document) => document.patch,
-                    Err(error) => format!("인덱스 미리보기: {error:#}"),
-                };
-                app.commit_ui.preview = Some(commit_editor(&text, true, window, cx));
+                match result {
+                    Ok(preview)=>app.commit_ui.partial=Some(Arc::new(preview)),
+                    Err(text)=>app.commit_ui.preview=Some(commit_editor(&text,true,window,cx)),
+                }
                 cx.notify();
             });
         })
@@ -327,9 +347,10 @@ impl Pokarak {
                         // original PathBuf, never this label, reaches Git argv.
                         let label = format!("{status} {}", display_path(&file.path));
                         let tip = file.old_path.as_ref().map(|old|format!("{} → {}",display_path(old),display_path(&file.path))).unwrap_or_else(||label.clone());
-                        let selected = app.commit_ui.selected.as_ref()==Some(&file.path) && !stage;
+                        let side=if stage {Side::Unstaged}else{Side::Staged};
+                        let selected = app.commit_ui.selected.as_ref()==Some(&file.path) && app.commit_ui.side==Some(side);
                         rows = rows.child(div().flex().items_center().gap_1()
-                            .child(commit_button(&weak,(if stage {"work-file"}else{"index-file"},ix),label,disabled || stage,move |app,w,cx|app.select_index_preview(path.clone(),w,cx))
+                            .child(commit_button(&weak,(if stage {"work-file"}else{"index-file"},ix),label,disabled,move |app,w,cx|app.select_index_preview(path.clone(),side,w,cx))
                                 .selected(selected).tooltip(tip).flex_1().min_w_0().justify_start().overflow_hidden())
                             .child(commit_button(&weak,(if stage {"stage-file"}else{"unstage-file"},ix),if stage {"Stage"}else{"Unstage"},disabled,move |app,w,cx|app.change_commit_index(stage,StageScope::Files(paths.clone()),w,cx))));
                     }
@@ -339,11 +360,14 @@ impl Pokarak {
             }
             let mut preview = div().v_flex().flex_1().min_w_0().gap_1()
                 .child(div().flex().items_center().justify_between()
-                    .child(div().text_size(px(12.)).child("HEAD → Index · 읽기 전용"))
+                    .child(div().text_size(px(12.)).child(if app.commit_ui.side == Some(Side::Unstaged) {"Index → 작업 파일"} else {"HEAD → Index"}))
+                    .child(commit_button(&weak,"apply-selected-lines",format!("선택 {}줄 {}",app.commit_ui.marked.len(),if app.commit_ui.side==Some(Side::Unstaged) {"Stage"} else {"Unstage"}),disabled || app.commit_ui.marked.is_empty() || app.commit_ui.partial.is_none(),|app,w,cx|app.apply_line_selection(w,cx)))
                     .child(commit_button(&weak,"index-refresh","새로고침",app.git_is_busy() || app.commit_ui.reading,|app,w,cx|app.read_commit_index(w,cx))));
-            preview = if let Some(editor)=&app.commit_ui.preview {
+            preview = if let Some(partial)=&app.commit_ui.partial {
+                preview.child(app.partial_rows(partial.clone(),weak.clone(),Palette::new(cx)))
+            } else if let Some(editor)=&app.commit_ui.preview {
                 preview.child(Editor::new(editor).aria_label("실제 Git index diff 미리보기").readonly(true).h(px(204.)).font_family("JetBrains Mono").text_size(px(12.)))
-            } else { preview.child(div().h(px(204.)).p_2().child(commit_note(if app.commit_ui.selected.is_some(){"Index blob을 읽는 중…"}else{"Staged 파일을 선택하면 실제 커밋 내용을 표시합니다."}))) };
+            } else { preview.child(div().h(px(204.)).p_2().child(commit_note(if app.commit_ui.selected.is_some(){"파일 변경을 읽는 중…"}else{"파일을 선택하면 변경 내용을 표시합니다."}))) };
             body=body.child(div().flex().gap_3().child(lists).child(preview));
             if let Some(message)=app.commit_ui.messages.get(root) {
                 body=body.child(div().text_size(px(12.)).child("커밋 메시지"))

@@ -12,8 +12,13 @@ pub mod commit_actions;
 mod file_save;
 pub mod files;
 pub mod history_actions;
+pub mod ignore;
 pub mod integration;
+pub mod preview;
+pub mod recovery;
+pub mod repository;
 pub mod sync;
+pub mod tags;
 pub mod workflow;
 pub mod worktrees;
 pub use file_save::save_file;
@@ -301,6 +306,7 @@ impl GitOperations {
                 let spec = format!("+refs/heads/*:refs/remotes/{remote}/*");
                 self.checked(&[
                     "fetch",
+                    "--progress",
                     "--no-tags",
                     "--no-prune-tags",
                     if *prune { "--prune" } else { "--no-prune" },
@@ -320,6 +326,7 @@ impl GitOperations {
                     "-c",
                     &mirror,
                     "push",
+                    "--progress",
                     "--no-force",
                     "--no-follow-tags",
                     "--no-prune",
@@ -342,6 +349,7 @@ impl GitOperations {
                 let reference = format!("refs/heads/{remote_branch}");
                 let fetched = self.checked(&[
                     "fetch",
+                    "--progress",
                     "--no-tags",
                     "--no-prune",
                     "--no-prune-tags",
@@ -579,7 +587,11 @@ impl GitOperations {
     }
 
     fn metadata(&self, args: &[&str]) -> Result<Vec<u8>> {
-        let output = self.check_result(capture(self.command(args), self.timeout, &self.cancellation)?)?;
+        let output = self.check_result(capture(
+            self.command(args),
+            self.timeout,
+            &self.cancellation,
+        )?)?;
         ensure!(
             !output.truncated,
             "Git metadata exceeds the safety limit; use Git externally to narrow it"
@@ -598,12 +610,22 @@ impl GitOperations {
             self.root.display(),
             String::from_utf8_lossy(&result.stderr).trim(),
             String::from_utf8_lossy(&result.stdout).trim(),
-            errors::guidance(errors::classify_diagnostics(&format!("{}\n{}", String::from_utf8_lossy(&result.stderr), String::from_utf8_lossy(&result.stdout))))
+            errors::guidance(errors::classify_diagnostics(&format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stderr),
+                String::from_utf8_lossy(&result.stdout)
+            )))
         );
         Ok(result)
     }
 
     fn command(&self, args: &[&str]) -> Command {
+        self.command_at(args, None)
+    }
+
+    // Explicit new-repository operations pin cwd with fchdir before exec.
+    // Git then uses ., without resolving the destination pathname again.
+    fn command_at(&self, args: &[&str], directory: Option<libc::c_int>) -> Command {
         let mut command = Command::new("git");
         // Remove repository/config injection, preserving credentials, SSH agent,
         // SSH command, and GIT_CONFIG_GLOBAL/SYSTEM (also used by test fixtures).
@@ -661,12 +683,29 @@ impl GitOperations {
                 "submodule.recurse=false",
                 "-C",
             ])
-            .arg(&self.root)
+            .arg(if directory.is_some() {
+                Path::new(".")
+            } else {
+                &self.root
+            })
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
+        if let Some(descriptor) = directory {
+            // SAFETY: the caller keeps this directory FD alive until capture
+            // returns; fchdir is async-signal-safe and needs no allocation.
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::fchdir(descriptor) != 0 {
+                        Err(io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+        }
         command
     }
 
@@ -676,8 +715,14 @@ impl GitOperations {
 
     // Child operation modules use this for per-command environment changes.
     fn run_command(&self, command: Command) -> Result<Captured> {
-        capture_observed(command, self.timeout, &self.cancellation, OUTPUT_LIMIT, self.progress.as_ref().map(|p| (self.root.as_path(), p)))
-            .with_context(|| format!("Git in {}", self.root.display()))
+        capture_observed(
+            command,
+            self.timeout,
+            &self.cancellation,
+            OUTPUT_LIMIT,
+            self.progress.as_ref().map(|p| (self.root.as_path(), p)),
+        )
+        .with_context(|| format!("Git in {}", self.root.display()))
     }
 }
 
@@ -783,7 +828,9 @@ fn drain(
         match stream.read(&mut buffer) {
             Ok(0) => return Ok(true),
             Ok(n) => {
-                if let Some((root, progress, channel)) = observe { progress.emit(root, channel, &buffer[..n]); }
+                if let Some((root, progress, channel)) = observe {
+                    progress.emit(root, channel, &buffer[..n]);
+                }
                 let retain = n.min(limit.saturating_sub(kept.len()));
                 kept.extend_from_slice(&buffer[..retain]);
                 *truncated |= retain != n;
@@ -1010,6 +1057,28 @@ mod tests {
     mod exact_comparison {
         use super::*;
         include!("operations/comparison_tests.rs");
+    }
+
+    mod preview_actions {
+        use super::*;
+        include!("operations/preview_tests.rs");
+    }
+    mod recovery_actions {
+        use super::*;
+        include!("operations/recovery_tests.rs");
+    }
+    mod tag_actions {
+        use super::*;
+        include!("operations/tags_tests.rs");
+    }
+
+    mod ignore_actions {
+        use super::*;
+        include!("operations/ignore_tests.rs");
+    }
+    mod repository_actions {
+        use super::*;
+        include!("operations/repository_tests.rs");
     }
 
     mod progress_tests {

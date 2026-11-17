@@ -28,6 +28,10 @@ pub struct Commit {
 pub struct GraphRow {
     pub lane: usize,
     pub incoming: usize,
+    /// Track identity is independent of its column as lanes shift at forks and joins.
+    pub track: usize,
+    pub incoming_tracks: Vec<usize>,
+    pub outgoing_tracks: Vec<usize>,
     pub columns: usize,
     pub edges: Vec<(usize, usize)>,
 }
@@ -43,7 +47,8 @@ pub struct HistoryCursor {
     root: PathBuf,
     tips: Vec<String>,
     refs: BTreeMap<String, Vec<String>>,
-    lanes: Vec<String>,
+    lanes: Vec<GraphLane>,
+    next_track: usize,
     offset: usize,
     shallow: bool,
 }
@@ -108,6 +113,7 @@ pub fn first_page(root: &Path, size: usize) -> Result<HistoryPage> {
         tips: refs.keys().cloned().collect(),
         refs,
         lanes: vec![],
+        next_track: 0,
         offset: 0,
         shallow,
     };
@@ -149,7 +155,7 @@ pub fn next_page(root: &Path, cursor: &HistoryCursor, size: usize) -> Result<His
         .into_iter()
         .map(|mut commit| {
             commit.refs = cursor.refs.get(&commit.oid).cloned().unwrap_or_default();
-            let graph = graph_row(&mut cursor.lanes, &commit);
+            let graph = graph_row(&mut cursor.lanes, &mut cursor.next_track, &commit);
             HistoryEntry { commit, graph }
         })
         .collect::<Vec<_>>();
@@ -202,40 +208,63 @@ fn parse_commits(data: &[u8]) -> Result<Vec<Commit>> {
         .collect()
 }
 
-fn graph_row(lanes: &mut Vec<String>, commit: &Commit) -> GraphRow {
+#[derive(Debug, Clone)]
+struct GraphLane {
+    oid: String,
+    track: usize,
+}
+
+fn graph_row(lanes: &mut Vec<GraphLane>, next_track: &mut usize, commit: &Commit) -> GraphRow {
     let incoming = lanes.len();
+    let mut new_track = || {
+        let track = *next_track;
+        *next_track += 1;
+        track
+    };
     let lane = lanes
         .iter()
-        .position(|oid| oid == &commit.oid)
+        .position(|l| l.oid == commit.oid)
         .unwrap_or_else(|| {
-            lanes.push(commit.oid.clone());
+            lanes.push(GraphLane {
+                oid: commit.oid.clone(),
+                track: new_track(),
+            });
             lanes.len() - 1
         });
     let before = lanes.clone();
-    lanes.remove(lane);
+    let track = lanes.remove(lane).track;
     let mut insertion = lane.min(lanes.len());
-    for parent in &commit.parents {
-        if !lanes.contains(parent) {
-            lanes.insert(insertion, parent.clone());
+    for (index, parent) in commit.parents.iter().enumerate() {
+        if !lanes.iter().any(|l| &l.oid == parent) {
+            lanes.insert(
+                insertion,
+                GraphLane {
+                    oid: parent.clone(),
+                    track: if index == 0 { track } else { new_track() },
+                },
+            );
             insertion += 1;
         }
     }
     let mut edges = vec![];
-    for (from, oid) in before.iter().enumerate() {
+    for (from, previous) in before.iter().enumerate() {
         if from != lane
-            && let Some(to) = lanes.iter().position(|o| o == oid)
+            && let Some(to) = lanes.iter().position(|l| l.oid == previous.oid)
         {
             edges.push((from, to));
         }
     }
     for parent in &commit.parents {
-        if let Some(to) = lanes.iter().position(|o| o == parent) {
+        if let Some(to) = lanes.iter().position(|l| &l.oid == parent) {
             edges.push((lane, to));
         }
     }
     GraphRow {
         lane,
         incoming,
+        track,
+        incoming_tracks: before[..incoming].iter().map(|l| l.track).collect(),
+        outgoing_tracks: lanes.iter().map(|l| l.track).collect(),
         columns: before.len().max(lanes.len()),
         edges,
     }

@@ -1,7 +1,10 @@
 //! Dedicated immutable history view. Its editors never enter working-tree
 //! documents/navigation, and writes use the existing Git job lifecycle.
 mod home;
+mod lanes;
+mod rows;
 use super::*;
+use lanes::{BranchTrace, graph_view, reference_name, track_color};
 use pokarak_core::history::{self, Commit, CommitDetail, GraphRow, HistoryCursor, HistoryEntry};
 use pokarak_core::operations::{
     GitOperations,
@@ -14,7 +17,8 @@ pub(super) struct HistoryUi {
     root: Option<PathBuf>,
     request: u64,
     loading: bool,
-    entries: Vec<HistoryEntry>,
+    entries: Arc<Vec<HistoryEntry>>,
+    hovered_tip: Option<String>,
     cursor: Option<HistoryCursor>,
     limit_reached: bool,
     shallow: bool,
@@ -99,7 +103,8 @@ impl Pokarak {
         self.navigating = false;
         self.git_history.request += 1;
         self.git_history.root = Some(root);
-        self.git_history.entries.clear();
+        self.git_history.entries = Arc::default();
+        self.git_history.hovered_tip = None;
         self.git_history.cursor = None;
         self.git_history.detail = None;
         self.git_history.selected = None;
@@ -130,7 +135,7 @@ impl Pokarak {
                 }
             },
             move |app, page, window, cx| {
-                app.git_history.entries.extend(page.entries);
+                Arc::make_mut(&mut app.git_history.entries).extend(page.entries);
                 app.git_history.cursor = page.next;
                 app.git_history.limit_reached = page.limit_reached;
                 app.git_history.shallow = page.shallow;
@@ -322,40 +327,6 @@ fn visible(text: &str) -> String {
         .replace('\r', "\\r")
         .replace('\t', "\\t")
 }
-fn graph_view(row: GraphRow, width: f32, palette: Palette) -> impl IntoElement {
-    canvas(
-        move |_, _, _| row,
-        move |bounds, row, window, _| {
-            let x = |lane: usize| bounds.left() + px(10. + lane as f32 * 14.);
-            let top = bounds.top();
-            let middle = top + px(15.);
-            let bottom = bounds.bottom();
-            let mut path = PathBuilder::stroke(px(1.5));
-            for lane in 0..row.incoming {
-                path.move_to(point(x(lane), top));
-                path.line_to(point(x(lane), middle));
-            }
-            for (from, to) in row.edges {
-                path.move_to(point(x(from), middle));
-                path.line_to(point(x(to), bottom));
-            }
-            if let Ok(path) = path.build() {
-                window.paint_path(path, palette.rgb(BLUE));
-            }
-            window.paint_quad(fill(
-                Bounds::new(
-                    point(x(row.lane) - px(3.), middle - px(3.)),
-                    size(px(6.), px(6.)),
-                ),
-                palette.rgb(TEXT),
-            ));
-        },
-    )
-    .w(px(width))
-    .h(px(30.))
-    .flex_none()
-}
-
 #[cfg(test)]
 mod tests {
     use super::HistoryUi;

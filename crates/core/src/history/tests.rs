@@ -101,7 +101,13 @@ fn history_root_merge_refs_and_stable_pagination() {
             .contains(&"refs/tags/release".into())
     );
     assert_eq!(page.entries[0].graph.edges, [(0, 0), (0, 1)]);
+    let fork = &page.entries[0].graph;
+    assert_eq!(fork.outgoing_tracks[0], fork.track);
+    assert_ne!(fork.outgoing_tracks[0], fork.outgoing_tracks[1]);
     let all_before = first_page(&f.root, 200).unwrap();
+    for rows in all_before.entries.windows(2) {
+        assert_eq!(rows[0].graph.outgoing_tracks, rows[1].graph.incoming_tracks);
+    }
     f.commit("later", "later"); // Pinned cursor must not shift when HEAD moves.
     let mut rows = page.entries.clone();
     let mut next = page.next;

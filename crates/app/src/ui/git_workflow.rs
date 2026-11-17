@@ -12,17 +12,36 @@ pub(super) struct WorkflowUi {
     include_untracked: bool,
     saving_resolution: bool,
     draft: Option<ResolutionDraft>,
+    retained: HashMap<(PathBuf, PathBuf), ResolutionDraft>,
 }
 struct ResolutionDraft {
     root: PathBuf,
     snapshot: ConflictSnapshot,
-    source: Entity<EditorState>,
+    sources: [Entity<EditorState>; 3],
     result: Entity<EditorState>,
-    source_stage: u8,
+    show_base: bool,
+    kind: Option<ProgressKind>,
     side: Option<u8>,
     can_edit: bool,
+    manual: Option<String>,
+    _result_subscription: Subscription,
 }
 impl ResolutionDraft {
+    fn key(&self) -> (PathBuf, PathBuf) {
+        (self.root.clone(), self.snapshot.file.path.clone())
+    }
+    fn dirty(&self, cx: &App) -> bool {
+        let original = self
+            .snapshot
+            .working
+            .as_ref()
+            .and_then(ConflictContent::text)
+            .unwrap_or("");
+        self.side.is_some()
+            || (self.can_edit
+                && (self.result.read(cx).value().as_ref() != original
+                    || self.manual.as_deref().is_some_and(|text| text != original)))
+    }
     fn side_content(&self, stage: u8) -> Option<&ConflictContent> {
         self.snapshot
             .stages
@@ -94,16 +113,17 @@ impl Pokarak {
     }
 
     pub(super) fn has_unsaved_conflict(&self, cx: &App) -> bool {
-        self.workflow.draft.as_ref().is_some_and(|draft| {
-            let original = draft
-                .snapshot
-                .working
-                .as_ref()
-                .and_then(ConflictContent::text)
-                .unwrap_or("");
-            draft.can_edit
-                && (draft.side.is_some() || draft.result.read(cx).value().as_ref() != original)
-        })
+        self.workflow
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.dirty(cx))
+            || self.workflow.retained.values().any(|draft| draft.dirty(cx))
+    }
+
+    fn retain_active_conflict(&mut self) {
+        if let Some(draft) = self.workflow.draft.take() {
+            self.workflow.retained.insert(draft.key(), draft);
+        }
     }
 
     pub(super) fn workflow_read<T: Send + 'static>(
@@ -235,6 +255,7 @@ impl Pokarak {
                 .child(div().flex().gap_2().items_center()
                     .child(div().flex_1().child(format!("Stash {}개 · 모든 워크트리 공유",state.stashes.len())))
                     .child(wf_action(&weak, "stash-new", "변경사항 보관…", busy, move |app,w,cx| app.show_stash_save(save_root.clone(),w,cx)))
+                    .child(wf_action(&weak,"workflow-pop","Pop…",busy,|app,w,cx|app.open_stash_pop(w,cx)))
                     .child(wf_action(&weak, "workflow-refresh", "새로고침", busy, |app,w,cx| app.open_git_workflow(w,cx))));
             let mut stashes = div().id("workflow-stashes").h(ui_px(116.)).overflow_y_scroll().v_flex().gap_1();
             if state.stashes.is_empty() { stashes = stashes.child(workflow_note("보관된 stash가 없습니다.")); }
@@ -264,6 +285,13 @@ impl Pokarak {
                 let root = state.root.clone(); let file = file.clone();
                 let label = format!("{}  · stages {}", file.path.display(), file.stages.iter().map(|s|s.stage.to_string()).collect::<Vec<_>>().join("/"));
                 conflicts = conflicts.child(wf_action(&weak,("conflict-entry", index),label,busy,move |app,w,cx| app.open_conflict(root.clone(),file.clone(),w,cx)).w_full().justify_start());
+            }
+            if let Some(view)=weak.upgrade() {
+                let app=view.read(cx);
+                for (index,draft) in app.workflow.draft.iter().chain(app.workflow.retained.values()).filter(|draft|draft.root==state.root&&draft.dirty(cx)).enumerate() {
+                    let root=draft.root.clone();let file=draft.snapshot.file.clone();
+                    conflicts=conflicts.child(wf_action(&weak,("retained-conflict",index),format!("작성한 결과로 돌아가기 · {}",file.path.display()),busy,move |app,w,cx|app.open_conflict(root.clone(),file.clone(),w,cx)).w_full().justify_start());
+                }
             }
             dialog.title("Stash / 충돌 해결").width(ui_px(740.)).margin_top(ui_px(24.)).on_ok(|_,_,_|false)
                 .child(body.child(conflicts)).footer(workflow_close())
@@ -485,6 +513,27 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.git_is_busy() || self.current.as_ref() != Some(&root) {
+            return;
+        }
+        let key = (root.clone(), file.path.clone());
+        if self
+            .workflow
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.key() == key)
+        {
+            self.workflow.request += 1;
+            self.present_conflict(window, cx);
+            return;
+        }
+        if let Some(draft) = self.workflow.retained.remove(&key) {
+            self.workflow.request += 1;
+            self.retain_active_conflict();
+            self.workflow.draft = Some(draft);
+            self.present_conflict(window, cx);
+            return;
+        }
         let target = root.clone();
         self.workflow_read(
             root,
@@ -515,18 +564,20 @@ impl Pokarak {
                 .working
                 .as_ref()
                 .is_none_or(|c| matches!(c, ConflictContent::Text(_)));
-        let base = snapshot
-            .stages
-            .iter()
-            .find(|s| s.entry.stage == 1)
-            .map(|s| &s.content);
-        let source = workflow_editor(
-            describe_content(base),
-            content_language(&snapshot.file.path, base),
-            true,
-            window,
-            cx,
-        );
+        let sources = [1, 2, 3].map(|stage| {
+            let content = snapshot
+                .stages
+                .iter()
+                .find(|s| s.entry.stage == stage)
+                .map(|s| &s.content);
+            workflow_editor(
+                describe_content(content),
+                content_language(&snapshot.file.path, content),
+                true,
+                window,
+                cx,
+            )
+        });
         let result = workflow_editor(
             snapshot
                 .working
@@ -541,65 +592,171 @@ impl Pokarak {
             window,
             cx,
         );
+        let subscription = cx.subscribe(&result, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
+        self.retain_active_conflict();
         self.workflow.draft = Some(ResolutionDraft {
-            root: root.clone(),
+            root,
             snapshot,
-            source,
+            sources,
             result,
-            source_stage: 1,
+            show_base: false,
+            kind,
             side: None,
             can_edit,
+            manual: None,
+            _result_subscription: subscription,
         });
+        self.present_conflict(window, cx);
+    }
+    fn present_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
-        let (ours, theirs) = kind.unwrap_or(ProgressKind::Merge).side_labels();
         window.close_all_dialogs(cx);
-        window.open_dialog(cx,move |dialog,_,cx| {
-            let Some(view)=weak.upgrade() else {return dialog;};
-            let app=view.read(cx);let Some(draft)=&app.workflow.draft else {return dialog;};
-            let busy=workflow_disabled(&weak,&root,cx);let mut tabs=div().flex().gap_2();
-            for (stage,label,id) in [(1,"Base","conflict-base"),(2,"Ours","conflict-ours"),(3,"Theirs","conflict-theirs")] {
-                tabs=tabs.child(wf_action(&weak,id,label,busy,move |app,w,cx|app.workflow_source(stage,w,cx)).selected(draft.source_stage==stage));
-            }
-            let stage_info=draft.snapshot.stages.iter().find(|s|s.entry.stage==draft.source_stage).map(|s|format!("stage {} · {} · {}",s.entry.stage,s.entry.mode,s.entry.oid)).unwrap_or_else(||"이 stage는 없습니다 (추가/삭제 충돌)".into());
-            let mut choices=div().flex().gap_2();
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let Some(view) = weak.upgrade() else { return dialog; };
+            let app = view.read(cx);
+            let Some(draft) = &app.workflow.draft else { return dialog; };
+            let busy = workflow_disabled(&weak, &draft.root, cx);
+            let viewport_height = f32::from(window.viewport_size().height);
+            let (source_height, result_height) = conflict_heights(viewport_height);
+            let (ours, theirs) = draft.kind.unwrap_or(ProgressKind::Merge).side_labels();
+            let mut sources = div().flex().min_w_0().gap_2();
+            if draft.show_base { sources = sources.child(conflict_source_pane(draft,1,"Base · common ancestor (stage 1)",source_height)); }
+            sources = sources.child(conflict_source_pane(draft,2,ours,source_height))
+                .child(conflict_source_pane(draft,3,theirs,source_height));
+            let mut choices = div().flex().flex_wrap().items_center().gap_2();
             for (side,label,id) in [(2,"Ours 사용","choose-ours"),(3,"Theirs 사용","choose-theirs")] {
-                let content=draft.side_content(side);let supported=!matches!(content,Some(ConflictContent::Unsupported(_)));
-                let label=if content.is_none(){format!("{label} (파일 삭제)")}else{label.into()};
-                choices=choices.child(wf_action(&weak,id,label,busy||!supported,move |app,w,cx|app.workflow_choose_side(side,w,cx)).selected(draft.side==Some(side)));
+                let content = draft.side_content(side);
+                let supported = !matches!(content,Some(ConflictContent::Unsupported(_)));
+                let label = if content.is_none() { format!("{label} (파일 삭제)") } else { label.into() };
+                choices = choices.child(wf_action(&weak,id,label,busy || !supported,move |app,w,cx|app.workflow_choose_side(side,w,cx)).selected(draft.side == Some(side)));
             }
-            if draft.can_edit { choices=choices.child(wf_action(&weak,"conflict-edit","결과 편집",busy,|app,w,cx|app.workflow_edit(w,cx)).selected(draft.side.is_none())); }
-            let readonly=draft.result_readonly();
-            let save_label=if draft.side.is_some_and(|s|draft.side_content(s).is_none()){ "삭제하고 해결 표시" } else { "저장하고 해결 표시" };
-            let disabled=busy||(!draft.can_edit&&draft.side.is_none());
-            let title=format!("충돌 해결 · {}",draft.snapshot.file.path.display());
-            dialog.title(div().text_ellipsis().child(title)).width(ui_px(820.)).margin_top(ui_px(16.)).overlay_closable(false).on_ok(|_,_,_|false)
-                .child(div().v_flex().gap_1().child(workflow_scope(&root))
-                    .child(workflow_note(&format!("{ours}\n{theirs}")))
-                    .child(tabs).child(div().text_size(ui_text(11.)).text_ellipsis().child(stage_info))
-                    .child(editor_view(&draft.source,true,86.))
-                    .child(choices).child(editor_view(&draft.result,readonly,130.))
-                    .child(workflow_note("결과만 저장·stage 합니다. 커밋/푸시는 별도입니다. 외부 변경이 있으면 다시 열어 비교하세요.")))
-                .footer(div().flex().gap_2().justify_end().child(workflow_close()).child(wf_action(&weak,"resolve-save",save_label,disabled,|app,w,cx|app.save_workflow_resolution(w,cx)).primary()))
+            if draft.can_edit {
+                choices = choices.child(wf_action(&weak,"conflict-edit","결과 편집",busy,|app,w,cx|app.workflow_edit(w,cx)).selected(draft.side.is_none()));
+                if draft.manual.is_some() { choices = choices.child(wf_action(&weak,"conflict-restore-edit","이전 편집 복원",busy,|app,w,cx|app.workflow_restore_result(w,cx))); }
+            }
+            let marker_count = conflict_marker_lines(draft.result.read(cx).value().as_ref()).len();
+            let save_label = if draft.side.is_some_and(|s|draft.side_content(s).is_none()) { "삭제하고 해결 표시" } else { "저장하고 해결 표시" };
+            let title = format!("충돌 해결 · {}",draft.snapshot.file.path.display());
+            dialog.title(div().text_ellipsis().child(title)).width(ui_px(880.)).margin_top(ui_px(12.)).overlay_closable(false).on_ok(|_,_,_|false)
+                .child(div().id("conflict-body").v_flex().gap_1().max_h(ui_px((viewport_height-142.).max(300.))).overflow_y_scroll()
+                    .child(workflow_scope(&draft.root))
+                    .child(div().flex().items_center().gap_2()
+                        .child(div().flex_1().text_size(ui_text(11.)).child("원본 · 읽기 전용"))
+                        .child(wf_action(&weak,"conflict-base","Base 보기",busy,|app,_,cx| { if let Some(draft)=app.workflow.draft.as_mut() { draft.show_base = !draft.show_base; } cx.notify(); }).selected(draft.show_base))
+                        .child(wf_action(&weak,"conflict-next-file","다음 충돌 파일 →",busy,|app,w,cx|app.open_next_conflict(w,cx))))
+                    .child(sources).child(choices)
+                    .child(div().flex().items_center().gap_2()
+                        .child(div().flex_1().text_size(ui_text(11.)).child(format!("결과 · 충돌 마커 {marker_count}개")))
+                        .child(wf_action(&weak,"conflict-marker-prev","이전 마커 ↑",busy || marker_count == 0,|app,w,cx|app.navigate_conflict_marker(false,w,cx)))
+                        .child(wf_action(&weak,"conflict-marker-next","다음 마커 ↓",busy || marker_count == 0,|app,w,cx|app.navigate_conflict_marker(true,w,cx))))
+                    .child(Editor::new(&draft.result).aria_label("충돌 해결 결과").readonly(draft.result_readonly()).bordered(true).h(ui_px(result_height)))
+                    .child(workflow_note("작성한 결과는 파일·워크트리별로 유지됩니다. 저장 시 원래 디스크·index 상태를 검증하고 결과만 저장·stage 합니다.")))
+                .footer(div().flex().gap_2().justify_end()
+                    .child(wf_action(&weak,"conflict-discard","초안 버리기…",busy,|app,w,cx|app.confirm_discard_conflict(w,cx)))
+                    .child(wf_action(&weak,"conflict-back","목록 · 결과 보관",busy,|app,w,cx|app.open_git_workflow(w,cx)))
+                    .child(workflow_close())
+                    .child(wf_action(&weak,"resolve-save",save_label,busy || (!draft.can_edit && draft.side.is_none()),|app,w,cx|app.save_workflow_resolution(w,cx)).primary()))
         });
     }
-    fn workflow_source(&mut self, stage: u8, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(draft) = self.workflow.draft.as_mut() else {
+    fn open_next_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(draft) = &self.workflow.draft else {
             return;
         };
-        draft.source_stage = stage;
-        let content = draft.side_content(stage);
-        let text = describe_content(content);
-        let lang = content_language(&draft.snapshot.file.path, content);
-        draft.source.update(cx, |editor, cx| {
-            editor.set_highlighter(lang, cx);
-            editor.set_value(text, window, cx);
+        let root = draft.root.clone();
+        let path = draft.snapshot.file.path.clone();
+        self.workflow_read(
+            root,
+            |ops| ops.workflow_state(),
+            move |app, state, w, cx| {
+                if let Some(file) = next_conflict_file(&state.conflicts, &path) {
+                    app.open_conflict(state.root, file.clone(), w, cx);
+                } else {
+                    app.status = "다른 미해결 충돌 파일이 없습니다. 현재 결과는 유지됩니다.".into();
+                    cx.notify();
+                }
+            },
+            window,
+            cx,
+        );
+    }
+    fn navigate_conflict_marker(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(draft) = &self.workflow.draft else {
+            return;
+        };
+        if self.git_is_busy() || self.current.as_ref() != Some(&draft.root) {
+            return;
+        }
+        let editor = draft.result.clone();
+        let state = editor.read(cx);
+        let lines = conflict_marker_lines(state.value().as_ref());
+        let Some(line) = next_marker_line(&lines, state.cursor_position().line, forward) else {
+            return;
+        };
+        // EditorState moves and scrolls its own caret; do not guess pixel offsets.
+        editor.update(cx, |editor, cx| {
+            editor.set_cursor_position(Position::new(line, 0), window, cx);
+            let start = editor.text().position_to_offset(&Position::new(line, 0));
+            let end = start
+                + editor
+                    .value()
+                    .lines()
+                    .nth(line as usize)
+                    .map_or(0, str::len);
+            editor.set_selected_range(start..end, cx);
         });
         cx.notify();
     }
+    fn confirm_discard_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(draft) = &self.workflow.draft else {
+            return;
+        };
+        let key = draft.key();
+        let weak = cx.entity().downgrade();
+        window.open_dialog(cx,move |dialog,_,cx| {
+            let target=key.clone();
+            dialog.title("작성한 충돌 해결 초안 버리기").width(ui_px(620.)).overlay_closable(false).on_ok(|_,_,_|false)
+                .child(div().v_flex().gap_2().child(workflow_scope(&key.0)).child(workflow_note(&format!("{}의 보관 중인 편집 결과와 side 선택을 버립니다. 작업 파일과 index는 바꾸지 않습니다.",key.1.display()))))
+                .footer(div().flex().justify_end().gap_2().child(workflow_close())
+                    .child(wf_action(&weak,"conflict-discard-confirm","이 초안 버리기",workflow_disabled(&weak,&key.0,cx),move |app,w,cx| {
+                        // A stale confirmation cannot discard a newly activated file.
+                        if app.workflow.draft.as_ref().is_none_or(|draft|draft.key()!=target) { return; }
+                        app.workflow.draft=None;
+                        app.workflow.retained.remove(&target);
+                        app.open_git_workflow(w,cx);
+                    }).danger()))
+        });
+    }
     fn workflow_choose_side(&mut self, side: u8, window: &mut Window, cx: &mut Context<Self>) {
+        if self.git_is_busy()
+            || self
+                .workflow
+                .draft
+                .as_ref()
+                .is_none_or(|d| self.current.as_ref() != Some(&d.root))
+        {
+            return;
+        }
         let Some(draft) = self.workflow.draft.as_mut() else {
             return;
         };
+        let current = draft.result.read(cx).value().to_string();
+        let selected_text = draft
+            .side
+            .and_then(|s| draft.side_content(s))
+            .and_then(ConflictContent::text);
+        let manual = retained_manual_result(draft.can_edit, draft.side, &current, selected_text);
+        if let Some(manual) = manual {
+            draft.manual = Some(manual);
+        }
         draft.side = Some(side);
         let content = draft.side_content(side);
         let text = describe_content(content);
@@ -613,6 +770,15 @@ impl Pokarak {
         cx.notify();
     }
     fn workflow_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.git_is_busy()
+            || self
+                .workflow
+                .draft
+                .as_ref()
+                .is_none_or(|d| self.current.as_ref() != Some(&d.root))
+        {
+            return;
+        }
         let Some(draft) = self.workflow.draft.as_mut() else {
             return;
         };
@@ -633,6 +799,38 @@ impl Pokarak {
         draft.result.read(cx).focus_handle(cx).focus(window, cx);
         cx.notify();
     }
+    fn workflow_restore_result(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.git_is_busy()
+            || self
+                .workflow
+                .draft
+                .as_ref()
+                .is_none_or(|d| self.current.as_ref() != Some(&d.root))
+        {
+            return;
+        }
+        let Some(draft) = self.workflow.draft.as_mut() else {
+            return;
+        };
+        if !draft.can_edit {
+            return;
+        }
+        let Some(text) = draft.manual.take() else {
+            return;
+        };
+        // Restoration is reversible too; absent-side explanatory text is not a draft.
+        if !draft.result_readonly() {
+            draft.manual = Some(draft.result.read(cx).value().to_string());
+        }
+        draft.side = None;
+        draft.result.update(cx, |editor, cx| {
+            editor.set_highlighter(language(&draft.snapshot.file.path), cx);
+            editor.set_value(text, window, cx);
+            editor.set_readonly(false, cx);
+        });
+        draft.result.read(cx).focus_handle(cx).focus(window, cx);
+        cx.notify();
+    }
     fn save_workflow_resolution(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = &self.workflow.draft else {
             return;
@@ -643,6 +841,91 @@ impl Pokarak {
         };
         self.workflow_write(draft.root.clone(), "충돌 결과 저장·stage", job, window, cx);
     }
+}
+fn retained_manual_result(
+    can_edit: bool,
+    side: Option<u8>,
+    current: &str,
+    selected_text: Option<&str>,
+) -> Option<String> {
+    (can_edit && (side.is_none() || selected_text.is_some_and(|text| text != current)))
+        .then(|| current.to_owned())
+}
+fn conflict_heights(viewport_height: f32) -> (f32, f32) {
+    let available = (viewport_height - 320.).max(200.);
+    (
+        (available * 0.44).clamp(88., 180.),
+        (available * 0.56).clamp(112., 260.),
+    )
+}
+fn conflict_source_pane(
+    draft: &ResolutionDraft,
+    stage: u8,
+    label: &'static str,
+    height: f32,
+) -> Div {
+    let identity = draft
+        .snapshot
+        .stages
+        .iter()
+        .find(|s| s.entry.stage == stage)
+        .map(|s| format!("{} · {}", s.entry.mode, short_oid(&s.entry.oid)))
+        .unwrap_or_else(|| "stage 없음 · 선택 시 파일 삭제".into());
+    div()
+        .v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap_1()
+        .child(div().h(ui_px(30.)).text_size(ui_text(11.)).child(label))
+        .child(
+            div()
+                .text_size(ui_text(10.))
+                .text_ellipsis()
+                .child(identity),
+        )
+        .child(
+            Editor::new(&draft.sources[(stage - 1) as usize])
+                .aria_label(label)
+                .readonly(true)
+                .bordered(true)
+                .h(ui_px(height)),
+        )
+}
+fn conflict_marker_lines(text: &str) -> Vec<u32> {
+    text.lines()
+        .enumerate()
+        .filter_map(|(line, text)| {
+            let rest = text.strip_prefix("<<<<<<<")?.trim_start_matches('<');
+            (rest.is_empty() || rest.starts_with(char::is_whitespace)).then_some(line as u32)
+        })
+        .collect()
+}
+fn next_marker_line(lines: &[u32], current: u32, forward: bool) -> Option<u32> {
+    if forward {
+        lines
+            .iter()
+            .copied()
+            .find(|line| *line > current)
+            .or_else(|| lines.first().copied())
+    } else {
+        lines
+            .iter()
+            .rev()
+            .copied()
+            .find(|line| *line < current)
+            .or_else(|| lines.last().copied())
+    }
+}
+fn next_conflict_file<'a>(files: &'a [ConflictFile], current: &Path) -> Option<&'a ConflictFile> {
+    let next = files
+        .iter()
+        .position(|file| file.path == current)
+        .map_or(0, |i| i + 1);
+    files
+        .iter()
+        .skip(next)
+        .chain(files.iter().take(next))
+        .find(|file| file.path != current)
 }
 fn stash_write_detail(entry: &StashEntry, action: &WorkflowWrite) -> String {
     let effect = match action {
@@ -738,4 +1021,89 @@ fn editor_view(editor: &Entity<EditorState>, readonly: bool, height: f32) -> imp
         .readonly(readonly)
         .bordered(true)
         .h(ui_px(height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConflictFile, ProgressKind, conflict_heights, conflict_marker_lines, next_conflict_file,
+        next_marker_line, retained_manual_result,
+    };
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn marker_navigation_uses_editor_lines_handles_unicode_and_wraps() {
+        let text = "한글\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> topic\n중간\n<<<<<<<<< custom\nend\n";
+        let lines = conflict_marker_lines(text);
+        assert_eq!(lines, vec![1, 9]);
+        assert_eq!(next_marker_line(&lines, 0, true), Some(1));
+        assert_eq!(next_marker_line(&lines, 1, true), Some(9));
+        assert_eq!(next_marker_line(&lines, 9, true), Some(1));
+        assert_eq!(next_marker_line(&lines, 9, false), Some(1));
+        assert_eq!(next_marker_line(&lines, 1, false), Some(9));
+        assert_eq!(next_marker_line(&[], 0, true), None);
+        assert!(conflict_marker_lines("   <<<<<<< indented\n<<<<<<<operator\n=======").is_empty());
+        assert_eq!(conflict_marker_lines("<<<<<<<\r\ntext\r\n"), vec![0]);
+    }
+
+    #[test]
+    fn next_conflict_wraps_and_survives_resolution_or_disappearing_current_file() {
+        let files: Vec<_> = ["a", "b", "c"]
+            .map(|path| ConflictFile {
+                path: PathBuf::from(path),
+                stages: vec![],
+            })
+            .into();
+        assert_eq!(
+            next_conflict_file(&files, Path::new("a")).unwrap().path,
+            Path::new("b")
+        );
+        assert_eq!(
+            next_conflict_file(&files, Path::new("c")).unwrap().path,
+            Path::new("a")
+        );
+        assert_eq!(
+            next_conflict_file(&files, Path::new("removed"))
+                .unwrap()
+                .path,
+            Path::new("a")
+        );
+        assert!(next_conflict_file(&files[..1], Path::new("a")).is_none());
+        assert!(next_conflict_file(&[], Path::new("a")).is_none());
+    }
+
+    #[test]
+    fn side_switch_preserves_manual_edits_without_replacing_them_with_unedited_side() {
+        let edited = "my edited resolution\n";
+        let mut retained = retained_manual_result(true, None, edited, None);
+        assert_eq!(retained.as_deref(), Some(edited));
+        // Switching Ours -> Theirs must keep the earlier direct edit.
+        if let Some(text) = retained_manual_result(true, Some(2), "ours\n", Some("ours\n")) {
+            retained = Some(text);
+        }
+        assert_eq!(retained.as_deref(), Some(edited));
+        assert_eq!(
+            retained_manual_result(true, Some(2), "edited ours\n", Some("ours\n")),
+            Some("edited ours\n".into())
+        );
+        // Absent-side explanatory text and binary previews are never saved as text edits.
+        assert!(retained_manual_result(true, Some(3), "absent side", None).is_none());
+        assert!(retained_manual_result(false, None, "binary placeholder", None).is_none());
+    }
+
+    #[test]
+    fn minimum_window_keeps_two_usable_source_views_and_editable_result() {
+        let (source, result) = conflict_heights(580.);
+        assert!(source >= 100. && result >= 140.);
+        assert!(source + result <= 270.);
+        let (source, result) = conflict_heights(900.);
+        assert!(source >= 160. && result >= 240.);
+    }
+
+    #[test]
+    fn rebase_source_roles_are_not_confused_with_original_checkout_branch() {
+        let (ours, theirs) = ProgressKind::Rebase.side_labels();
+        assert!(ours.contains("rebased-onto") && ours.contains("stage 2"));
+        assert!(theirs.contains("replayed") && theirs.contains("stage 3"));
+    }
 }

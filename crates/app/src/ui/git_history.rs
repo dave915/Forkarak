@@ -1,5 +1,6 @@
 //! Dedicated immutable history view. Its editors never enter working-tree
 //! documents/navigation, and writes use the existing Git job lifecycle.
+mod columns;
 mod context_actions;
 mod home;
 mod lanes;
@@ -33,6 +34,9 @@ pub(super) struct HistoryUi {
     code: bool,
     scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
+    table_scroll: ScrollHandle,
+    table_width: Option<Pixels>,
+    column_drag: Option<columns::ColumnDrag>,
     error: Option<String>,
 }
 

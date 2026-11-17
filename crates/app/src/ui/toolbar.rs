@@ -12,8 +12,6 @@ impl Pokarak {
         let width = window.viewport_size().width;
         let compact = width < ui_px(1180.);
         let has_projects = !self.projects.is_empty();
-        // Keep the native window controls and settings reachable at high zoom.
-        let two_rows = self.current.is_some() && width < ui_px(1040.);
         let content = div()
             .absolute()
             .inset_0()
@@ -47,8 +45,12 @@ impl Pokarak {
                         .on_click(cx.listener(|app, _, w, cx| app.choose_repository(w, cx))),
                 )
             })
-            .when(self.current.is_some() && !two_rows, |bar| {
-                bar.child(self.git_toolbar(cx))
+            .when(self.current.is_some(), |bar| {
+                bar.child(if compact {
+                    self.compact_git_toolbar(cx)
+                } else {
+                    self.git_toolbar(cx).into_any_element()
+                })
             })
             .child(div().flex_1())
             .when(self.current.is_some(), |bar| {
@@ -97,22 +99,87 @@ impl Pokarak {
             .bg(palette.rgb(SIDE))
             .border_b_0()
             .child(div().relative().size_full().child(content));
+        div().flex_none().child(title).into_any_element()
+    }
+
+    fn compact_git_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
-            .v_flex()
+            .id("compact-git-toolbar")
             .flex_none()
-            .child(title)
-            .when(two_rows, |bar| {
-                bar.child(
-                    div()
-                        .h(ui_px(34.))
-                        .px_2()
-                        .flex()
-                        .items_center()
-                        .bg(palette.rgb(SIDE))
-                        .child(self.git_toolbar(cx)),
+            .flex()
+            .items_center()
+            .gap(ui_px(2.))
+            .h(ui_px(28.))
+            .child(
+                toolbar_icon(
+                    "stage-commit",
+                    IconName::GitCommitHorizontal,
+                    "Stage / 커밋",
                 )
-            })
+                .tooltip_with_action("Stage / 커밋", &OpenGitCommit, None)
+                .disabled(self.loading || self.git_is_busy())
+                .on_click(cx.listener(|a, _, w, cx| a.open_git_commit(w, cx))),
+            )
+            .child(
+                toolbar_icon("compact-git-more", IconName::Ellipsis, "Git 작업 더 보기")
+                    .tooltip("Git 작업 더 보기 · 브랜치, Stash, Fetch, Pull, Push")
+                    .on_click(cx.listener(|a, _, w, cx| a.show_compact_git_menu(w, cx))),
+            )
             .into_any_element()
+    }
+
+    fn show_compact_git_menu(&self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::native_menu::NativeMenu;
+        let busy = self.loading || self.git_is_busy();
+        let mut menu = NativeMenu::new();
+        for (label, command) in [
+            ("브랜치 만들기…", "create"),
+            ("체크아웃…", "checkout"),
+            ("Merge…", "merge"),
+            ("Rebase…", "rebase"),
+            ("Stash…", "stash"),
+            ("Pop…", "pop"),
+            ("Fetch…", "fetch"),
+            ("Pull…", "pull"),
+            ("Push…", "push"),
+            ("Git 작업…", "actions"),
+            ("Git 작업 기록…", "log"),
+        ] {
+            menu = menu.menu_with_disabled(
+                label,
+                busy && command != "log",
+                Box::new(RunToolbar {
+                    root: self.current.clone(),
+                    command: command.into(),
+                }),
+            );
+        }
+        menu.show(window.mouse_position(), window, cx);
+    }
+
+    pub(super) fn run_toolbar_command(
+        &mut self,
+        action: &RunToolbar,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.current != action.root || self.opening_path.is_some() {
+            return;
+        }
+        match action.command.as_str() {
+            "create" => self.load_git_page(Some(Page::Create), w, cx),
+            "checkout" => self.load_git_page(Some(Page::Checkout), w, cx),
+            "merge" => self.load_git_page(Some(Page::Merge), w, cx),
+            "rebase" => self.load_git_page(Some(Page::Rebase), w, cx),
+            "fetch" => self.load_git_page(Some(Page::Fetch), w, cx),
+            "pull" => self.load_git_page(Some(Page::Pull), w, cx),
+            "push" => self.load_git_page(Some(Page::Push), w, cx),
+            "stash" => self.open_git_workflow(w, cx),
+            "pop" => self.open_stash_pop(w, cx),
+            "actions" => self.open_git_actions(w, cx),
+            "log" => self.open_git_log(w, cx),
+            _ => {}
+        }
     }
 
     fn git_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -263,7 +330,11 @@ impl Pokarak {
             .min_w_0()
             .flex_initial()
             .menu(self.projects.len() > 1)
-            .max_width(ui_px(200.))
+            .max_width(ui_px(if window.viewport_size().width < ui_px(1180.) {
+                160.
+            } else {
+                200.
+            }))
             .track_scroll(&scroll)
             .when_some(active, |bar, index| bar.selected_index(index))
             .children(self.projects.iter().enumerate().map(|(index, project)| {
@@ -326,8 +397,9 @@ impl Pokarak {
             .bg(palette.rgb(BG))
             .child(
                 Button::new("view-graph")
-                    .label("Git 그래프")
-                    .when(!compact, |button| button.icon(IconName::GitGraph))
+                    .icon(IconName::GitGraph)
+                    .accessibility_label("Git 그래프")
+                    .when(!compact, |button| button.label("Git 그래프"))
                     .ghost()
                     .compact()
                     .small()
@@ -347,8 +419,10 @@ impl Pokarak {
             )
             .child(
                 Button::new("view-code")
-                    .label("코드 보기")
-                    .when(!compact, |button| button.icon(IconName::CodeXml))
+                    .icon(IconName::CodeXml)
+                    .accessibility_label("코드 보기")
+                    .tooltip("코드 보기")
+                    .when(!compact, |button| button.label("코드 보기"))
                     .ghost()
                     .compact()
                     .small()
@@ -396,4 +470,12 @@ pub(super) fn toolbar_icon(id: &'static str, icon: IconName, name: &'static str)
         .small()
         .w(ui_px(28.))
         .h(ui_px(26.))
+        .flex_none()
+}
+
+#[derive(Action, Clone, PartialEq, serde::Deserialize)]
+#[action(namespace = forkarak_toolbar, no_json)]
+pub(super) struct RunToolbar {
+    root: Option<PathBuf>,
+    command: String,
 }

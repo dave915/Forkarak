@@ -9,7 +9,7 @@ pub(super) enum Mode {
     Blame,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct Target {
     pub path: PathBuf,
     pub revision: Option<String>,
@@ -41,50 +41,53 @@ impl Pokarak {
         target: Target,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut row = div().flex().items_center();
-        for (mode, label) in [(Mode::History, "History"), (Mode::Blame, "Blame")] {
-            let target = target.clone();
-            row = row.child(
-                Button::new(label)
-                    .label(label)
-                    .ghost()
-                    .small()
-                    .tooltip(if mode == Mode::History {
-                        "파일의 커밋 이력"
-                    } else {
-                        "줄마다 마지막으로 수정한 커밋과 작성자"
-                    })
-                    .disabled(self.loading || self.git_is_busy())
-                    .on_click(cx.listener(move |app, _, window, cx| {
-                        if mode == Mode::Blame && target.revision == target.blame_revision {
-                            app.open_inline_blame(target.clone(), window, cx);
-                            return;
-                        }
-                        let Some(root) = app.current.clone() else {
-                            return;
-                        };
-                        let reader = cx.new(|cx| {
-                            let mut reader = Inspector {
-                                root,
-                                target: target.clone(),
-                                mode,
-                                page: Page::Loading,
-                                generation: 0,
-                            };
-                            reader.query(mode, cx);
-                            reader
-                        });
-                        window.open_dialog(cx, move |dialog, _, _| {
-                            dialog
-                                .title("파일 이력")
-                                .width(ui_px(850.))
-                                .margin_top(ui_px(14.))
-                                .child(reader.clone())
-                        });
-                    })),
-            );
+        toolbar::toolbar_icon(
+            "file-history-menu",
+            IconName::GitCommitHorizontal,
+            "파일 이력",
+        )
+        .tooltip("파일 이력 · History / Blame")
+        .disabled(self.loading || self.git_is_busy())
+        .on_click(
+            cx.listener(move |app, _, w, cx| app.show_reader_file_menu(target.clone(), w, cx)),
+        )
+    }
+
+    pub(super) fn inspect_file(
+        &mut self,
+        target: Target,
+        mode: Mode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.loading || self.git_is_busy() {
+            return;
         }
-        row
+        if mode == Mode::Blame && target.revision == target.blame_revision {
+            self.open_inline_blame(target, window, cx);
+            return;
+        }
+        let Some(root) = self.current.clone() else {
+            return;
+        };
+        let reader = cx.new(|cx| {
+            let mut reader = Inspector {
+                root,
+                target,
+                mode,
+                page: Page::Loading,
+                generation: 0,
+            };
+            reader.query(mode, cx);
+            reader
+        });
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title("파일 이력")
+                .width(ui_px(850.))
+                .margin_top(ui_px(14.))
+                .child(reader.clone())
+        });
     }
 }
 
@@ -476,6 +479,56 @@ impl Pokarak {
             .into_any_element()
     }
 
+    pub(super) fn reader_blame_action(&mut self, close: bool, cx: &mut Context<Self>) {
+        if let Some(gutter) = &self.inline_blame {
+            if !gutter.read(cx).identity_matches(self) {
+                return;
+            }
+            if close {
+                self.inline_blame = None;
+            } else {
+                gutter.update(cx, |g, cx| {
+                    g.full = !g.full;
+                    cx.notify();
+                });
+            }
+            cx.notify();
+        }
+    }
+
+    pub(super) fn reader_blame_menu(
+        &self,
+        menu: gpui_kit::component::native_menu::NativeMenu,
+        identity: &reader_toolbar::Identity,
+        cx: &App,
+    ) -> gpui_kit::component::native_menu::NativeMenu {
+        let Some(gutter) = self
+            .inline_blame
+            .as_ref()
+            .filter(|g| g.read(cx).identity_matches(self))
+        else {
+            return menu;
+        };
+        let menu = identity.item(
+            menu.separator(),
+            if gutter.read(cx).full {
+                "Blame · 현재 줄만"
+            } else {
+                "Blame · 파일 전체"
+            },
+            reader_toolbar::Command::BlameMode,
+            false,
+            false,
+        );
+        identity.item(
+            menu,
+            "Blame 닫기",
+            reader_toolbar::Command::CloseBlame,
+            false,
+            false,
+        )
+    }
+
     pub(super) fn inline_blame_controls(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let gutter = self.inline_blame.as_ref()?;
         let state = gutter.read(cx);
@@ -502,18 +555,27 @@ impl Pokarak {
                 .min_h(ui_px(28.))
                 .px_2()
                 .flex()
-                .flex_wrap()
                 .items_center()
                 .gap_1()
+                .h(ui_px(28.))
                 .text_size(ui_text(10.))
-                .child(status)
+                .child(Icon::new(IconName::Info).size(ui_px(14.)))
                 .child(
                     Button::new("blame-line-mode")
-                        .label(if full {
-                            "현재 줄만"
+                        .icon(IconName::List)
+                        .accessibility_label(if full {
+                            "Blame 현재 줄만"
                         } else {
-                            "파일 전체"
+                            "Blame 파일 전체"
                         })
+                        .tooltip(format!(
+                            "{status} · {}",
+                            if full {
+                                "현재 줄만 보기"
+                            } else {
+                                "파일 전체 보기"
+                            }
+                        ))
                         .ghost()
                         .xsmall()
                         .on_click(move |_, _, cx| {
@@ -526,6 +588,8 @@ impl Pokarak {
                 .child(
                     Button::new("close-inline-blame")
                         .icon(IconName::X)
+                        .accessibility_label("Blame 닫기")
+                        .tooltip("Blame 닫기")
                         .ghost()
                         .xsmall()
                         .on_click(cx.listener(move |app, _, _, cx| {

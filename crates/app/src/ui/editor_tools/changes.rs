@@ -199,7 +199,11 @@ impl Pokarak {
         .detach();
     }
 
-    pub(super) fn toggle_previous_code(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn toggle_previous_code(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if window.has_active_dialog(cx) {
             return;
         }

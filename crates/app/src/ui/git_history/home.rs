@@ -2,6 +2,26 @@ use super::*;
 use gpui_kit::component::resizable::v_resizable;
 
 impl Pokarak {
+    pub(in crate::ui) fn history_reader_code(&self) -> bool {
+        self.git_history.code
+    }
+    pub(in crate::ui) fn history_reader_diff(&self) -> Option<&ReviewDiff> {
+        self.git_history.document.as_ref()
+    }
+    pub(in crate::ui) fn select_history_reader_mode(
+        &mut self,
+        code: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.git_history.code = code;
+        self.update_history_editor(window, cx);
+        if !code {
+            self.focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
     pub(in crate::ui) fn history_blame_editor(
         &mut self,
         window: &mut Window,
@@ -408,7 +428,6 @@ impl Pokarak {
         let weak = cx.entity().downgrade();
         let resize = weak.clone();
         let resize_root = self.current.clone();
-        let binary = ui.document.as_ref().is_some_and(|doc| doc.binary);
         let merge = detail.commit.parents.len() > 1;
         let mut parents = div().flex().items_center().gap_1();
         if merge {
@@ -551,97 +570,53 @@ impl Pokarak {
             .overflow_hidden()
             .child(
                 div()
+                    .id("historical-file-tab")
+                    .h(ui_px(30.))
                     .flex_none()
-                    .min_h(ui_px(28.))
-                    .px_2()
-                    .py_1()
-                    .text_size(ui_text(11.))
-                    .child(
-                        ui.selected
-                            .as_ref()
-                            .map(|p| visible(&p.to_string_lossy()))
-                            .unwrap_or_default(),
-                    ),
-            )
-            .child(
-                div()
-                    .id("history-file-controls")
-                    .overflow_x_scroll()
-                    .h(ui_px(34.))
-                    .flex_none()
+                    .min_w_0()
                     .px_2()
                     .flex()
                     .items_center()
                     .gap_1()
-                    .border_b_1()
-                    .border_color(palette.rgb(LINE))
-                    .child(self.reviewed_file_button(cx))
+                    .child(Icon::new(IconName::Lock).size(ui_px(13.)))
                     .child(
-                        history_button(&weak, "history-diff", "Diff", busy, |app, window, cx| {
-                            app.set_split_diff(false);
-                            app.git_history.code = false;
-                            app.update_history_editor(window, cx);
-                            app.focus.focus(window, cx);
-                        })
-                        .ghost()
-                        .selected(!ui.code && !self.prefs.split_diff),
-                    )
-                    .child(
-                        history_button(
-                            &weak,
-                            "history-split",
-                            "좌우",
-                            busy || binary,
-                            |app, window, cx| {
-                                app.set_split_diff(true);
-                                app.git_history.code = false;
-                                app.focus.focus(window, cx);
-                                cx.notify();
-                            },
-                        )
-                        .ghost()
-                        .selected(!ui.code && self.prefs.split_diff),
-                    )
-                    .child(
-                        history_button(
-                            &weak,
-                            "history-code",
-                            "커밋의 파일",
-                            busy || binary,
-                            |app, window, cx| {
-                                app.git_history.code = true;
-                                app.update_history_editor(window, cx);
-                            },
-                        )
-                        .ghost()
-                        .selected(ui.code),
-                    )
-                    .when_some(ui.selected.as_ref(), |bar, path| {
-                        let deleted = detail
-                            .files
-                            .iter()
-                            .any(|f| &f.path == path && f.status == FileStatus::Deleted);
-                        bar.child(self.file_inspection_buttons(
-                            file_inspector::Target {
-                                path: path.clone(),
-                                revision: Some(detail.commit.oid.clone()),
-                                blame_revision: if deleted {
-                                    detail.parent.clone()
-                                } else {
-                                    Some(detail.commit.oid.clone())
-                                },
-                            },
-                            cx,
-                        ))
-                    }),
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .text_ellipsis()
+                            .text_size(ui_text(11.))
+                            .child(
+                                ui.selected
+                                    .as_ref()
+                                    .map(|p| visible(&p.to_string_lossy()))
+                                    .unwrap_or_default(),
+                            ),
+                    ),
             )
-            .children(self.inline_blame_controls(cx))
-            .when(!ui.code, |reader| {
-                reader.children(
-                    ui.document
-                        .as_ref()
-                        .and_then(|doc| self.diff_reading_controls(doc, true, cx)),
-                )
+            .when_some(ui.selected.as_ref(), |reader, path| {
+                let deleted = detail
+                    .files
+                    .iter()
+                    .any(|f| &f.path == path && f.status == FileStatus::Deleted);
+                reader.child(self.reader_command_bar(
+                    reader_toolbar::ReaderView {
+                        path,
+                        code: ui.code,
+                        history: true,
+                        deleted,
+                        diff: ui.document.as_ref(),
+                        target: Some(file_inspector::Target {
+                            path: path.clone(),
+                            revision: Some(detail.commit.oid.clone()),
+                            blame_revision: if deleted {
+                                detail.parent.clone()
+                            } else {
+                                Some(detail.commit.oid.clone())
+                            },
+                        }),
+                    },
+                    cx,
+                ))
             })
             .child(div().flex_1().min_h_0().overflow_hidden().child(preview));
         div().size_full().v_flex().overflow_hidden()
@@ -661,7 +636,7 @@ impl Pokarak {
                     }
                 })
                 .child(resizable_panel().size(files_width).size_range(ui_px(170.)..ui_px(500.)).child(file_pane))
-                .child(resizable_panel().child(reader))))
+                .child(resizable_panel().size_range(ui_px(160.)..ui_px(10000.)).child(reader))))
             .child(div().h(ui_px(24.)).flex_none().px_3().flex().items_center().text_size(ui_text(10.)).text_color(palette.rgb(MUTED))
                 .child(if ui.document.as_ref().is_some_and(|doc| doc.truncated) { "일부 미리보기 · 2 MiB / 50,000줄 제한 · 읽기 전용" }
                     else if merge { "선택한 부모 대비 변경 · merge 커밋의 cherry-pick/revert는 외부 Git에서 실행하세요." }

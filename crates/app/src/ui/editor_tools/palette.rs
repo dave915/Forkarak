@@ -513,7 +513,7 @@ impl Pokarak {
                 .child(palette.clone())
         });
     }
-    pub(super) fn open_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn open_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
         }

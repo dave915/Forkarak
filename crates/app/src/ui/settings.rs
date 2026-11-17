@@ -620,6 +620,8 @@ const KEYBOARD_DEFAULTS: &[(&str, &str, &str)] = &[
     ("toggle_code", "코드/diff", "cmd-alt-d"),
     ("replace_file", "파일 내 바꾸기", "cmd-alt-f"),
     ("select_next_word", "다음 같은 단어 선택", "cmd-d"),
+    ("add_cursor_above", "위에 커서 추가", "ctrl-alt-up"),
+    ("add_cursor_below", "아래에 커서 추가", "ctrl-alt-down"),
     ("move_line_up", "줄 위로 이동", "alt-up"),
     ("move_line_down", "줄 아래로 이동", "alt-down"),
     ("duplicate_line_up", "줄 위로 복제", "alt-shift-up"),

@@ -70,7 +70,7 @@ pub(super) fn stashes(root: &Path) -> Result<Vec<GraphRef>> {
         .collect()
 }
 
-pub fn open(root: &Path, size: usize) -> Result<(HistoryPage, Catalog)> {
+fn read_catalog(root: &Path) -> Result<Catalog> {
     let (cursor, stashes) = initial_cursor(root)?;
     let mut refs = Vec::new();
     for (oid, names) in &cursor.refs {
@@ -94,10 +94,28 @@ pub fn open(root: &Path, size: usize) -> Result<(HistoryPage, Catalog)> {
     }
     refs.sort_by(|a, b| a.name.cmp(&b.name));
     refs.extend(stashes);
-    Ok((
-        next_page(&cursor.root, &cursor, size)?,
-        Catalog { refs, cursor },
-    ))
+    Ok(Catalog { refs, cursor })
+}
+
+pub fn open(root: &Path, size: usize) -> Result<(HistoryPage, Catalog)> {
+    let catalog = read_catalog(root)?;
+    Ok((next_page(root, &catalog.cursor, size)?, catalog))
+}
+
+/// Pin a graph to the current commit of one local or remote branch. The full
+/// catalog remains available for navigation; searches and pages follow that tip.
+/// A missing branch returns None so a caller can recover after a rename/deletion.
+pub fn open_branch(root: &Path, name: &str, size: usize) -> Result<Option<(HistoryPage, Catalog)>> {
+    let mut catalog = read_catalog(root)?;
+    let Some(branch) = catalog
+        .refs
+        .iter()
+        .find(|r| matches!(r.group, RefGroup::Local | RefGroup::Remote) && r.name == name)
+    else {
+        return Ok(None);
+    };
+    catalog.cursor.tips = vec![branch.oid.clone()];
+    Ok(Some((next_page(root, &catalog.cursor, size)?, catalog)))
 }
 
 /// Locate the start of a branch's first-parent route in a graph neighborhood
@@ -203,6 +221,19 @@ impl Catalog {
     /// Find the target in the same topological order as ordinary graph pages.
     /// Start up to 24 rows earlier and retain standard forward pagination.
     pub fn around(&self, root: &Path, oid: &str) -> Result<(HistoryPage, usize)> {
+        self.around_if_present(root, oid)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "The commit is outside this graph. Refresh the worktree to load its current refs."
+            )
+        })
+    }
+
+    /// As around, but distinguish an out-of-scope sidebar target from a failed read.
+    pub fn around_if_present(
+        &self,
+        root: &Path,
+        oid: &str,
+    ) -> Result<Option<(HistoryPage, usize)>> {
         ensure!(
             git::repository_root(root)? == self.cursor.root,
             "Graph target belongs to another worktree"
@@ -218,10 +249,9 @@ impl Catalog {
             }
             !found
         })?;
-        ensure!(
-            found,
-            "The commit is outside this graph. Refresh the worktree to load its current refs."
-        );
+        if !found {
+            return Ok(None);
+        }
         let mut cursor = self.cursor.clone();
         cursor.start = index.saturating_sub(24usize);
         let selected = index - cursor.start;
@@ -232,6 +262,6 @@ impl Catalog {
                 .is_some_and(|entry| entry.commit.oid == oid),
             "Graph changed while locating commit"
         );
-        Ok((page, selected))
+        Ok(Some((page, selected)))
     }
 }

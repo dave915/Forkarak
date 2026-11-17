@@ -584,3 +584,69 @@ fn graph_sidebar_pins_local_remote_annotated_tags_and_each_stash_entry() {
     assert_eq!(page.entries[ix].commit.oid, expected);
     assert_eq!(fs::read(f.root.join(".git/index")).unwrap(), index);
 }
+
+#[test]
+fn branch_graph_pins_reachable_commits_for_pages_search_and_reveal() {
+    let f = Fixture::new();
+    let base = f.commit("base", "common initial commit");
+    f.git(&["branch", "Feature/Review"]);
+    let main = f.commit("main", "main only");
+    f.git(&["switch", "Feature/Review"]);
+    let first = f.commit("feature", "feature only");
+    let tip = f.commit("feature", "feature tip");
+    f.git(&["update-ref", "refs/remotes/origin/Feature/Review", &tip]);
+    f.git(&["tag", "release", &main]);
+    f.git(&["switch", "main"]);
+    fs::write(f.root.join("untracked"), "unsaved").unwrap();
+    let status = f.git(&["status", "--porcelain=v1"]);
+    for name in [
+        "refs/heads/Feature/Review",
+        "refs/remotes/origin/Feature/Review",
+    ] {
+        let (page, catalog) = navigation::open_branch(&f.root, name, 1).unwrap().unwrap();
+        assert_eq!(page.entries[0].commit.oid, tip);
+        assert!(
+            catalog
+                .group(navigation::RefGroup::Local)
+                .iter()
+                .any(|r| r.label == "main")
+        );
+        assert!(
+            catalog
+                .search(&f.root, "main only")
+                .unwrap()
+                .commits
+                .is_empty()
+        );
+        assert!(
+            catalog
+                .search(&f.root, &main[..8])
+                .unwrap()
+                .commits
+                .is_empty()
+        );
+        let results = catalog.search(&f.root, "feature only").unwrap();
+        assert_eq!(results.commits[0].oid, first);
+        let (context, i) = catalog.around(&f.root, &base).unwrap();
+        assert_eq!(context.entries[i].commit.oid, base);
+        assert!(catalog.around_if_present(&f.root, &main).unwrap().is_none());
+        f.git(&["update-ref", name, &main]);
+        let second = next_page(&f.root, &page.next.unwrap(), 10).unwrap();
+        assert_eq!(
+            second
+                .entries
+                .iter()
+                .map(|r| &r.commit.oid)
+                .collect::<Vec<_>>(),
+            [&first, &base]
+        );
+        assert!(second.next.is_none());
+        f.git(&["update-ref", name, &tip]);
+    }
+    for name in ["refs/heads/missing", "refs/tags/release", "HEAD", "--all"] {
+        assert!(navigation::open_branch(&f.root, name, 1).unwrap().is_none());
+    }
+    assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/main");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), main);
+    assert_eq!(status, f.git(&["status", "--porcelain=v1"]));
+}

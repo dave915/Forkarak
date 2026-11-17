@@ -321,8 +321,7 @@ impl Pokarak {
                                                     &toggle_snapshot,
                                                     toggle_path.clone(),
                                                     side,
-                                                    true,
-                                                    false,
+                                                    selection::Gesture::Toggle,
                                                     w,
                                                     cx,
                                                 )
@@ -358,8 +357,10 @@ impl Pokarak {
                                                     &click_snapshot,
                                                     path.clone(),
                                                     side,
-                                                    modifiers.platform,
-                                                    modifiers.shift,
+                                                    selection::Gesture::from_modifiers(
+                                                        modifiers.platform,
+                                                        modifiers.shift,
+                                                    ),
                                                     w,
                                                     cx,
                                                 )

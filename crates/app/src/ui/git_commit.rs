@@ -389,8 +389,7 @@ impl Pokarak {
         snapshot: &Arc<IndexSnapshot>,
         path: PathBuf,
         side: Side,
-        toggle: bool,
-        range: bool,
+        gesture: selection::Gesture,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -403,8 +402,7 @@ impl Pokarak {
             side,
             selection::side_files(snapshot, side),
             &path,
-            toggle,
-            range,
+            gesture,
         );
         self.select_index_preview(path, side, window, cx);
     }

@@ -2,6 +2,29 @@
 use super::*;
 use std::collections::BTreeSet;
 
+#[derive(Clone, Copy)]
+pub(super) enum Gesture {
+    Preview,
+    Toggle,
+    Range { additive: bool },
+}
+impl Gesture {
+    pub(super) fn from_modifiers(toggle: bool, range: bool) -> Self {
+        match (toggle, range) {
+            (_, true) => Self::Range { additive: toggle },
+            (true, false) => Self::Toggle,
+            (false, false) => Self::Preview,
+        }
+    }
+    fn flags(self) -> (bool, bool) {
+        match self {
+            Self::Preview => (false, false),
+            Self::Toggle => (true, false),
+            Self::Range { additive } => (additive, true),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(super) struct FileSelection {
     root: Option<PathBuf>,
@@ -48,9 +71,9 @@ impl FileSelection {
         side: Side,
         files: &[ChangedFile],
         path: &Path,
-        toggle: bool,
-        range: bool,
+        gesture: Gesture,
     ) {
+        let (toggle, range) = gesture.flags();
         if self.root.as_deref() != Some(root)
             || self.generation != generation
             || self.side != Some(side)
@@ -130,7 +153,7 @@ impl FileSelection {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChangedFile, FileSelection, Side};
+    use super::{ChangedFile, FileSelection, Gesture, Side};
     use std::path::{Path, PathBuf};
     fn files() -> Vec<ChangedFile> {
         ["a", "b", "c", "d"]
@@ -151,15 +174,28 @@ mod tests {
             Side::Unstaged,
             &files,
             Path::new("b"),
-            false,
-            false,
+            Gesture::Preview,
         );
-        selection.select(root, 1, Side::Unstaged, &files, Path::new("d"), false, true);
+        selection.select(
+            root,
+            1,
+            Side::Unstaged,
+            &files,
+            Path::new("d"),
+            Gesture::Range { additive: false },
+        );
         assert_eq!(
             selection.paths_for(root, 1, Side::Unstaged, &files),
             vec![PathBuf::from("b"), "c".into(), "d".into()]
         );
-        selection.select(root, 1, Side::Unstaged, &files, Path::new("c"), true, false);
+        selection.select(
+            root,
+            1,
+            Side::Unstaged,
+            &files,
+            Path::new("c"),
+            Gesture::Toggle,
+        );
         assert_eq!(selection.count(Side::Unstaged), 2);
         selection.clear();
         assert!(selection.is_empty());
@@ -175,12 +211,18 @@ mod tests {
             Side::Unstaged,
             &files,
             Path::new("a"),
-            false,
-            false,
+            Gesture::Preview,
         );
         assert_eq!(selection.count(Side::Unstaged), 1);
         assert!(!selection.defers_refresh());
-        selection.select(root, 1, Side::Unstaged, &files, Path::new("b"), true, false);
+        selection.select(
+            root,
+            1,
+            Side::Unstaged,
+            &files,
+            Path::new("b"),
+            Gesture::Toggle,
+        );
         assert!(selection.defers_refresh());
         selection.select(
             root,
@@ -188,11 +230,17 @@ mod tests {
             Side::Unstaged,
             &files,
             Path::new("c"),
-            false,
-            false,
+            Gesture::Preview,
         );
         assert!(!selection.defers_refresh());
-        selection.select(root, 1, Side::Unstaged, &files, Path::new("d"), false, true);
+        selection.select(
+            root,
+            1,
+            Side::Unstaged,
+            &files,
+            Path::new("d"),
+            Gesture::Range { additive: false },
+        );
         assert!(selection.defers_refresh());
         selection.clear();
         assert!(!selection.defers_refresh());
@@ -208,8 +256,7 @@ mod tests {
             Side::Unstaged,
             &files,
             Path::new("b"),
-            false,
-            false,
+            Gesture::Preview,
         );
         for (root, generation, side) in [
             (Path::new("/w/b"), 1, Side::Unstaged),
@@ -222,7 +269,14 @@ mod tests {
                     .is_empty()
             );
         }
-        selection.select(root, 2, Side::Staged, &files, Path::new("d"), false, true);
+        selection.select(
+            root,
+            2,
+            Side::Staged,
+            &files,
+            Path::new("d"),
+            Gesture::Range { additive: false },
+        );
         assert_eq!(selection.count(Side::Staged), 1);
     }
     #[test]
@@ -231,7 +285,14 @@ mod tests {
         files[1].old_path = Some("old-b".into());
         let mut selection = FileSelection::default();
         let root = Path::new("/w");
-        selection.select(root, 1, Side::Staged, &files, Path::new("b"), false, false);
+        selection.select(
+            root,
+            1,
+            Side::Staged,
+            &files,
+            Path::new("b"),
+            Gesture::Preview,
+        );
         assert_eq!(
             selection.paths_for(root, 1, Side::Staged, &files),
             vec![PathBuf::from("b"), "old-b".into()]

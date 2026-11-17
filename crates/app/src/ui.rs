@@ -3,6 +3,7 @@ mod auto_refresh;
 mod branch_review;
 mod cli_control;
 mod code_edit;
+mod editor_tools;
 mod code_workspace;
 mod diff_tools;
 mod draft_reconciliation;
@@ -161,6 +162,21 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("커밋 검색…", SearchGitGraph),
             MenuItem::action("Git 작업 및 저장소 설정…", OpenGitActions),
         ]),
+        Menu::new("편집").items([
+            MenuItem::action("명령 팔레트…", editor_tools::CommandPalette),
+            MenuItem::action("파일 / 폴더 관리…", editor_tools::ManageFiles),
+            MenuItem::action("주석 토글", editor_tools::ToggleComment),
+            MenuItem::action("줄 위로 이동", editor_tools::MoveLineUp),
+            MenuItem::action("줄 아래로 이동", editor_tools::MoveLineDown),
+            MenuItem::action("줄 위에 복제", editor_tools::DuplicateLineUp),
+            MenuItem::action("줄 아래에 복제", editor_tools::DuplicateLineDown),
+            MenuItem::action("같은 단어 다음 항목 선택", editor_tools::SelectNextWord),
+            MenuItem::action("파일 내 바꾸기", editor_tools::ReplaceFile),
+            MenuItem::action("줄 번호로 이동…", editor_tools::GoToLine),
+            MenuItem::action("긴 줄 화면 줄바꿈", editor_tools::ToggleWordWrap),
+            MenuItem::action("미리보기 탭 고정", editor_tools::PinTab),
+            MenuItem::action("설정한 포맷터 실행", editor_tools::FormatFile),
+        ]),
         Menu::new("탐색").items([
             MenuItem::action("파일 찾기", FindFile),
             MenuItem::action("본문 검색", FindText),
@@ -203,8 +219,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-b", FindDefinition, None),
         KeyBinding::new("cmd-alt-b", ToggleSidebar, None),
         KeyBinding::new("cmd-shift-b", ToggleFiles, None),
-        KeyBinding::new("cmd-d", ToggleCode, None),
+        KeyBinding::new("cmd-alt-d", ToggleCode, None),
     ]);
+    editor_tools::bind_keys(cx);
 }
 
 #[derive(Clone)]
@@ -1189,6 +1206,7 @@ impl Pokarak {
         } else {
             None
         };
+        self.prepare_preview_tab(&root, &path, history, cx);
         let Some(session) = self.sessions.get_mut(&root) else {
             return;
         };
@@ -1436,6 +1454,7 @@ impl Pokarak {
                             .scroll_to_item_strict(diff_row, ScrollStrategy::Top);
                         let code = session.saved.code;
                         this.bind_code_editor(&root, &path, &editor, cx);
+                        this.configure_code_tools(&root, &path, &editor, window, cx);
                         if !code && !preserve_focus && !this.file_tree_focus.is_focused(window) {
                             this.focus.focus(window, cx);
                         }
@@ -1981,6 +2000,8 @@ impl Pokarak {
                                     .is_some_and(|root| self.code_edits.dirty(root, tab))
                                 {
                                     "● "
+                                } else if self.current.as_ref().is_some_and(|root| self.is_preview_tab(root, tab)) {
+                                    "◇ "
                                 } else {
                                     ""
                                 },
@@ -2118,6 +2139,7 @@ impl Pokarak {
             if let Some(editor) = editor {
                 let clicked_editor = editor.clone();
                 div()
+                    .key_context("ForkarakCode")
                     .size_full()
                     .on_mouse_up(
                         MouseButton::Left,
@@ -2176,6 +2198,7 @@ impl Pokarak {
                 reader.children(diff.and_then(|doc| self.diff_reading_controls(doc, false, cx)))
             })
             .when(code, |d| d.child(self.code_edit_controls(path, cx)))
+            .when(code, |d| d.children(self.code_previous_panel(path, cx)))
             .children(self.code_draft_notice(path, cx))
             .when(deleted && code && !dirty, |d| {
                 d.child(
@@ -2411,6 +2434,8 @@ impl Pokarak {
 impl Render for Pokarak {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.observe_feedback();
+        self.sync_editor_bindings(cx);
+        self.sync_editor_options(window, cx);
         let palette = Palette::new(cx);
         let pending = self
             .opening_path
@@ -2468,7 +2493,7 @@ impl Render for Pokarak {
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
         #[cfg(target_os = "macos")]
         let body = self.with_terminal_dock(body, window);
-        let root = div().id("pokarak");
+        let root = editor_tools::actions(self, div().id("pokarak"), cx);
         #[cfg(target_os = "macos")]
         let root = root.on_action(cx.listener(|app, _: &OpenWorktreeTerminal, window, cx| {
             app.open_worktree_terminal(window, cx)

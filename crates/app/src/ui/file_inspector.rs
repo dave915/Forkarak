@@ -1,5 +1,6 @@
 //! A window-scoped reader. Every query is tied to the file and revision that opened it.
 use super::*;
+use gpui_kit::component::ActiveTheme;
 use pokarak_core::file_history::{self, BlameLine, FileHistory, FileRevision};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -228,6 +229,8 @@ impl Render for Inspector {
                 .child("표시할 줄이 없습니다.")
                 .into_any_element(),
             Page::Blame(lines) => {
+                let font_size = cx.theme().mono_font_size;
+                let scale = f32::from(font_size) / 13.;
                 let this = cx.entity().downgrade();
                 uniform_list("file-blame-rows", lines.len(), move |range, _, cx| {
                     let mut rows = vec![];
@@ -240,29 +243,29 @@ impl Render for Inspector {
                             rows.push(
                                 div()
                                     .flex()
-                                    .h(px(23.))
+                                    .h(theme::code_row_height(font_size))
                                     .min_w_full()
                                     .items_center()
                                     .gap_2()
-                                    .text_size(px(12.))
+                                    .text_size(font_size)
                                     .font_family("JetBrains Mono")
                                     .child(
                                         div()
-                                            .w(px(78.))
+                                            .w(px(78. * scale))
                                             .flex_none()
                                             .text_color(palette.rgb(BLUE))
                                             .child(hash.to_owned()),
                                     )
                                     .child(
                                         div()
-                                            .w(px(104.))
+                                            .w(px(104. * scale))
                                             .flex_none()
                                             .text_ellipsis()
                                             .child(line.author.clone()),
                                     )
                                     .child(
                                         div()
-                                            .w(px(88.))
+                                            .w(px(88. * scale))
                                             .flex_none()
                                             .text_color(palette.rgb(MUTED))
                                             .child(
@@ -274,7 +277,7 @@ impl Render for Inspector {
                                     )
                                     .child(
                                         div()
-                                            .w(px(39.))
+                                            .w(px(39. * scale))
                                             .flex_none()
                                             .text_right()
                                             .child(line.line.to_string()),
@@ -298,14 +301,7 @@ impl Render for Inspector {
                         .text_ellipsis()
                         .child(label.clone()),
                 )
-                .child(
-                    Editor::new(editor)
-                        .readonly(true)
-                        .bordered(false)
-                        .h_full()
-                        .font_family("JetBrains Mono")
-                        .text_size(px(12.)),
-                )
+                .child(Editor::new(editor).readonly(true).bordered(false).h_full())
                 .into_any_element(),
         };
         div()

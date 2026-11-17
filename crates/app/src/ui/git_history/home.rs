@@ -366,8 +366,6 @@ impl Pokarak {
                 .bordered(false)
                 .h_full()
                 .w_full()
-                .font_family("JetBrains Mono")
-                .text_size(px(12.))
                 .into_any_element()
         } else {
             div()

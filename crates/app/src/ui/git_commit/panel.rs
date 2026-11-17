@@ -387,8 +387,6 @@ impl Pokarak {
                 .readonly(true)
                 .h_full()
                 .w_full()
-                .font_family("JetBrains Mono")
-                .text_size(px(12.))
                 .into_any_element()
         } else {
             let text = if self.commit_ui.reading || self.commit_ui.selected.is_some() {

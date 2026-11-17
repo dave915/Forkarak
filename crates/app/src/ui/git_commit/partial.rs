@@ -62,6 +62,7 @@ impl Pokarak {
         palette: Palette,
     ) -> AnyElement {
         let disabled = self.commit_disabled();
+        let font_size = px(self.prefs.code_font_size);
         let marked = self.commit_ui.marked.clone();
         let token = self.commit_ui.preview_request;
         uniform_list("partial-diff", preview.lines().len(), move |range, _, _| {
@@ -96,11 +97,11 @@ impl Pokarak {
                     };
                     if !selectable {
                         return div()
-                            .h(px(21.))
+                            .h(theme::code_row_height(font_size))
                             .px_2()
                             .whitespace_nowrap()
                             .font_family("JetBrains Mono")
-                            .text_size(px(11.))
+                            .text_size(font_size)
                             .text_color(palette.rgb(color))
                             .child(label)
                             .into_any_element();
@@ -123,11 +124,11 @@ impl Pokarak {
                     )
                     .ghost()
                     .selected(checked)
-                    .h(px(21.))
+                    .h(theme::code_row_height(font_size))
                     .min_w_full()
                     .justify_start()
                     .font_family("JetBrains Mono")
-                    .text_size(px(11.))
+                    .text_size(font_size)
                     .text_color(palette.rgb(color))
                     .into_any_element()
                 })

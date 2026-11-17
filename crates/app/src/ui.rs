@@ -264,10 +264,12 @@ impl Pokarak {
         cx.notify();
     }
 
-    fn set_code_size(&mut self, value: f32, window: &mut Window, cx: &mut Context<Self>) {
+    fn set_code_size(&mut self, value: f32, cx: &mut Context<Self>) {
         self.prefs.code_font_size = value.clamp(10., 24.);
         self.prefs.save();
-        theme::apply(self.prefs.theme, self.prefs.code_font_size, window, cx);
+        gpui_kit::component::Theme::update(cx, |theme| {
+            theme.mono_font_size = px(self.prefs.code_font_size)
+        });
         cx.notify();
     }
 
@@ -303,6 +305,7 @@ impl Pokarak {
                         }),
                 );
             }
+            let palette = Palette::new(cx);
             let smaller = weak.clone();
             let larger = weak.clone();
             dialog.title("설정").width(px(430.)).child(
@@ -323,7 +326,7 @@ impl Pokarak {
                             .child(
                                 div()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child("코드 보기 글자 크기"),
+                                    .child("코드·Diff 글자 크기"),
                             )
                             .child(
                                 div()
@@ -334,12 +337,12 @@ impl Pokarak {
                                         Button::new("font-smaller")
                                             .icon(IconName::Minus)
                                             .disabled(font_size <= 10.)
+                                            .accessibility_label("코드 글자 작게")
                                             .tooltip("작게")
-                                            .on_click(move |_, window, cx| {
+                                            .on_click(move |_, _, cx| {
                                                 let _ = smaller.update(cx, |app, cx| {
                                                     app.set_code_size(
                                                         app.prefs.code_font_size - 1.,
-                                                        window,
                                                         cx,
                                                     )
                                                 });
@@ -350,16 +353,46 @@ impl Pokarak {
                                         Button::new("font-larger")
                                             .icon(IconName::Plus)
                                             .disabled(font_size >= 24.)
+                                            .accessibility_label("코드 글자 크게")
                                             .tooltip("크게")
-                                            .on_click(move |_, window, cx| {
+                                            .on_click(move |_, _, cx| {
                                                 let _ = larger.update(cx, |app, cx| {
                                                     app.set_code_size(
                                                         app.prefs.code_font_size + 1.,
-                                                        window,
                                                         cx,
                                                     )
                                                 });
                                             }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(palette.rgb(MUTED))
+                                    .child("파일 본문, 변경 비교, Blame의 코드에 적용됩니다."),
+                            )
+                            .child(
+                                div()
+                                    .id("code-font-preview")
+                                    .v_flex()
+                                    .rounded_md()
+                                    .overflow_hidden()
+                                    .font_family("JetBrains Mono")
+                                    .text_size(px(font_size))
+                                    .line_height(theme::code_row_height(px(font_size)))
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .bg(palette.rgb(0x3c2a30))
+                                            .text_color(palette.rgb(RED))
+                                            .child("− val count = 1"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .bg(palette.rgb(0x24382f))
+                                            .text_color(palette.rgb(GREEN))
+                                            .child("+ val count = 2"),
                                     ),
                             ),
                     )
@@ -2816,9 +2849,7 @@ impl Pokarak {
                         Editor::new(&editor)
                             .readonly(true)
                             .bordered(false)
-                            .h(relative(1.))
-                            .font_family("JetBrains Mono")
-                            .text_size(px(self.prefs.code_font_size)),
+                            .h(relative(1.)),
                     )
                     .into_any_element()
             } else {
@@ -2835,6 +2866,8 @@ impl Pokarak {
         } else if let Some(diff) = diff.filter(|_| self.prefs.split_diff) {
             diff.split(cx)
         } else if let Some(diff) = diff {
+            let font_size = px(self.prefs.code_font_size);
+            let line_number_width = (font_size * 3.5).max(px(45.));
             let widest = diff
                 .lines
                 .iter()
@@ -2857,16 +2890,16 @@ impl Pokarak {
                         div()
                             .id(("diff-row", ix))
                             .min_w_full()
-                            .h(px(22.))
+                            .h(theme::code_row_height(font_size))
                             .flex()
                             .items_center()
                             .bg(palette.rgb(background))
                             .font_family("JetBrains Mono")
-                            .text_size(px(12.))
+                            .text_size(font_size)
                             .text_color(palette.rgb(color))
                             .child(
                                 div()
-                                    .w(px(45.))
+                                    .w(line_number_width)
                                     .flex_none()
                                     .text_right()
                                     .pr_2()
@@ -2877,7 +2910,7 @@ impl Pokarak {
                             )
                             .child(
                                 div()
-                                    .w(px(45.))
+                                    .w(line_number_width)
                                     .flex_none()
                                     .text_right()
                                     .pr_2()

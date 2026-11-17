@@ -52,6 +52,10 @@ impl Palette {
     }
 }
 
+pub fn code_row_height(font_size: Pixels) -> Pixels {
+    px((f32::from(font_size) * 1.55).ceil())
+}
+
 pub fn apply(choice: ThemeChoice, font_size: f32, window: &mut Window, cx: &mut App) {
     let mode = match choice {
         ThemeChoice::Dark => ThemeMode::Dark,

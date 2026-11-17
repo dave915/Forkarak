@@ -1,4 +1,6 @@
 //! Explicit file staging and index-only commits, using the shared cancellable runner.
+mod partial;
+
 use super::*;
 use crate::index::{self, IndexSnapshot};
 use std::{os::unix::ffi::OsStrExt, path::Component};
@@ -676,4 +678,6 @@ mod tests {
         );
         assert_eq!(repo.git(&["rev-parse", "HEAD"]), before);
     }
+
+    mod partial_tests;
 }

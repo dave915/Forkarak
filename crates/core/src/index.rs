@@ -1,5 +1,7 @@
 //! Independent, read-only index view. Preview bytes are captured blob identities,
 //! never working files, textconv/clean filters, or semantic navigation sources.
+pub mod partial;
+
 use crate::{ChangedFile, DiffDocument, FileStatus, backend, filesystem, git, text};
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
@@ -40,7 +42,7 @@ pub struct IndexSnapshot {
     baseline: git::Tree,
 }
 
-fn git_path(root: &Path, name: &str) -> Result<PathBuf> {
+pub(crate) fn git_path(root: &Path, name: &str) -> Result<PathBuf> {
     let bytes = git::words(root, &["rev-parse", "--git-path", name])?;
     let path = git::path(bytes.strip_suffix(b"\n").unwrap_or(&bytes));
     Ok(if path.is_absolute() {

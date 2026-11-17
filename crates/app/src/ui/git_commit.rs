@@ -389,8 +389,10 @@ impl Pokarak {
                         let tip = file.old_path.as_ref().map(|old|format!("{} → {}",display_path(old),display_path(&file.path))).unwrap_or_else(||label.clone());
                         let side=if stage {Side::Unstaged}else{Side::Staged};
                         let selected = app.commit_ui.selected.as_ref()==Some(&file.path) && app.commit_ui.side==Some(side);
+                        let target=weak.clone();
                         rows = rows.child(div().flex().items_center().gap_1()
-                            .child(commit_button(&weak,(if stage {"work-file"}else{"index-file"},ix),label,disabled,move |app,w,cx|app.select_index_preview(path.clone(),side,w,cx))
+                            .child(file_icons::file_button((if stage {"work-file"}else{"index-file"},ix),&path,label,cx).small().disabled(disabled)
+                                .on_click(move |_,w,cx|{let _=target.update(cx,|app,cx|app.select_index_preview(path.clone(),side,w,cx));})
                                 .selected(selected).tooltip(tip).flex_1().min_w_0().justify_start().overflow_hidden())
                             .child(commit_button(&weak,(if stage {"stage-file"}else{"unstage-file"},ix),if stage {"Stage"}else{"Unstage"},disabled,move |app,w,cx|app.change_commit_index(stage,StageScope::Files(paths.clone()),w,cx))));
                     }

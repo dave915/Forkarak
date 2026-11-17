@@ -13,3 +13,5 @@ macOS와 Xcode command-line tools가 설치된 환경에서 다음 명령으로 
 스크립트는 `render-icon.swift`에서 AppKit으로 SVG를 각 크기에 직접 렌더링한 후 시스템 `iconutil`로 ICNS를 만든다. 임시 iconset은 정리한다.
 
 폰트 원본과 라이선스는 [fonts/README.md](fonts/README.md)에 기록했다. 앱 번들에 파일을 복사하는 것과 GPUI 텍스트 시스템에 서체를 등록하는 것은 별도 작업이다. 런타임은 필요한 TTF 바이트를 명시적으로 등록해야 한다.
+
+파일 목록과 탭은 [VSCode Icons](icons/vscode/NOTICE.md)의 컬러 SVG를 사용한다. 파일명과 복합 확장자에 따라 선택하며 밝은 테마용 아이콘을 지원한다.

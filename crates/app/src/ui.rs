@@ -2217,7 +2217,7 @@ impl Pokarak {
                     })
                     .into_any_element()
             } else {
-                uniform_list("files", rows.len(), move |range, _, _cx| {
+                uniform_list("files", rows.len(), move |range, _, cx| {
                     range
                         .map(|ix| {
                             let row = rows[ix].clone();
@@ -2279,8 +2279,9 @@ impl Pokarak {
                                     Icon::new(IconName::Folder)
                                         .size(px(14.))
                                         .text_color(palette.rgb(MUTED))
+                                        .into_any_element()
                                 } else {
-                                    file_icons::icon_for_path(&row.path, palette)
+                                    file_icons::icon_for_path(&row.path, cx).into_any_element()
                                 })
                                 .child(div().flex_1().min_w_0().text_ellipsis().child(row.label))
                                 .when_some(status, |d, (label, color)| {
@@ -2446,21 +2447,22 @@ impl Pokarak {
                     .flex()
                     .items_center()
                     .child(
-                        Button::new(("tab", i))
-                            .label(
-                                tab.file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string(),
-                            )
-                            .icon(file_icons::icon_for_path(tab, palette))
-                            .ghost()
-                            .small()
-                            .selected(tab == path)
-                            .tooltip(tab.to_string_lossy().to_string())
-                            .on_click(cx.listener(move |this, _, w, cx| {
-                                this.open_file(target.clone(), true, None, w, cx)
-                            })),
+                        file_icons::file_button(
+                            ("tab", i),
+                            tab,
+                            tab.file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string(),
+                            cx,
+                        )
+                        .ghost()
+                        .small()
+                        .selected(tab == path)
+                        .tooltip(tab.to_string_lossy().to_string())
+                        .on_click(cx.listener(move |this, _, w, cx| {
+                            this.open_file(target.clone(), true, None, w, cx)
+                        })),
                     )
                     .child(
                         Button::new(("close-tab", i))

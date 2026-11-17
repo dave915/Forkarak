@@ -144,6 +144,7 @@ impl Pokarak {
                     app.git_history.nav.catalog = Some(Arc::new(catalog));
                     app.status = "전체 브랜치에서 커밋을 표시합니다".into();
                 }
+                app.git_history.next_page = NextPage::Idle;
                 app.git_history.entries = page.entries.into();
                 app.git_history.in_neighborhood = true;
                 app.refresh_graph_hover(cx);

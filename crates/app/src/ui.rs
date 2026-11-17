@@ -1,4 +1,5 @@
 mod analysis_feedback;
+mod branch_review;
 mod cli_control;
 mod code_edit;
 mod code_workspace;
@@ -227,8 +228,7 @@ struct Session {
     restoring: bool,
 }
 impl Session {
-    fn new(mut saved: SavedView) -> Self {
-        saved.comparison = CompareMode::Uncommitted;
+    fn new(saved: SavedView) -> Self {
         let restoring = saved.selected.is_some();
         Self {
             #[cfg(target_os = "macos")]
@@ -1089,7 +1089,10 @@ impl Pokarak {
         if let Some(session) = self.sessions.get_mut(&root) {
             session.prepare_code_snapshot();
         }
-        let mode = CompareMode::Uncommitted;
+        let mode = self
+            .session()
+            .map(|session| session.saved.comparison.clone())
+            .unwrap_or_default();
         self.persist(cx);
         self.request += 1;
         let token = self.request;
@@ -2577,7 +2580,7 @@ impl Render for Pokarak {
             .map(|p| {
                 let path = p.to_string_lossy();
                 if self.opening_path.is_none() && !self.git_history.active {
-                    format!("{path}  ·  HEAD → 현재 파일")
+                    format!("{path}  ·  {}", self.applied_comparison_label())
                 } else {
                     path.to_string()
                 }
@@ -2631,6 +2634,7 @@ impl Render for Pokarak {
             .on_action(cx.listener(|this,_:&FindDefinition,w,cx|{if !w.has_active_dialog(cx) {this.request_navigation(NavigationKind::Definition,None,w,cx)}}))
             .on_action(cx.listener(|this,_:&ToggleCode,w,cx|{if this.git_history.active {this.toggle_history_code(w,cx)}else{let code=!this.session().map(|s|s.saved.code).unwrap_or(false);this.toggle_code(code,cx)}}))
             .child(self.render_toolbar(window, cx))
+            .children(self.branch_review_controls(cx))
             .children(self.update_banner(cx))
             .children(self.code_drafts_banner(cx))
             .when(self.opening_path.is_none() && self.external_change,|d|d.child(div().h(ui_px(32.)).flex_none().px_3().flex().items_center().gap_3().bg(palette.rgb(0x3b3326)).text_color(palette.rgb(0xe4c28c)).text_size(ui_text(12.))

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import select
 import shutil
 import subprocess
 import sys
@@ -30,9 +31,12 @@ class DistributionTests(unittest.TestCase):
         # The authored fixture version stays stable across application releases.
         (cls.source / "Cargo.toml").write_text('[workspace]\n[workspace.package]\nversion = "0.1.0"\n')
         cls.args_file = cls.base / "launched-arguments.txt"
+        cls.launched_exe = cls.base / "launched-executable.txt"
         cfile = cls.base / "stub.c"
         cfile.write_text(
             '#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\nint main(int argc,char **argv) {'
+            f'FILE *exe=fopen({json.dumps(str(cls.launched_exe))},"w");'
+            'if(!exe)return 1;fputs(argv[0],exe);fclose(exe);'
             f'FILE *f=fopen({json.dumps(str(cls.args_file))},"w");'
             'if(!f)return 1;for(int i=1;i<argc;i++)fprintf(f,"%s\\n",argv[i]);'
             'fclose(f);if(argc>1 && !strcmp(argv[1],"--hold"))sleep(60);return 0;}\n'
@@ -55,6 +59,7 @@ class DistributionTests(unittest.TestCase):
         # curl fixture still works when the installer simulates a clean Mac.
         curl.write_text("#!" + sys.executable + "\n" + '''import os,pathlib,shutil,sys
 args=sys.argv[1:]
+assert args[0] == '-q'
 url=args[args.index('--url')+1]
 assert args[args.index('--proto')+1] == args[args.index('--proto-redir')+1] == '=https'
 assert args[args.index('--write-out')+1] == '%{http_code} %{redirect_url}'
@@ -103,6 +108,272 @@ else:
             self.assertFalse((self.appdir / ".pokarak-install.lock").exists(), "Installer left its lock behind")
         return result
 
+    def test_check_only_is_read_only_and_emits_only_an_official_stable_tag(self):
+        self.env["HOME"] = str(self.case / "nonexistent home")
+        # The mock curl uses Python. Keep its bytecode cache out of the test HOME.
+        self.env["PYTHONDONTWRITEBYTECODE"] = "1"
+        self.assertEqual(self.install("--check-only").stdout, "v0.1.0\n")
+        self.assertEqual(self.log.read_text().splitlines(), ["https://github.com/dave915/pokarak/releases/latest"])
+        self.env["POKARAK_FIXTURE_REDIRECT"] = "https://example.org/tag/v0.1.0"
+        self.assertEqual(self.install("--check-only", expected=1).stdout, "")
+        self.assertFalse(Path(self.env["HOME"]).exists())
+        self.log.unlink()
+        for args in (("--check-only", "--version", "v2.0.0"), ("--app-dir", str(self.case), "--check-only"),
+                     ("--wait-pid", "1"), ("--relaunch-session-dir", "/tmp")):
+            self.install(*args, expected=1)
+        self.assertFalse(self.log.exists())
+
+    def zip_install(self):
+        self.appdir = self.case / "custom apps"
+        self.appdir.mkdir()
+        self.app = self.appdir / """개발자 ' " $(touch nope).app"""
+        subprocess.run(["/usr/bin/ditto", "-x", "-k", str(self.release / "Pokarak-macos-arm64.zip"),
+                        str(self.appdir)], check=True, capture_output=True)
+        (self.appdir / "Pokarak.app").rename(self.app)
+        self.assertTrue((self.app / "Contents/Resources/update-handoff.sh").is_file())
+
+    def hold_app(self):
+        process = subprocess.Popen([str(self.app / "Contents/MacOS/pokarak"), "--hold"])
+
+        def stop():
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
+
+        self.addCleanup(stop)
+        return process
+
+    def app_update(self, pid, *extra):
+        script = self.app / "Contents/Resources/install.sh"
+        process = subprocess.Popen(["/bin/bash", str(script), "--update-running-app", str(self.app),
+                                    "--wait-pid", str(pid), "--version", "v0.1.0", *extra],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   bufsize=0, start_new_session=True, env=self.env)
+
+        def stop():
+            if process.stdin and not process.stdin.closed:
+                process.stdin.close()
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
+            process.stdout.close()
+            process.stderr.close()
+
+        self.addCleanup(stop)
+        return process
+
+    def wait_marker(self, process, marker):
+        data = b""
+        end = time.monotonic() + 20
+        while time.monotonic() < end:
+            if not select.select([process.stdout], [], [], max(0, end - time.monotonic()))[0]:
+                break
+            chunk = os.read(process.stdout.fileno(), 4096)
+            if not chunk:
+                self.fail(f"Missing {marker}: {data!r} {process.stderr.read()!r}")
+            data += chunk
+            if marker.encode() in data.split(b"\n")[:-1]:
+                return
+        self.fail(f"Timed out waiting for {marker}: {data!r}")
+
+    def test_zip_update_reopens_exact_bundle_with_session_after_pipes_close(self):
+        self.zip_install()
+        legacy = self.appdir / "포카락.app"
+        shutil.copytree(self.app, legacy)
+        legacy_inode = legacy.stat().st_ino
+        self.bindir.mkdir(parents=True)
+        self.cli.write_text("unrelated command")
+        self.env["DEVELOPER_DIR"] = str(self.case / "no developer tools")
+        session = self.case / """세션 -- ' $ HOME"""
+        session.mkdir()
+        original = self.app.stat().st_ino
+        old = self.hold_app()
+        update = self.app_update(old.pid, "--relaunch-session-dir", str(session))
+        self.wait_marker(update, "POKARAK_UPDATE_READY")
+        self.assertEqual(self.app.stat().st_ino, original)
+        self.assertTrue((self.appdir / ".pokarak-install.lock").is_dir())
+        self.assertIn("Another install", self.install("--app-dir", str(self.appdir), expected=1).stderr)
+        holders = subprocess.run(["/usr/sbin/lsof", "-a", "-p", str(update.pid),
+                                  str(self.app / "Contents/Resources/install.sh")], capture_output=True)
+        self.assertEqual(holders.returncode, 1, "Update process is still using the old installer")
+        update.stdin.write(b"restart\n")
+        self.wait_marker(update, "POKARAK_UPDATE_RESTARTING")
+        update.stdin.close()
+        update.stdout.close()
+        update.stderr.close()
+        self.assertEqual(self.app.stat().st_ino, original)
+        old.terminate()
+        old.wait(timeout=5)
+        self.assertEqual(update.wait(timeout=20), 0, (self.home / "Library/Logs/Pokarak/update.log").read_text())
+        for _ in range(100):
+            if self.args_file.read_text().splitlines() == ["--session-dir", str(session)]:
+                break
+            time.sleep(0.05)
+        self.assertEqual(self.args_file.read_text().splitlines(), ["--session-dir", str(session)])
+        self.assertTrue(self.app.joinpath("Contents/MacOS/pokarak").samefile(self.launched_exe.read_text()))
+        self.assertNotEqual(self.app.stat().st_ino, original)
+        self.assertEqual(legacy.stat().st_ino, legacy_inode)
+        self.assertEqual(self.cli.read_text(), "unrelated command")
+        self.assertFalse(list(self.appdir.glob(".pokarak-*")))
+        self.assertTrue(all("/download/v0.1.0/" in url for url in self.log.read_text().splitlines()))
+        subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(self.app)], check=True)
+
+    def test_running_update_cancels_before_quit_or_modification(self):
+        self.zip_install()
+        original = self.app.stat().st_ino
+        old = self.hold_app()
+        for answer, status in [(b"", 0), (b"anything else\n", 1)]:
+            with self.subTest(answer=answer):
+                update = self.app_update(old.pid)
+                self.wait_marker(update, "POKARAK_UPDATE_READY")
+                stdout, _ = update.communicate(answer, timeout=5)
+                self.assertEqual(update.returncode, status)
+                self.assertNotIn(b"RESTARTING", stdout)
+                self.assertEqual(self.app.stat().st_ino, original)
+                self.assertIsNone(old.poll())
+                self.assertFalse(list(self.appdir.glob(".pokarak-*")))
+        self.assertFalse(self.bindir.exists())
+        self.assertFalse((self.home / "Applications").exists())
+
+    def test_running_update_rejects_bad_pid_options_and_busy_bundle(self):
+        self.zip_install()
+        old = self.hold_app()
+        second = self.hold_app()
+        for pid, extra in [(old.pid, []), (os.getpid(), []), (old.pid, ["--relaunch-session-dir", "relative"]),
+                           (old.pid, ["--bin-dir", str(self.case / "bin")]), ("-1", [])]:
+            with self.subTest(pid=pid, extra=extra):
+                updater = self.app_update(pid, *extra)
+                stdout, _ = updater.communicate(timeout=10)
+                self.assertNotEqual(updater.returncode, 0)
+                self.assertNotIn(b"UPDATE_READY", stdout)
+        self.assertFalse(self.log.exists())
+        self.assertIsNone(old.poll())
+        self.assertIsNone(second.poll())
+        self.assertFalse(list(self.appdir.glob(".pokarak-*")))
+
+    def test_running_update_rechecks_other_instances_on_both_sides_of_ack(self):
+        self.zip_install()
+        original = self.app.stat().st_ino
+        for after_ack in (False, True):
+            with self.subTest(after_ack=after_ack):
+                old = self.hold_app()
+                updater = self.app_update(old.pid)
+                self.wait_marker(updater, "POKARAK_UPDATE_READY")
+                if not after_ack:
+                    second = self.hold_app()
+                updater.stdin.write(b"restart\n")
+                if after_ack:
+                    self.wait_marker(updater, "POKARAK_UPDATE_RESTARTING")
+                    second = self.hold_app()
+                    old.terminate()
+                    old.wait(timeout=5)
+                stdout, stderr = updater.communicate(timeout=10)
+                self.assertEqual(updater.returncode, 1)
+                if after_ack:
+                    self.assertIn("Another instance opened", (self.home / "Library/Logs/Pokarak/update.log").read_text())
+                else:
+                    self.assertNotIn(b"RESTARTING", stdout)
+                    self.assertIn(b"Quit other", stderr)
+                    self.assertIsNone(old.poll())
+                    old.terminate()
+                    old.wait(timeout=5)
+                self.assertIsNone(second.poll())
+                second.terminate()
+                second.wait(timeout=5)
+                self.assertEqual(self.app.stat().st_ino, original)
+                self.assertFalse(list(self.appdir.glob(".pokarak-*")))
+
+    def test_failed_relaunch_restores_and_reopens_original_with_session(self):
+        self.zip_install()
+        # Simulate LaunchServices rejecting the new bundle precisely once. The
+        # rollback and reopening of the original use the real system tools.
+        helper = self.app / "Contents/Resources/update-handoff.sh"
+        helper.write_text(helper.read_text().replace(
+            "reopen_app() {", 'reopen_app() {\n    [[ "$(bundle_identity "$APP_PATH")" == "$ORIGINAL_ID" ]] || return 1'))
+        subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", str(self.app)], check=True, capture_output=True)
+        old_identity = (self.app.stat().st_ino, (self.app / "Contents/MacOS/pokarak").stat().st_ino)
+        old = self.hold_app()
+        session = self.case / "recovery session"
+        session.mkdir()
+        updater = self.app_update(old.pid, "--relaunch-session-dir", str(session))
+        self.wait_marker(updater, "POKARAK_UPDATE_READY")
+        updater.stdin.write(b"restart\n")
+        self.wait_marker(updater, "POKARAK_UPDATE_RESTARTING")
+        old.terminate()
+        old.wait(timeout=5)
+        self.assertEqual(updater.wait(timeout=10), 1)
+        log = (self.home / "Library/Logs/Pokarak/update.log").read_text()
+        self.assertIn("LaunchServices could not reopen", log)
+        self.assertIn("Restored the previous Pokarak", log)
+        self.assertEqual((self.app.stat().st_ino, (self.app / "Contents/MacOS/pokarak").stat().st_ino), old_identity)
+        for _ in range(100):
+            if self.args_file.read_text().splitlines() == ["--session-dir", str(session)]:
+                break
+            time.sleep(0.05)
+        self.assertEqual(self.args_file.read_text().splitlines(), ["--session-dir", str(session)])
+        self.assertTrue(self.app.joinpath("Contents/MacOS/pokarak").samefile(self.launched_exe.read_text()))
+        self.assertFalse(list(self.appdir.glob(".pokarak-*")))
+
+    def test_running_update_rejects_incompatible_macos_before_ready(self):
+        self.zip_install()
+        old = self.hold_app()
+        app = self.case / "future/Pokarak.app"
+        shutil.copytree(self.app, app)
+        plist = app / "Contents/Info.plist"
+        data = plistlib.loads(plist.read_bytes())
+        data["LSMinimumSystemVersion"] = "99.0"
+        plist.write_bytes(plistlib.dumps(data))
+        self.repack(app)
+        update = self.app_update(old.pid)
+        stdout, stderr = update.communicate(timeout=10)
+        self.assertEqual(update.returncode, 1)
+        self.assertNotIn(b"UPDATE_READY", stdout)
+        self.assertIn(b"requires macOS 99.0", stderr)
+        self.assertIsNone(old.poll())
+        self.assertFalse(list(self.appdir.glob(".pokarak-*")))
+
+    def test_timeout_preserves_the_instance_that_did_not_quit(self):
+        self.zip_install()
+        old = self.hold_app()
+        original = self.app.stat().st_ino
+        update = self.app_update(old.pid)
+        self.wait_marker(update, "POKARAK_UPDATE_READY")
+        update.stdin.write(b"restart\n")
+        self.wait_marker(update, "POKARAK_UPDATE_RESTARTING")
+        self.assertEqual(update.wait(timeout=40), 1)
+        self.assertIn("Timed out waiting", (self.home / "Library/Logs/Pokarak/update.log").read_text())
+        self.assertEqual(self.app.stat().st_ino, original)
+        self.assertIsNone(old.poll())
+        self.assertFalse(list(self.appdir.glob(".pokarak-*")))
+
+    def test_locked_running_app_is_preserved_before_ready(self):
+        self.zip_install()
+        old = self.hold_app()
+        subprocess.run(["/usr/bin/chflags", "uchg", str(self.app)], check=True)
+        self.addCleanup(subprocess.run, ["/usr/bin/chflags", "nouchg", str(self.app)], check=True)
+        update = self.app_update(old.pid)
+        stdout, stderr = update.communicate(timeout=10)
+        self.assertEqual(update.returncode, 1)
+        self.assertNotIn(b"UPDATE_READY", stdout)
+        self.assertIn(b"cannot be replaced", stderr)
+        self.assertIsNone(old.poll())
+        self.assertFalse(list(self.appdir.glob(".pokarak-*")))
+
+    def test_running_update_fails_before_ready_on_bad_checksum(self):
+        self.zip_install()
+        original = self.app.stat().st_ino
+        old = self.hold_app()
+        (self.release / "SHA256SUMS").write_text("bad")
+        updater = self.app_update(old.pid)
+        stdout, stderr = updater.communicate(timeout=10)
+        self.assertNotIn(b"UPDATE_READY", stdout)
+        self.assertNotEqual(updater.returncode, 0)
+        self.assertIn(b"checksum", stderr)
+        self.assertIsNone(old.poll())
+        self.assertEqual(self.app.stat().st_ino, original)
+        self.assertFalse(list(self.appdir.glob(".pokarak-*")))
+        self.assertFalse(self.bindir.exists())
+
     def test_install_and_pinned_downloads(self):
         self.install()
         self.assertTrue(self.app.is_dir())
@@ -129,6 +400,7 @@ else:
             ("302", "https://other.example/dave915/pokarak/releases/tag/v0.1.0"),
             ("302", "https://github.com/other/pokarak/releases/tag/v0.1.0"),
             ("302", "https://github.com/dave915/pokarak/releases/tag/v0.1.0-beta.1"),
+            ("302", "https://github.com/dave915/pokarak/releases/tag/v0.01.0"),
             ("302", "https://github.com/dave915/pokarak/releases/tag/v0.1.0/other"),
         ]:
             with self.subTest(location=location):

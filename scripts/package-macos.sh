@@ -111,7 +111,7 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 mkdir -p "$CONTENTS/Resources/vscode-icons"
 /bin/cp "$ROOT_DIR/assets/icons/vscode/NOTICE.md" "$ROOT_DIR/assets/icons/vscode/LICENSE.txt" "$CONTENTS/Resources/vscode-icons/"
 /usr/bin/ditto "$ROOT_DIR/assets/fonts" "$CONTENTS/Resources/fonts"
-/bin/cp "$ROOT_DIR/scripts/install.sh" "$CONTENTS/Resources/install.sh"
+/bin/cp "$ROOT_DIR/scripts/install.sh" "$ROOT_DIR/scripts/update-handoff.sh" "$CONTENTS/Resources/"
 /bin/cp "$ROOT_DIR/scripts/pokarak-cli.sh" "$CONTENTS/Resources/pokarak-cli.sh"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 

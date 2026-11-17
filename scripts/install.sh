@@ -112,16 +112,47 @@ require_app_closed() {
 require_app_closed "$APP_PATH"
 if managed_legacy_app; then require_app_closed "$LEGACY_PATH"; fi
 WORK_DIR="$(mktemp -d "$APP_DIR/.pokarak-install.XXXXXX")"
-download() { curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 600 --retry 2 "$1" --output "$2"; }
+RELEASES_URL="https://github.com/$REPOSITORY/releases"
+# Keep diagnostics tied to the public URL; asset redirects can carry a temporary
+# signed query string. Successful requests return curl's status and redirect.
+release_request() {
+    local step="$1" url="$2" response code rc
+    shift 2
+    if response="$(curl --fail --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --connect-timeout 15 --max-time 600 --retry 2 "$@" --write-out '%{http_code} %{redirect_url}' --url "$url")"; then
+        printf '%s' "$response"
+    else
+        rc=$?
+        code="${response%% *}"
+        echo "Error: $step failed at $url (HTTP ${code:-000}, curl $rc)." >&2
+        if [[ "$code" == 403 ]]; then
+            echo "GitHub or your network denied access. Check whether you can open this public release URL in your browser." >&2
+        fi
+        if [[ "$url" == "$RELEASES_URL/latest" ]]; then
+            echo "To skip latest-version lookup, rerun with --version vX.Y.Z for a published tag." >&2
+        fi
+        return "$rc"
+    fi
+}
+
 if [[ -z "$TAG" ]]; then
-    download "https://api.github.com/repos/$REPOSITORY/releases/latest" "$WORK_DIR/release.json"
-    TAG="$(/usr/bin/plutil -extract tag_name raw -o - "$WORK_DIR/release.json")" || fail "Could not determine the latest release"
+    # GitHub redirects this public web URL directly to the latest release tag.
+    # Read only that first redirect and pin every asset to the same exact tag.
+    latest="$(release_request "Latest release lookup" "$RELEASES_URL/latest" --head --no-location --output /dev/null)"
+    status="${latest%% *}"
+    location="${latest#* }"
+    case "$status" in
+        301|302|303|307|308) ;;
+        *) fail "Latest release lookup at $RELEASES_URL/latest returned HTTP $status without a release redirect" ;;
+    esac
+    [[ "$location" == "$RELEASES_URL/tag/"* ]] || fail "Unexpected redirect from $RELEASES_URL/latest; expected a tag in $REPOSITORY"
+    TAG="${location#"$RELEASES_URL/tag/"}"
 fi
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Expected a stable release tag such as v0.1.0, found: $TAG"
-RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$TAG"
+RELEASE_URL="$RELEASES_URL/download/$TAG"
 echo "Downloading Pokarak ${TAG}..."
-download "$RELEASE_URL/$ASSET" "$WORK_DIR/$ASSET"
-download "$RELEASE_URL/SHA256SUMS" "$WORK_DIR/SHA256SUMS"
+release_request "App archive download" "$RELEASE_URL/$ASSET" --location --output "$WORK_DIR/$ASSET" >/dev/null
+release_request "Checksum download" "$RELEASE_URL/SHA256SUMS" --location --output "$WORK_DIR/SHA256SUMS" >/dev/null
 EXPECTED="$(/usr/bin/awk -v name="$ASSET" '$2 == name { print $1 }' "$WORK_DIR/SHA256SUMS")"
 [[ "$EXPECTED" =~ ^[[:xdigit:]]{64}$ ]] || fail "Missing or invalid archive checksum"
 ACTUAL="$(/usr/bin/shasum -a 256 "$WORK_DIR/$ASSET")"

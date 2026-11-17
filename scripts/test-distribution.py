@@ -53,17 +53,27 @@ class DistributionTests(unittest.TestCase):
         curl = cls.mockbin / "curl"
         # Use the actual interpreter, not the /usr/bin/python3 CLT shim, so the
         # curl fixture still works when the installer simulates a clean Mac.
-        curl.write_text("#!" + sys.executable + "\n" + '''import json,os,pathlib,shutil,sys
+        curl.write_text("#!" + sys.executable + "\n" + '''import os,pathlib,shutil,sys
 args=sys.argv[1:]
-url=next(x for x in args if x.startswith('https://'))
-out=pathlib.Path(args[args.index('--output')+1])
+url=args[args.index('--url')+1]
+assert args[args.index('--proto')+1] == args[args.index('--proto-redir')+1] == '=https'
+assert args[args.index('--write-out')+1] == '%{http_code} %{redirect_url}'
 with open(os.environ['POKARAK_CURL_LOG'],'a') as f: f.write(url+'\\n')
-if os.environ.get('POKARAK_FAIL_DOWNLOAD'):
+releases='https://github.com/dave915/pokarak/releases'
+failure=os.environ.get('POKARAK_FAIL_DOWNLOAD')
+if failure in ('1',url) or url.startswith('https://api.github.com/'):
+    sys.stdout.write('403 ')
     sys.exit(22)
-if url.endswith('/releases/latest'):
-    out.write_text(json.dumps({'tag_name':os.environ.get('POKARAK_FIXTURE_TAG','v0.1.0')}))
+if url == releases+'/latest':
+    assert '--head' in args and '--no-location' in args
+    tag=os.environ.get('POKARAK_FIXTURE_TAG','v0.1.0')
+    dest=os.environ.get('POKARAK_FIXTURE_REDIRECT',releases+'/tag/'+tag)
+    sys.stdout.write(os.environ.get('POKARAK_FIXTURE_HTTP','302')+' '+dest)
 else:
+    assert '--location' in args and url.startswith(releases+'/download/')
+    out=pathlib.Path(args[args.index('--output')+1])
     shutil.copyfile(pathlib.Path(os.environ['POKARAK_FIXTURE_RELEASE'])/url.rsplit('/',1)[1],out)
+    sys.stdout.write('200 ')
 ''')
         curl.chmod(0o755)
 
@@ -100,9 +110,34 @@ else:
         self.assertEqual(version, "0.1.0")
         urls = self.log.read_text().splitlines()
         self.assertEqual(len(urls), 3)
-        self.assertTrue(urls[0].endswith("/releases/latest"))
+        self.assertEqual(urls[0], "https://github.com/dave915/pokarak/releases/latest")
         self.assertTrue(all("/releases/download/v0.1.0/" in u for u in urls[1:]))
         self.assertFalse((self.appdir / ".pokarak-install.lock").exists())
+
+    def test_pinned_version_bypasses_latest_lookup(self):
+        self.env["POKARAK_FIXTURE_TAG"] = "v9.9.9"
+        self.install("--version", "v0.1.0")
+        self.assertEqual(self.log.read_text().splitlines(), [
+            "https://github.com/dave915/pokarak/releases/download/v0.1.0/pokarak-macos-arm64.tar.gz",
+            "https://github.com/dave915/pokarak/releases/download/v0.1.0/SHA256SUMS",
+        ])
+
+    def test_latest_redirect_requires_published_stable_tag_in_this_repository(self):
+        latest = "https://github.com/dave915/pokarak/releases/latest"
+        for status, location in [
+            ("200", ""),
+            ("302", "https://other.example/dave915/pokarak/releases/tag/v0.1.0"),
+            ("302", "https://github.com/other/pokarak/releases/tag/v0.1.0"),
+            ("302", "https://github.com/dave915/pokarak/releases/tag/v0.1.0-beta.1"),
+            ("302", "https://github.com/dave915/pokarak/releases/tag/v0.1.0/other"),
+        ]:
+            with self.subTest(location=location):
+                self.env.update(POKARAK_FIXTURE_HTTP=status, POKARAK_FIXTURE_REDIRECT=location)
+                self.log.unlink(missing_ok=True)
+                self.install(expected=1)
+                self.assertEqual(self.log.read_text().splitlines(), [latest])
+                self.assertFalse(self.app.exists())
+                self.assertFalse(self.cli.exists())
 
     def test_finder_download_has_english_bundle_and_display_names(self):
         with zipfile.ZipFile(self.release / "Pokarak-macos-arm64.zip") as archive:
@@ -184,12 +219,27 @@ else:
         self.assertEqual((self.app / "Contents/Info.plist").read_bytes(), old_plist)
         self.assertEqual(self.cli.read_bytes(), old_cli)
 
-    def test_download_failure_preserves_app(self):
+    def test_update_reports_failing_public_url_and_preserves_install(self):
         self.install()
-        self.env["POKARAK_FAIL_DOWNLOAD"] = "1"
-        self.install(expected=22)
-        self.assertTrue(self.app.is_dir())
-        self.assertTrue(self.cli.exists())
+        previous_inodes = (self.app.stat().st_ino, self.cli.stat().st_ino)
+        previous_app = (self.app / "Contents/MacOS/pokarak").read_bytes()
+        previous_cli = self.cli.read_bytes()
+        releases = "https://github.com/dave915/pokarak/releases"
+        for path, step in [
+            ("latest", "Latest release lookup"),
+            ("download/v0.1.0/pokarak-macos-arm64.tar.gz", "App archive download"),
+            ("download/v0.1.0/SHA256SUMS", "Checksum download"),
+        ]:
+            with self.subTest(path=path):
+                url = releases + "/" + path
+                self.env["POKARAK_FAIL_DOWNLOAD"] = url
+                result = subprocess.run([str(self.cli), "update"], env=self.env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 22)
+                self.assertIn(f"{step} failed at {url} (HTTP 403", result.stderr)
+                self.assertEqual((self.app / "Contents/MacOS/pokarak").read_bytes(), previous_app)
+                self.assertEqual(self.cli.read_bytes(), previous_cli)
+                self.assertEqual((self.app.stat().st_ino, self.cli.stat().st_ino), previous_inodes)
+                self.assertFalse((self.appdir / ".pokarak-install.lock").exists())
 
     def repack(self, app, sign=True):
         if sign:

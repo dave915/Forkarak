@@ -2,7 +2,7 @@
 
 지원 대상은 Apple Silicon Mac, macOS 13 이상이다. 네이티브 Rust/GPUI 앱이며 Intel Mac과 Windows/Linux 배포는 검증하지 않았다. 최소 OS는 선언값으로, macOS 13 실기기 검증과는 구분한다.
 
-이 문서의 새 에디터·언어 관리·CLI 기능은 통합된 개발 버전을 기준으로 한다. **이번 변경으로 새 릴리스를 게시하지 않았다.** 공개 다운로드는 기존 안정 버전이며 아래 소스 빌드와 기능 구성이 다를 수 있다.
+이 문서는 Forkarak **1.0.0**의 에디터·언어 관리·CLI 기능과 공개 배포 절차를 설명한다.
 
 ## 현재 소스에서 빌드하기
 
@@ -60,7 +60,7 @@ forkarak --new-window .
 ~/.local/bin/forkarak /path/to/project
 ```
 
-기본 경로는 `~/Applications/Forkarak.app`과 `~/.local/bin/forkarak`이다. `sudo`나 Xcode, Rust, Homebrew, GitHub 계정이 필요하지 않다. 설치 프로그램은 앱을 자동으로 실행하거나 셸 설정을 수정하지 않는다. `~/.local/bin`을 PATH에 추가하면 `forkarak`으로 실행할 수 있다.
+기본 경로는 `~/Applications/Forkarak.app`이며 `~/.local/bin/forkarak`과 `~/.local/bin/fkk`를 함께 설치한다. `sudo`나 Xcode, Rust, Homebrew, GitHub 계정이 필요하지 않다. 설치 프로그램은 앱을 자동으로 실행하거나 셸 설정을 수정하지 않는다. `~/.local/bin`을 PATH에 추가하면 `forkarak`으로 실행할 수 있다.
 
 이전 `Pokarak.app` 사용자도 같은 명령으로 Forkarak을 새로 설치할 수 있다. 기본 경로를 변경하려면 `--app-dir`와 `--bin-dir`을 사용한다.
 
@@ -79,11 +79,11 @@ v0.2.7부터 설치된 앱은 실행 중 새 정식 릴리스를 확인한다. �
 ```sh
 installer="$(mktemp)"
 curl -fsSL https://github.com/dave915/Forkarak/releases/latest/download/install.sh -o "$installer" && \
-  /bin/bash "$installer" --version v0.2.7 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
+  /bin/bash "$installer" --version v1.0.0 --app-dir "$HOME/Applications" --bin-dir "$HOME/.local/bin"
 rm -f "$installer"
 ```
 
-앱에서 재시작하면 세션 설정에 현재 작업 위치와 작성 중인 커밋 메시지를 저장한다. 저장소 파일과 Git 인덱스는 그대로 유지된다. 새 개발 버전의 언어 도구는 [언어 지원 관리](language-analysis.md)에서 명시적으로 설치하며, 공개 버전의 도구 구성과 구분한다.
+앱에서 재시작하면 세션 설정에 현재 작업 위치와 작성 중인 커밋 메시지를 저장한다. 저장소 파일과 Git 인덱스는 그대로 유지된다. 추가 언어 도구는 [언어 지원 관리](language-analysis.md)에서 명시적으로 설치하며 프로젝트 분석 허용은 별도로 관리한다.
 
 ## 다운로드와 교체
 
@@ -103,17 +103,17 @@ rm -f "$installer"
 
 ## 새 버전 게시 절차 (유지보수용)
 
-현재 작업에서는 아래 절차를 실행하지 않는다. 아래 `v0.4.0`은 현재 workspace 버전에 맞춘 예시이며, 실제 게시 버전은 `Cargo.toml`의 workspace 버전과 반드시 일치해야 한다. 릴리스 스크립트는 불일치하면 거부한다.
+아래 `v1.0.0`은 1.0.0 릴리스의 예시다. 이후 릴리스도 실제 게시 버전과 `Cargo.toml`의 workspace 버전을 반드시 일치시켜야 한다. 릴리스 스크립트는 불일치하면 거부한다.
 
-`.github/workflows/release.yml`은 `vX.Y.Z` 태그를 push하면 macOS arm64 환경에서 설치 테스트, 앱 테스트, release 빌드와 패키징을 수행한다. 성공한 산출물만 새 릴리스로 게시한다. 같은 태그의 기존 릴리스 파일은 자동으로 덮어쓰지 않는다. GitHub 문서의 [최신 릴리스 다운로드 URL](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)을 사용하므로 설치 명령은 버전마다 바뀌지 않는다.
+`.github/workflows/release.yml`은 `vX.Y.Z` 태그를 push하면 macOS arm64 환경에서 설치·CLI·언어 리소스 테스트, 포맷·Clippy·앱 테스트, release 빌드·패키징과 Java 번들의 설치·이동 검증을 수행한다. 성공한 산출물만 새 릴리스로 게시한다. 같은 태그의 기존 릴리스 파일은 자동으로 덮어쓰지 않는다. GitHub 문서의 [최신 릴리스 다운로드 URL](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)을 사용하므로 설치 명령은 버전마다 바뀌지 않는다.
 
 1. 기능 변경을 검증하고 통합한다.
 2. `Cargo.toml`의 workspace 버전과 `Cargo.lock`의 로컬 패키지 버전을 갱신하고 커밋한다.
 3. 해당 커밋에 같은 버전의 태그를 붙이고 원격으로 보낸다.
 
 ```sh
-git tag v0.4.0
-git push origin HEAD v0.4.0
+git tag v1.0.0
+git push origin HEAD v1.0.0
 ```
 
 워크플로 수동 실행은 이미 존재하는 태그를 받는다. 실패한 빌드를 고친 경우 새 버전을 사용하고, 기존 릴리스가 없는 단순 일시 오류는 같은 태그의 워크플로를 재실행한다.
@@ -131,8 +131,8 @@ git push origin HEAD v0.4.0
 로컬 패키징은 다음과 같다. `--binary`는 기존 arm64 실행 파일을 사용하며 다시 빌드하지 않는다.
 
 ```sh
-./scripts/release-macos.sh --version v0.4.0
-./scripts/release-macos.sh --version v0.4.0 --binary /absolute/path/to/pokarak
+./scripts/release-macos.sh --version v1.0.0
+./scripts/release-macos.sh --version v1.0.0 --binary /absolute/path/to/pokarak
 python3 scripts/test-distribution.py
 ```
 
@@ -145,7 +145,7 @@ python3 scripts/test-distribution.py
 ```sh
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 NOTARY_KEYCHAIN_PROFILE='forkarak-notary' \
-./scripts/release-macos.sh --version v0.4.0
+./scripts/release-macos.sh --version v1.0.0
 ```
 
 이 경로는 hardened runtime과 timestamp로 서명하고, `notarytool submit --wait` 성공 후 ticket을 staple한 번들을 배포한다. 실제 계정이 없어 공증 경로의 Apple 서비스 연동은 검증되지 않았다. 기본 GitHub 워크플로는 인증서와 공증 자격 증명을 구성하지 않으며 ad-hoc 빌드를 게시한다. 공증에는 [Apple이 요구하는 Developer ID 서명](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)이 필요하다. 공증한 앱에도 일반적인 첫 실행 확인창은 남을 수 있다.

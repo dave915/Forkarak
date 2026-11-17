@@ -6,7 +6,7 @@
 
 ![Forkarak Code 화면. 워크트리와 파일 트리 옆에 TypeScript 주문 서비스가 열려 있고, 파일 탭 아래 도구가 한 줄에 정리되어 있습니다.](docs/images/code-workspace.png)
 
-*개발 버전의 실제 Code 화면입니다. 아래 새 기능은 통합된 소스 기준이며, 이번 변경으로 새 릴리스를 게시하지 않았습니다. 공개 다운로드에는 일부 기능이 아직 포함되지 않을 수 있습니다.*
+*아래 기능은 Forkarak 1.0.0에 포함됩니다. 실제 앱 화면이며, 편집기 비교의 버전·촬영 조건은 아래 기록을 참고하세요.*
 
 [VS Code·Zed와 같은 파일을 연 실제 화면 비교·촬영 조건](docs/images/editor-comparison/findings.md)
 
@@ -36,6 +36,10 @@
 
 ## 워크트리, 터미널과 AI
 
+상단 프로젝트 탭과 펼친 프로젝트 목록에서 드래그로 순서를 바꿀 수 있습니다. 두 곳의 순서는 함께 바뀌며 재시작 후에도 유지됩니다. 탭이 넘치면 가로로 이동하거나 목록에서 선택할 수 있습니다.
+
+![프로젝트 8개를 연 1440×900 창. 상단 탭은 한 줄을 유지하고 펼친 목록에서 전체 프로젝트와 저장한 순서를 확인할 수 있습니다.](docs/images/project-tabs.jpg)
+
 프로젝트 탭과 워크트리마다 파일 탭·초안·읽던 위치·검색·패널 상태를 유지합니다. 워크트리를 전환할 때 다른 작업의 늦은 응답을 섞지 않습니다. 사이드바와 파일 목록은 각각 **⌘⌥B**, **⌘⇧B**로 접고 펼칠 수 있습니다.
 
 내장 터미널은 워크트리별 여러 세션, 탭 전환·종료·재시작과 로그인 셸 설정을 지원합니다. 패널을 숨겨도 세션은 유지됩니다. **AI 도구** 설정에서 Claude/Codex CLI와 인자를 정하고, 현재 워크트리의 터미널로 실행하거나 명령을 복사하세요. 별도 AI 계정이나 CLI 설치는 각 도구의 요구 사항을 따릅니다.
@@ -52,7 +56,7 @@
 
 ## 설치와 실행
 
-Apple Silicon Mac(M1 이상), macOS 13 이상이 대상입니다. 공개 안정 버전은 아래 명령이나 위 다운로드 링크로 설치합니다. **새 기능을 사용하려면 현재 소스를 빌드한 로컬 앱을 사용하세요.**
+Apple Silicon Mac(M1 이상), macOS 13 이상이 대상입니다. 공개 안정 버전은 아래 명령이나 위 다운로드 링크로 설치합니다. **1.0.0에는 위 에디터·Git·언어 관리 기능과 두 CLI 명령이 포함됩니다.**
 
 ```sh
 /bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/Forkarak/releases/latest/download/install.sh | /bin/bash'
@@ -86,6 +90,6 @@ forkarak ctl instructions --agent codex
 forkarak ctl sessions
 ```
 
-저장·Stage·Commit·Merge는 `ctl`에서도 명시적인 `--yes`가 필요합니다. 전체 명령은 `forkarak ctl --help`를 참고하세요. 공개 릴리스 업데이트는 앱의 업데이트 알림 또는 `forkarak update`로 수행하며, 아직 공개하지 않은 개발 기능을 받는 방법과는 구분합니다.
+저장·Stage·Commit·Merge는 `ctl`에서도 명시적인 `--yes`가 필요합니다. 전체 명령은 `forkarak ctl --help`를 참고하세요. 공개 릴리스 업데이트는 앱의 업데이트 알림 또는 `forkarak update`로 수행합니다.
 
 [언어 지원과 제한](docs/language-analysis.md) · [설치·CLI·배포](docs/distribution.md) · [MIT 라이선스](LICENSE)

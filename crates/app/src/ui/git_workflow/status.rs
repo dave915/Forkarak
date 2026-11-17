@@ -76,8 +76,8 @@ impl Pokarak {
         let continued = progress.clone();
         let aborted = progress.clone();
         let busy = self.git_is_busy();
-        Some(div().flex_none().flex().flex_wrap().items_center().gap_2().px_3().py_1()
-            .child(format!("{} 진행 중 · 미해결 파일 {}개 · {}", progress.kind.label(), state.conflicts.len(), root.display()))
+        Some(div().flex_none().flex().h(ui_px(32.)).items_center().gap_2().px_3()
+            .child(div().min_w_0().flex_1().text_ellipsis().child(format!("{} 진행 중 · 미해결 파일 {}개 · {}", progress.kind.label(), state.conflicts.len(), root.display())))
             .child(wf_action(&weak, "workflow-status-review", "충돌 / 변경 확인…", busy, |app,w,cx| app.open_git_workflow(w,cx)))
             .child(wf_action(&weak, "workflow-status-continue", "계속…", busy || !state.conflicts.is_empty(), move |app,w,cx| app.confirm_workflow(root.clone(), format!("{} 계속", continued.kind.label()), "확인한 진행 상태에서 스테이징된 결과로 계속합니다. Git hooks가 실행되고 커밋이 만들어질 수 있습니다.".into(), WorkflowWrite::Finish { progress: continued.clone(), abort: false }, w,cx)))
             .child(wf_action(&weak, "workflow-status-abort", "중단…", busy, move |app,w,cx| app.confirm_workflow(abort_root.clone(), format!("{} 중단", aborted.kind.label()), "Git이 작업 이전 상태로 복원합니다. 충돌 해결 중 작성한 내용이 사라질 수 있습니다. 대상 워크트리를 확인하세요.".into(), WorkflowWrite::Finish { progress: aborted.clone(), abort: true }, w,cx)))

@@ -570,7 +570,8 @@ impl Pokarak {
     fn scope_controls(&self, cx: &mut Context<Self>) -> Div {
         let mut row = div()
             .flex()
-            .flex_wrap()
+            .flex_none()
+            .h(ui_px(28.))
             .items_center()
             .gap_2()
             .child("저장 범위");
@@ -780,20 +781,25 @@ impl Pokarak {
                 div()
                     .px_2()
                     .flex()
-                    .flex_wrap()
+                    .flex_none()
+                    .h(ui_px(32.))
                     .items_center()
                     .gap_2()
                     .child(self.scope_controls(cx))
                     .child(
                         Button::new("task-add")
-                            .label("작업 추가…")
+                            .icon(IconName::Plus)
+                            .accessibility_label("작업 추가")
+                            .tooltip("작업 추가…")
                             .small()
                             .disabled(root.as_os_str().is_empty())
                             .on_click(cx.listener(|app, _, w, cx| app.edit_task(None, w, cx))),
                     )
                     .child(
                         Button::new("spring-profiles")
-                            .label("Spring 프로필 만들기…")
+                            .icon(IconName::List)
+                            .accessibility_label("Spring 프로필 만들기")
+                            .tooltip("Spring 프로필 만들기…")
                             .small()
                             .disabled(
                                 root.as_os_str().is_empty()
@@ -1417,8 +1423,8 @@ impl Pokarak {
             }
             rows = rows.child(row);
         }
-        div().flex_1().min_h_0().v_flex().gap_2().child(div().px_2().flex().flex_wrap().items_center().gap_2().child(self.scope_controls(cx))
-            .child(Button::new("extension-install").label("로컬 확장 설치…").small().disabled(self.execution.busy).on_click(cx.listener(|app,_,w,cx|app.choose_extension_bundle(None,w,cx)))))
+        div().flex_1().min_h_0().v_flex().gap_2().child(div().px_2().flex().flex_none().h(ui_px(32.)).items_center().gap_2().child(self.scope_controls(cx))
+            .child(Button::new("extension-install").icon(IconName::Plus).accessibility_label("로컬 확장 설치").tooltip("로컬 확장 설치…").small().disabled(self.execution.busy).on_click(cx.listener(|app,_,w,cx|app.choose_extension_bundle(None,w,cx)))))
             .child(div().px_3().text_size(ui_text(11.)).text_color(palette.rgb(MUTED)).child("확장은 별도 프로세스에서 로컬 코드 권한으로 실행됩니다. 신뢰하는 번들만 설치하세요. 활성화는 명령을 직접 실행할 때만 이루어집니다."))
             .child(rows).into_any_element()
     }

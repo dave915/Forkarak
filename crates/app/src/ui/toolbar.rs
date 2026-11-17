@@ -11,7 +11,6 @@ impl Pokarak {
         let palette = Palette::new(cx);
         let width = window.viewport_size().width;
         let compact = width < px(1180.);
-        let overflow = width < px(1020.);
         let has_projects = !self.projects.is_empty();
         let content = div()
             .absolute()
@@ -34,99 +33,39 @@ impl Pokarak {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("포카락"),
                 )
-                .child(div().flex_1())
             })
             .when(has_projects, |bar| {
-                bar.child(self.project_tabs(window, cx))
-                    .child(
-                        Button::new("add-project")
-                            .icon(IconName::Plus)
-                            .ghost()
-                            .small()
-                            .accessibility_label("프로젝트 열기")
-                            .tooltip_with_action("프로젝트 열기", &OpenRepository, None)
-                            .on_click(cx.listener(|app, _, w, cx| app.choose_repository(w, cx))),
-                    )
-                    .child(div().flex_1())
+                bar.child(self.project_tabs(window, cx)).child(
+                    Button::new("add-project")
+                        .icon(IconName::Plus)
+                        .ghost()
+                        .small()
+                        .accessibility_label("프로젝트 열기")
+                        .tooltip_with_action("프로젝트 열기", &OpenRepository, None)
+                        .on_click(cx.listener(|app, _, w, cx| app.choose_repository(w, cx))),
+                )
             })
             .when(self.current.is_some(), |bar| {
                 bar.child(self.workspace_modes(compact, cx))
                     .when(!self.git_history.active, |bar| {
                         bar.child(self.reading_navigation(cx))
                     })
-                    .child(
-                        Button::new("stage-commit")
-                            .ml_1()
-                            .label("Stage / 커밋")
-                            .when(!compact, |button| {
-                                button.icon(IconName::GitCommitHorizontal)
-                            })
-                            .small()
-                            .disabled(self.loading || self.git_is_busy())
-                            .tooltip_with_action("변경사항 스테이징 및 커밋", &OpenGitCommit, None)
-                            .on_click(cx.listener(|app, _, w, cx| app.open_git_commit(w, cx))),
-                    )
-                    .child(self.sync_tools(compact, cx))
-                    .when(!overflow, |bar| {
-                        bar.child(
-                            Button::new("git-actions")
-                                .label(if self.git_is_busy() {
-                                    "Git 작업 중…"
-                                } else {
-                                    "Git 작업"
-                                })
-                                .icon(IconName::GitBranch)
-                                .ghost()
-                                .small()
-                                .disabled(self.loading || self.git_is_busy())
-                                .tooltip("브랜치·워크트리·충돌 해결·저장소 설정")
-                                .on_click(cx.listener(|app, _, w, cx| app.open_git_actions(w, cx))),
-                        )
-                        .child(
-                            Button::new("refresh")
-                                .icon(IconName::RefreshCw)
-                                .ghost()
-                                .small()
-                                .loading(self.loading)
-                                .disabled(self.loading || self.git_is_busy())
-                                .accessibility_label("저장소 새로고침")
-                                .tooltip_with_action("저장소 새로고침", &Refresh, None)
-                                .on_click(cx.listener(|app, _, w, cx| app.refresh(w, cx))),
-                        )
-                    })
-                    .when(overflow, |bar| {
-                        let busy = self.loading || self.git_is_busy();
-                        bar.child(
-                            Button::new("toolbar-more")
-                                .icon(IconName::Ellipsis)
-                                .ghost()
-                                .small()
-                                .accessibility_label("도구 더 보기")
-                                .tooltip("도구 더 보기")
-                                .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-                                    menu.menu_with_disabled(
-                                        "Git 작업…",
-                                        Box::new(OpenGitActions),
-                                        busy,
-                                    )
-                                    .menu_with_disabled("저장소 새로고침", Box::new(Refresh), busy)
-                                    .separator()
-                                    .menu("설정…", Box::new(OpenSettings))
-                                }),
-                        )
-                    })
             })
-            .when(!overflow || self.current.is_none(), |bar| {
-                bar.child(
-                    Button::new("settings")
-                        .icon(IconName::Settings)
-                        .ghost()
-                        .small()
-                        .accessibility_label("설정")
-                        .tooltip_with_action("설정", &OpenSettings, None)
-                        .on_click(cx.listener(|app, _, w, cx| app.open_settings(w, cx))),
+            .child(div().flex_1())
+            .when(self.current.is_some(), |bar| {
+                bar.child(self.git_toolbar(cx)).child(
+                    toolbar_icon("refresh", IconName::RefreshCw, "저장소 새로고침")
+                        .loading(self.loading)
+                        .disabled(self.loading || self.git_is_busy())
+                        .tooltip_with_action("저장소 새로고침", &Refresh, None)
+                        .on_click(cx.listener(|app, _, w, cx| app.refresh(w, cx))),
                 )
-            });
+            })
+            .child(
+                toolbar_icon("settings", IconName::Settings, "설정")
+                    .tooltip_with_action("설정", &OpenSettings, None)
+                    .on_click(cx.listener(|app, _, w, cx| app.open_settings(w, cx))),
+            );
 
         TitleBar::new()
             .h(px(36.))
@@ -141,77 +80,101 @@ impl Pokarak {
             .into_any_element()
     }
 
-    fn sync_tools(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
-        let disabled = self.loading || self.git_is_busy();
-        let actions = [
-            (
-                Page::Fetch,
-                "Fetch",
-                IconName::CloudDownload,
-                "원격 브랜치 가져오기",
-            ),
-            (
-                Page::Pull,
-                "Pull",
-                IconName::ArrowDownToLine,
-                "현재 브랜치에 fast-forward로 받기",
-            ),
-            (
-                Page::Push,
-                "Push",
-                IconName::ArrowUpFromLine,
-                "로컬 브랜치를 원격에 보내기",
-            ),
-        ];
-        if compact {
-            let weak = cx.entity().downgrade();
-            let root = self.current.clone();
-            Button::new("sync-menu")
-                .label("동기화")
-                .icon(IconName::ChevronDown)
-                .ghost()
-                .small()
-                .disabled(disabled)
-                .tooltip("Fetch · Pull · Push")
-                .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
-                    for (page, label, _, description) in actions {
-                        let weak = weak.clone();
-                        let root = root.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(format!("{label} · {description}…"))
-                                .disabled(disabled)
-                                .on_click(move |_, w, cx| {
+    fn git_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let busy = self.loading || self.git_is_busy();
+        let weak = cx.entity().downgrade();
+        let root = self.current.clone();
+        let palette = Palette::new(cx);
+        div()
+            .id("git-toolbar")
+            .flex_none()
+            .flex()
+            .items_center()
+            .h(px(28.))
+            .px(px(3.))
+            .gap(px(2.))
+            .rounded(px(6.))
+            .bg(palette.rgb(PANEL))
+            .child(
+                toolbar_icon(
+                    "stage-commit",
+                    IconName::GitCommitHorizontal,
+                    "Stage / 커밋",
+                )
+                .tooltip_with_action("Stage / 커밋", &OpenGitCommit, None)
+                .disabled(busy)
+                .on_click(cx.listener(|app, _, w, cx| app.open_git_commit(w, cx))),
+            )
+            .child(
+                toolbar_icon("toolbar-branch", IconName::GitBranch, "브랜치")
+                    .tooltip("브랜치 · 만들기, 체크아웃, Merge, Rebase")
+                    .disabled(busy)
+                    .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+                        for (page, label) in [
+                            (Page::Create, "브랜치 만들기…"),
+                            (Page::Checkout, "체크아웃…"),
+                            (Page::Merge, "Merge…"),
+                            (Page::Rebase, "Rebase…"),
+                        ] {
+                            let weak = weak.clone();
+                            let root = root.clone();
+                            menu =
+                                menu.item(PopupMenuItem::new(label).on_click(move |_, w, cx| {
                                     let _ = weak.update(cx, |app, cx| {
                                         if app.current == root {
                                             app.load_git_page(Some(page), w, cx);
                                         }
                                     });
-                                }),
-                        );
-                    }
-                    menu
-                })
-                .into_any_element()
-        } else {
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .children(actions.map(|(page, label, icon, description)| {
-                    Button::new(label)
-                        .label(label)
-                        .icon(icon)
-                        .ghost()
-                        .compact()
-                        .small()
-                        .disabled(disabled)
-                        .tooltip(description)
+                                }));
+                        }
+                        menu
+                    }),
+            )
+            .child(
+                toolbar_icon("toolbar-stash", IconName::Archive, "Stash")
+                    .tooltip_with_action("Stash · 변경 보관 및 복원", &OpenGitWorkflow, None)
+                    .disabled(busy)
+                    .on_click(cx.listener(|app, _, w, cx| app.open_git_workflow(w, cx))),
+            )
+            .children(
+                [
+                    (
+                        Page::Fetch,
+                        "Fetch",
+                        IconName::CloudDownload,
+                        "Fetch · 원격 브랜치 가져오기",
+                    ),
+                    (
+                        Page::Pull,
+                        "Pull",
+                        IconName::ArrowDownToLine,
+                        "Pull · 현재 브랜치에 fast-forward로 받기",
+                    ),
+                    (
+                        Page::Push,
+                        "Push",
+                        IconName::ArrowUpFromLine,
+                        "Push · 원격에 보내기",
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (page, name, icon, tooltip))| {
+                    toolbar_icon(name, icon, name)
+                        .when(index == 0, |button| button.ml(px(6.)))
+                        .tooltip(tooltip)
+                        .disabled(busy)
                         .on_click(
                             cx.listener(move |app, _, w, cx| app.load_git_page(Some(page), w, cx)),
                         )
-                }))
-                .into_any_element()
-        }
+                }),
+            )
+            .child(
+                toolbar_icon("git-actions", IconName::Ellipsis, "Git 작업 더 보기")
+                    .tooltip("Git 작업 더 보기")
+                    .disabled(busy)
+                    .on_click(cx.listener(|app, _, w, cx| app.open_git_actions(w, cx))),
+            )
     }
 
     fn project_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> TabBar {
@@ -357,4 +320,14 @@ impl Pokarak {
                     .on_click(cx.listener(|app, _, w, cx| app.navigate_history(false, w, cx))),
             )
     }
+}
+
+fn toolbar_icon(id: &'static str, icon: IconName, name: &'static str) -> Button {
+    Button::new(id)
+        .icon(icon)
+        .accessibility_label(name)
+        .ghost()
+        .small()
+        .w(px(28.))
+        .h(px(26.))
 }

@@ -10,7 +10,7 @@ Mode: operate/read. A compact developer review surface, with a steel spork mark 
 - Native keyboard conventions, visible focus, tooltips, drag-resizable panes. No dashboard cards or decorative metrics.
 
 ## First viewport
-A 36px native titlebar keeps project tabs, the open-project action, Graph/Code selection and Stage / Commit together. Wide windows show Fetch, Pull and Push directly. Smaller windows group these under Sync and put secondary actions under More. Code View adds back and forward navigation.
+The 36px native titlebar keeps project tabs, the open-project action and Graph/Code selection on the left. On the right, a subtly raised toolbar groups seven icon buttons for Stage / Commit, branches, stash, fetch, pull, push and more Git actions. The same buttons stay visible at the minimum window width. Hover reveals each action's name, and each icon has an accessibility label. Refresh and settings sit outside the group. Code View adds back and forward navigation.
 
 Repositories open in Git Graph mode. A collapsible group for each of worktrees, local branches, remotes, tags and stashes sits to the left of the graph. Selecting a reference reveals its commit. Reference labels, graph lanes and commit messages have their own columns. Branch hover follows its first parent through merges. Cmd-F searches commit messages, authors and hashes across the repository. A commit context menu offers cherry-pick and revert. Local branch context menus name the source and destination for merge and rebase.
 

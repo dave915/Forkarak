@@ -89,7 +89,7 @@ jobs:
           /bin/bash -o pipefail -c 'curl -fsSL https://github.com/dave915/pokarak/releases/latest/download/install.sh | /bin/bash'
           ```
           설치 후 앱은 `~/Applications/Pokarak.app`, 명령은 `~/.local/bin/pokarak`에 있습니다.
-          업데이트: `~/.local/bin/pokarak update`
+          v0.2.5부터 앱에서 **설정 → 업데이트 확인**을 사용할 수 있습니다. 새 버전 알림에서 **업데이트 다운로드**를 누르고 준비가 끝나면 **업데이트하고 재시작**을 선택하세요. 터미널에서는 앱을 종료하고 `~/.local/bin/pokarak update`를 실행하세요.
 
           이번 빌드는 ad-hoc 서명이며 Apple Developer ID 공증은 없습니다.
           NOTES

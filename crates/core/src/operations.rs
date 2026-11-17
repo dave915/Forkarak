@@ -16,6 +16,7 @@ pub mod integration;
 pub mod preview;
 pub mod recovery;
 pub mod sync;
+pub mod tags;
 pub mod workflow;
 pub mod worktrees;
 pub use file_save::save_file;
@@ -1037,6 +1038,10 @@ mod tests {
     mod recovery_actions {
         use super::*;
         include!("operations/recovery_tests.rs");
+    }
+    mod tag_actions {
+        use super::*;
+        include!("operations/tags_tests.rs");
     }
 
 

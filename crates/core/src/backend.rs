@@ -195,6 +195,14 @@ pub(crate) fn commit_working_changes(root: &Path) -> Result<Vec<ChangedFile>> {
 }
 
 pub(crate) fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
+    snapshot_inner(path, compare, true)
+}
+
+pub(crate) fn snapshot_current(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
+    snapshot_inner(path, compare, false)
+}
+
+fn snapshot_inner(path: &Path, compare: &CompareMode, inspect_siblings: bool) -> Result<Snapshot> {
     let root = git::repository_root(path)?;
     let head = git::head(&root)?;
     let baseline = git::baseline(&root, compare, head.as_deref())?;
@@ -238,11 +246,22 @@ pub(crate) fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
             } else {
                 capture.changes(&root, &capture.head_tree, true)?.len()
             };
-        } else if !worktree.is_prunable && worktree.branch != "(bare)" && worktree.path.is_dir() {
-            let other = Capture::read(&worktree.path, &Tree::new())
-                .with_context(|| format!("Cannot inspect worktree {}", worktree.path.display()))?;
-            worktree.changed_files = other.changes(&worktree.path, &other.head_tree, true)?.len();
-            feed(&mut fingerprint, other.fingerprint.as_bytes());
+            worktree.changed_files_available = true;
+        } else if inspect_siblings && !worktree.is_prunable && worktree.branch != "(bare)" {
+            let inspected = (|| -> Result<(usize, String)> {
+                let other = Capture::read(&worktree.path, &Tree::new())?;
+                let count = other.changes(&worktree.path, &other.head_tree, true)?.len();
+                Ok((count, other.fingerprint))
+            })()
+            .with_context(|| format!("Cannot inspect worktree {}", worktree.path.display()));
+            match inspected {
+                Ok((count, other_fingerprint)) => {
+                    worktree.changed_files = count;
+                    worktree.changed_files_available = true;
+                    feed(&mut fingerprint, other_fingerprint.as_bytes());
+                }
+                Err(error) => worktree.inspection_error = Some(format!("{error:#}")),
+            }
         }
         feed(&mut fingerprint, worktree.path.as_os_str().as_bytes());
         feed(&mut fingerprint, worktree.branch.as_bytes());
@@ -257,6 +276,10 @@ pub(crate) fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
             ],
         );
         feed(&mut fingerprint, &worktree.changed_files.to_le_bytes());
+        feed(&mut fingerprint, &[worktree.changed_files_available as u8]);
+        if let Some(error) = &worktree.inspection_error {
+            feed(&mut fingerprint, error.as_bytes());
+        }
     }
     let worktree = worktrees
         .iter()

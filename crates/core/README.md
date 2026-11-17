@@ -13,6 +13,16 @@ server, fetches missing objects, or runs repository filters or hooks.
   Invalid/unrelated bases and unborn branch comparisons return actionable errors.
 - Worktree inventory counts always describe uncommitted changes. The selected
   comparison's entries and line counts are in `Snapshot.changes`.
+- `snapshot_current` refreshes only the selected worktree's working contents and
+  diffs. Other registered worktrees remain inventory-only rows with
+  `changed_files_available = false`; their zero placeholder is not a clean count.
+  Full `snapshot` still inspects sibling counts, but an unreadable sibling is
+  reported through its `inspection_error` without blocking the selected reader.
+  Successful counts set `changed_files_available = true`.
+- `repository_watch_paths` returns the canonical worktree, its actual Git
+  directory, and its common Git directory, deduplicated. This includes linked
+  worktree indexes/HEAD and shared refs outside the working directory. Discovery
+  reads metadata only and preserves native paths, including embedded newlines.
 - `Snapshot.files` contains existing tracked and nonignored untracked files,
   including configuration files and symlinks. Deleted files and submodule
   directories are excluded. Gitlinks are opaque index entries; nested submodule

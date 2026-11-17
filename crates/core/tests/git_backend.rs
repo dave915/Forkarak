@@ -1,6 +1,6 @@
 use pokarak_core::{
     ChangedFile, CompareMode, DiffKind, FileStatus, MAX_TEXT_BYTES, diff, read_file,
-    repository_root, search, snapshot,
+    repository_root, repository_watch_paths, search, snapshot, snapshot_current,
 };
 use std::{
     collections::BTreeMap,
@@ -552,6 +552,150 @@ fn worktree_inventory_handles_linked_detached_locked_and_prunable() {
 }
 
 #[test]
+fn watch_paths_include_real_linked_metadata_and_preserve_native_newlines() {
+    let repo = Repo::new();
+    repo.seed();
+    let linked = repo.temp.path().join("linked\n작업 tree");
+    repo.git_os(&[
+        "worktree".as_ref(),
+        "add".as_ref(),
+        "-b".as_ref(),
+        "linked".as_ref(),
+        "--".as_ref(),
+        linked.as_os_str(),
+    ]);
+    let paths = repository_watch_paths(&linked.join("src")).unwrap();
+    let expected_git_dir = git_at(
+        &linked,
+        &[
+            "rev-parse".as_ref(),
+            "--path-format=absolute".as_ref(),
+            "--git-dir".as_ref(),
+        ],
+    );
+    let expected_git_dir = PathBuf::from(OsString::from_vec(
+        expected_git_dir.strip_suffix(b"\n").unwrap().to_vec(),
+    ))
+    .canonicalize()
+    .unwrap();
+    assert_eq!(paths[0], linked.canonicalize().unwrap());
+    assert_eq!(paths.len(), 3);
+    assert!(paths.contains(&expected_git_dir));
+    assert!(paths.contains(&repo.root.join(".git").canonicalize().unwrap()));
+    assert!(!expected_git_dir.starts_with(&paths[0]));
+    assert!(expected_git_dir.join("HEAD").is_file());
+    assert!(expected_git_dir.join("index").is_file());
+    let main = repository_watch_paths(&repo.root).unwrap();
+    assert_eq!(main.len(), 2); // Main Git dir and common Git dir deduplicate.
+    assert_eq!(main[0], repo.root.canonicalize().unwrap());
+    assert_eq!(main[1], repo.root.join(".git").canonicalize().unwrap());
+}
+
+#[test]
+fn sibling_inspection_failure_does_not_block_healthy_selected_worktree() {
+    let repo = Repo::new();
+    repo.seed();
+    let bad = repo.temp.path().join("unreadable sibling");
+    let good = repo.temp.path().join("healthy sibling");
+    for (branch, path) in [("bad", &bad), ("good", &good)] {
+        repo.git_os(&[
+            "worktree".as_ref(),
+            "add".as_ref(),
+            "-b".as_ref(),
+            branch.as_ref(),
+            "--".as_ref(),
+            path.as_os_str(),
+        ]);
+    }
+    fs::write(good.join("new.rs"), "healthy change\n").unwrap();
+    repo.write("src/code.rs", "selected change\n");
+    let blocked = bad.join("src/code.rs");
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
+    // Elevated runners can still read chmod(000). A FIFO is a deterministic
+    // unsupported node instead; inspection must reject it without blocking.
+    if fs::File::open(&blocked).is_ok() {
+        fs::remove_file(&blocked).unwrap();
+        let name = std::ffi::CString::new(blocked.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    }
+    let snap = repo.snap();
+    assert_eq!(snap.worktree.changed_files, 1);
+    assert!(snap.worktree.changed_files_available);
+    assert!(snap.worktree.inspection_error.is_none());
+    assert_eq!(change(&snap, "src/code.rs").status, FileStatus::Modified);
+    let bad_row = snap.worktrees.iter().find(|w| w.branch == "bad").unwrap();
+    assert!(!bad_row.changed_files_available);
+    assert!(
+        bad_row
+            .inspection_error
+            .as_deref()
+            .unwrap()
+            .contains("Cannot inspect worktree")
+    );
+    let good_row = snap.worktrees.iter().find(|w| w.branch == "good").unwrap();
+    assert!(good_row.changed_files_available);
+    assert_eq!(good_row.changed_files, 1);
+    assert!(good_row.inspection_error.is_none());
+    // A failure in the actual selected worktree must still be visible.
+    assert!(snapshot(&bad, &CompareMode::Uncommitted).is_err());
+    let local = snapshot_current(&repo.root, &CompareMode::Uncommitted).unwrap();
+    assert!(local.worktree.changed_files_available);
+    assert!(
+        local
+            .worktrees
+            .iter()
+            .filter(|w| w.path != local.worktree.path)
+            .all(|w| !w.changed_files_available && w.inspection_error.is_none())
+    );
+}
+
+#[test]
+fn current_snapshot_skips_sibling_contents_and_preserves_branch_comparison() {
+    let repo = Repo::new();
+    repo.seed();
+    let linked = repo.temp.path().join("linked");
+    repo.git_os(&[
+        "worktree".as_ref(),
+        "add".as_ref(),
+        "-b".as_ref(),
+        "linked".as_ref(),
+        "--".as_ref(),
+        linked.as_os_str(),
+    ]);
+    repo.git(&["checkout", "-b", "feature"]);
+    repo.write("committed.rs", "committed on feature\n");
+    repo.add("committed.rs");
+    repo.commit();
+    let mode = CompareMode::Branch("main".into());
+    let first = snapshot_current(&repo.root, &mode).unwrap();
+    assert_eq!(first.changes.len(), 1);
+    assert_eq!(first.worktree.changed_files, 0);
+    assert!(first.worktree.changed_files_available);
+    assert_eq!(first.compare, mode);
+    let sibling = first
+        .worktrees
+        .iter()
+        .find(|w| w.branch == "linked")
+        .unwrap();
+    assert!(!sibling.changed_files_available);
+    assert!(sibling.inspection_error.is_none());
+    let full_before = snapshot(&repo.root, &mode).unwrap();
+    fs::write(linked.join("src/code.rs"), "sibling changed\n").unwrap();
+    assert_eq!(
+        first.fingerprint,
+        snapshot_current(&repo.root, &mode).unwrap().fingerprint
+    );
+    assert_ne!(
+        full_before.fingerprint,
+        snapshot(&repo.root, &mode).unwrap().fingerprint
+    );
+    repo.write("src/code.rs", "selected changed\n");
+    let next = snapshot_current(&repo.root, &mode).unwrap();
+    assert_ne!(first.fingerprint, next.fingerprint);
+    assert_eq!(next.worktree.changed_files, 1);
+}
+
+#[test]
 fn invalid_and_unrelated_bases_have_actionable_errors() {
     let repo = Repo::new();
     repo.seed();
@@ -870,6 +1014,9 @@ fn backend_does_not_mutate_repository_or_execute_configured_filters() {
         "changed\n"
     );
     assert_eq!(search(&repo.root, "changed", 10).unwrap().len(), 1);
+    let current = snapshot_current(&repo.root, &CompareMode::Uncommitted).unwrap();
+    assert_eq!(current.changes.len(), snap.changes.len());
+    assert_eq!(repository_watch_paths(&repo.root).unwrap().len(), 2);
     assert_eq!(before, contents(&repo.root));
     assert_eq!(
         index_modified,

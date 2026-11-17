@@ -394,6 +394,27 @@ pub(crate) fn worktrees(root: &Path) -> Result<Vec<Worktree>> {
     Ok(parse_worktrees(&bytes))
 }
 
+pub(crate) fn repository_watch_paths(path: &Path) -> Result<Vec<PathBuf>> {
+    let root = repository_root(path)?;
+    let mut paths = vec![root.clone()];
+    // Read separately: a native path can contain newlines, so a combined
+    // rev-parse response cannot safely be parsed by splitting into lines.
+    for option in ["--git-dir", "--git-common-dir"] {
+        let bytes = words(&root, &["rev-parse", "--path-format=absolute", option])?;
+        let directory = self::path(bytes.strip_suffix(b"\n").unwrap_or(&bytes));
+        let directory = directory.canonicalize().with_context(|| {
+            format!(
+                "Cannot locate Git metadata directory {}",
+                directory.display()
+            )
+        })?;
+        if !paths.contains(&directory) {
+            paths.push(directory);
+        }
+    }
+    Ok(paths)
+}
+
 pub(crate) fn parse_worktrees(bytes: &[u8]) -> Vec<Worktree> {
     let mut result = Vec::new();
     let mut current = Worktree::default();

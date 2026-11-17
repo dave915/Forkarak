@@ -33,7 +33,14 @@ pub struct Worktree {
     pub is_locked: bool,
     pub is_prunable: bool,
     pub is_detached: bool,
+    /// Meaningful only when `changed_files_available` is true.
     pub changed_files: usize,
+    /// Inventory-only rows and failed sibling inspections have no dirty count.
+    #[serde(default)]
+    pub changed_files_available: bool,
+    /// A sibling inspection failure never prevents viewing a healthy worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspection_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -111,6 +118,12 @@ pub struct SourceLocation {
 pub fn repository_root(path: &Path) -> Result<PathBuf> {
     git::repository_root(path)
 }
+/// Canonical filesystem roots to watch for this worktree's files and Git state.
+/// Includes the real Git and common directories for linked worktrees; discovery
+/// never writes metadata or reads sibling working files.
+pub fn repository_watch_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    git::repository_watch_paths(root)
+}
 /// List registered worktrees without reading their working files. Change counts
 /// are not populated; use a snapshot when counts are needed.
 pub fn worktree_inventory(root: &Path) -> Result<Vec<Worktree>> {
@@ -129,6 +142,12 @@ pub fn worktree_change_summary(root: &Path) -> Result<(usize, String)> {
 /// the index. Inventory counts are uncommitted counts, independent of comparison.
 pub fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
     backend::snapshot(path, compare)
+}
+/// Capture only the selected worktree's contents and diffs, plus the registered
+/// worktree inventory. Sibling dirty counts are unavailable, not assumed zero.
+/// Use this for UI refreshes that must not read every sibling's working files.
+pub fn snapshot_current(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
+    backend::snapshot_current(path, compare)
 }
 /// Compare against HEAD, or merge-base(base, HEAD), including working changes.
 /// Large text is returned as a bounded preview with `truncated = true`; its

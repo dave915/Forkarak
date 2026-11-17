@@ -240,7 +240,6 @@ impl RefBadges {
                         visible(reference_name(reference))
                     }),
             )
-            .on_hover(move |hovered, _, cx| hover.hover(&tip, (full, index), *hovered, cx))
             .on_click(move |_, w, cx| {
                 cx.stop_propagation();
                 let _ = select.owner.update(cx, |app, cx| {
@@ -252,6 +251,9 @@ impl RefBadges {
         let row = div()
             .id(("graph-ref-context", index))
             .flex_none()
+            // Button's managed tooltip owns its hover listener. Keep graph
+            // highlighting on the wrapper so each element has one listener.
+            .on_hover(move |hovered, _, cx| hover.hover(&tip, (full, index), *hovered, cx))
             .child(button);
         if (reference.starts_with("refs/heads/") || reference.starts_with("refs/remotes/"))
             && let Some(root) = &self.scope.root

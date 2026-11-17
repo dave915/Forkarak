@@ -94,6 +94,22 @@ impl Deref for ReviewDiff {
     }
 }
 
+fn diff_scroll_row(handle: &UniformListScrollHandle, row_height: Pixels) -> usize {
+    let state = handle.0.borrow();
+    // A restored split may stay hidden through several refreshes. Preserve its
+    // queued target until GPUI consumes it during layout, then follow real
+    // scrolling rather than retaining an obsolete requested position.
+    if let Some(pending) = state.deferred_scroll_to_item {
+        return pending.item_index;
+    }
+    let y = f32::from(state.base_handle.offset().y);
+    (-y / f32::from(row_height).max(1.)).max(0.).floor() as usize
+}
+
+pub(super) fn scroll_row_at(handle: &UniformListScrollHandle, cx: &App) -> usize {
+    diff_scroll_row(handle, theme::code_row_height(cx.theme().mono_font_size))
+}
+
 impl ReviewDiff {
     pub(super) fn view(&self, hide_whitespace: bool) -> Arc<DiffView> {
         self.views[usize::from(hide_whitespace)]
@@ -117,7 +133,7 @@ impl ReviewDiff {
 
     pub(super) fn split_position(&self, cx: &App) -> Option<(usize, f32)> {
         let split = self.split[self.active_split.get()].get()?.read(cx);
-        Some((scroll_row(&split.scroll), split.horizontal))
+        Some((scroll_row_at(&split.scroll, cx), split.horizontal))
     }
 
     pub(super) fn restore_split_position(
@@ -206,7 +222,7 @@ impl ReviewDiff {
                     hunks
                 };
                 if let Some(row) =
-                    diff_tools::hunk_target(&hunks, scroll_row(&split.scroll), forward)
+                    diff_tools::hunk_target(&hunks, scroll_row_at(&split.scroll, cx), forward)
                 {
                     split.scroll.scroll_to_item_strict(row, ScrollStrategy::Top);
                     cx.notify();
@@ -216,7 +232,7 @@ impl ReviewDiff {
             let scroll = scroll.unwrap_or(&self.unified_scroll);
             if let Some(row) = diff_tools::hunk_target(
                 &self.view(app.hides_diff_whitespace()).hunks,
-                scroll_row(scroll),
+                scroll_row_at(scroll, cx),
                 forward,
             ) {
                 scroll.scroll_to_item_strict(row, ScrollStrategy::Top);
@@ -826,6 +842,37 @@ impl Render for SplitDiff {
 #[cfg(test)]
 mod tests {
     use super::{Row, align, max_offset, split_ratio};
+
+    #[test]
+    fn pending_restore_survives_hidden_layout_then_tracks_actual_scroll_and_row_height() {
+        use super::diff_scroll_row;
+        use gpui_kit::{ScrollStrategy, UniformListScrollHandle, point, px};
+        let handle = UniformListScrollHandle::new();
+        handle
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.), px(-210.)));
+        assert_eq!(diff_scroll_row(&handle, px(21.)), 10);
+        handle.scroll_to_item_strict(37, ScrollStrategy::Top);
+        assert_eq!(diff_scroll_row(&handle, px(21.)), 37);
+        assert_eq!(diff_scroll_row(&handle, px(21.)), 37); // Another refresh before layout.
+        // GPUI consumes the public deferred request at prepaint, then applies
+        // its offset. Later manual scrolling must supersede the old target.
+        handle.0.borrow_mut().deferred_scroll_to_item.take();
+        handle
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.), px(-777.)));
+        assert_eq!(diff_scroll_row(&handle, px(21.)), 37);
+        handle
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.), px(-185.)));
+        assert_eq!(diff_scroll_row(&handle, px(37.)), 5);
+    }
 
     #[test]
     fn whitespace_view_keeps_original_split_line_mapping_and_unfiltered_stage_rows() {

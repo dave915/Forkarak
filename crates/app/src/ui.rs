@@ -745,7 +745,7 @@ impl Pokarak {
             row: if session.restoring {
                 session.saved.diff_row
             } else {
-                scroll_row(&session.scroll)
+                split_diff::scroll_row_at(&session.scroll, cx)
             },
             line: position.line,
             column: position.character,
@@ -778,7 +778,7 @@ impl Pokarak {
             }
             if let Some(path) = &session.saved.selected {
                 let saved = session.saved.positions.entry(path.clone()).or_default();
-                saved.diff_row = scroll_row(&session.scroll);
+                saved.diff_row = split_diff::scroll_row_at(&session.scroll, cx);
                 session.saved.diff_row = saved.diff_row;
                 session.saved.line = saved.line;
                 session.saved.column = saved.column;
@@ -2608,10 +2608,6 @@ fn file_status(status: &FileStatus) -> (&'static str, u32) {
     }
 }
 
-fn scroll_row(handle: &UniformListScrollHandle) -> usize {
-    let y: f32 = handle.0.borrow().base_handle.offset().y.into();
-    (-y / 22.).max(0.).floor() as usize
-}
 #[cfg(test)]
 mod project_selection_tests {
     use super::{SavedProject, project_index_for_path};

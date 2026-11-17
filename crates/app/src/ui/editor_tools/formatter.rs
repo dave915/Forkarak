@@ -193,16 +193,6 @@ impl Pokarak {
             return;
         }
         let project = self.current_project.as_deref();
-        if !self.prefs.trusted.contains(&root)
-            && !project.is_some_and(|p| self.prefs.trusted.iter().any(|t| t == p))
-        {
-            self.status =
-                "포맷터는 프로젝트 신뢰를 허용한 뒤 실행할 수 있습니다. 초안과 파일은 유지됩니다."
-                    .into();
-            self.trust_prompt = true;
-            cx.notify();
-            return;
-        }
         let language =
             pokarak_navigation::language_for_path(&path).unwrap_or_else(|| language(&path));
         if self
@@ -231,6 +221,27 @@ impl Pokarak {
                 return;
             }
         };
+        let config = if config.is_some() {
+            config
+        } else {
+            let managed = match self.effective_managed_formatter_configs() {
+                Ok(v) => v,
+                Err(error) => {
+                    self.error = Some(error);
+                    cx.notify();
+                    return;
+                }
+            };
+            let family = pokarak_navigation::language_family(language);
+            managed
+                .into_iter()
+                .rev()
+                .find(|c| c.language == language || c.language == family)
+                .map(|c| Formatter {
+                    path: c.program,
+                    args: c.args,
+                })
+        };
         let Some(config) = config else {
             self.request_language(
                 language_tools::Tool::Format { save_after, commit },
@@ -240,6 +251,16 @@ impl Pokarak {
             );
             return;
         };
+        if !self.prefs.trusted.contains(&root)
+            && !project.is_some_and(|p| self.prefs.trusted.iter().any(|t| t == p))
+        {
+            self.status =
+                "포맷터는 프로젝트 신뢰를 허용한 뒤 실행할 수 있습니다. 초안과 파일은 유지됩니다."
+                    .into();
+            self.trust_prompt = true;
+            cx.notify();
+            return;
+        }
         let identity = match self.external_format_identity(cx) {
             Ok(v) => v,
             Err(e) => {

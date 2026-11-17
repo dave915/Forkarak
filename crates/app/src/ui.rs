@@ -1,5 +1,4 @@
 mod analysis_feedback;
-mod language_manager;
 mod auto_refresh;
 mod branch_review;
 mod cli_control;
@@ -16,6 +15,7 @@ mod git_actions;
 mod git_commit;
 mod git_history;
 mod git_workflow;
+mod language_manager;
 mod language_tools;
 mod pane_visibility;
 mod patch;
@@ -1643,7 +1643,16 @@ impl Pokarak {
                 return;
             }
         };
-        let navigator = Navigator::with_options(
+        let formatters = match self.configure_language_formatters() {
+            Ok(formatters) => formatters,
+            Err(error) => {
+                self.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+        let signature = serde_json::json!([configs, formatters]);
+        let mut navigator = Navigator::with_options(
             root,
             configs,
             pokarak_navigation::NavigatorOptions {
@@ -1652,6 +1661,12 @@ impl Pokarak {
                 ..Default::default()
             },
         );
+        if let Err(error) = navigator.set_formatter_configs(formatters) {
+            self.error = Some(format!("{error:#}"));
+            cx.notify();
+            return;
+        }
+        self.remember_language_configuration(signature);
         self.cancellation = Some(navigator.cancellation_handle());
         self.navigation = Some(Arc::new(Mutex::new(navigator)));
         self.trust_prompt = false;

@@ -72,6 +72,7 @@ pub(super) struct LanguageTools {
     documentation_request: u64,
     active: Option<(FileKey, EntityId)>,
     configuration: Option<serde_json::Value>,
+    server_configuration: Option<serde_json::Value>,
     pub pending: Option<Tool>,
     panel: Option<Panel>,
     input: Option<Entity<InputState>>,
@@ -340,6 +341,9 @@ impl Pokarak {
             .language_identity(cx)
             .is_ok_and(|current| identity.matches(&current, true))
         {
+            // Explicit Continue may follow a new installation. The old
+            // Navigator's immutable defaults must not survive that change.
+            self.stop_analysis(cx);
             self.request_language(tool, requested, window, cx);
         } else {
             self.status =
@@ -368,6 +372,7 @@ impl Pokarak {
                 .option(self.current_project.as_deref(), "language.servers"),
         )?;
         let mut all = pokarak_navigation::default_configs();
+        all.extend(self.effective_managed_server_configs()?);
         // Discovery is read-only. Only the explicitly requested Navigator starts
         // one enabled extension tool; ordinary file viewing does not start it.
         for registration in self.registered_extension_language_servers() {
@@ -406,6 +411,59 @@ impl Pokarak {
                 .unwrap_or(true)
         });
         Ok(all)
+    }
+    pub(super) fn remember_language_configuration(&mut self, signature: serde_json::Value) {
+        self.language_tools.server_configuration = Some(signature);
+    }
+    pub(super) fn configure_language_formatters(
+        &self,
+    ) -> Result<Vec<pokarak_navigation::FormatterConfig>, String> {
+        let mut all = self.effective_managed_formatter_configs()?;
+        for registration in self.registered_extension_formatters() {
+            all.push(pokarak_navigation::FormatterConfig {
+                language: registration.language,
+                program: registration.executable.to_string_lossy().into(),
+                args: registration.args,
+            });
+        }
+        all.extend(
+            configs(
+                self.prefs
+                    .option(self.current_project.as_deref(), "formatters.config"),
+            )?
+            .into_iter()
+            .map(|c| pokarak_navigation::FormatterConfig {
+                language: c.language,
+                program: c.program,
+                args: c.args,
+            }),
+        );
+        all.retain(|c| self.managed_language_enabled(&c.language));
+        Ok(all)
+    }
+    fn language_configuration_signature(&self) -> Result<serde_json::Value, String> {
+        Ok(serde_json::json!([
+            self.configure_language_servers()?,
+            self.configure_language_formatters()?
+        ]))
+    }
+    fn extension_tool_for(&self, tool: &Tool, path: &Path) -> bool {
+        let language =
+            pokarak_navigation::language_for_path(path).unwrap_or_else(|| language(path));
+        let family = pokarak_navigation::language_family(language);
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let tools = if matches!(tool, Tool::Format { .. }) {
+            self.registered_extension_formatters()
+        } else {
+            self.registered_extension_language_servers()
+        };
+        tools.iter().any(|r| {
+            r.language == language
+                || r.language == family
+                || r.file_extensions
+                    .iter()
+                    .any(|e| e.trim_start_matches('.') == extension)
+        })
     }
     pub(super) fn request_language(
         &mut self,
@@ -463,6 +521,11 @@ impl Pokarak {
             cx.notify();
             return;
         }
+        if !self.extension_tool_for(&tool, &key.path)
+            && self.prepare_managed_language_request(tool.clone(), requested, window, cx)
+        {
+            return;
+        }
         if !self.language_trusted() {
             self.trust_prompt = true;
             self.status = "이 워크트리의 분석을 허용한 뒤 명령을 다시 실행하세요.".into();
@@ -478,6 +541,21 @@ impl Pokarak {
             && !self.code_edits.editing(&key.root, &key.path)
         {
             return;
+        }
+        // Refresh discovery only on an explicit request. This also detects a
+        // manual install/update without making file rendering wait for discovery.
+        let configuration = match self.language_configuration_signature() {
+            Ok(value) => value,
+            Err(error) => {
+                self.error = Some(error);
+                cx.notify();
+                return;
+            }
+        };
+        if self.navigation.is_some()
+            && self.language_tools.server_configuration.as_ref() != Some(&configuration)
+        {
+            self.stop_analysis(cx);
         }
         if self.navigation.is_none() {
             self.enable_analysis(cx);

@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use pokarak_core::history::navigation::{Catalog, GraphRef, RefGroup};
 
 pub(super) fn branch_label(name: &str) -> &str {
@@ -39,6 +40,8 @@ impl Pokarak {
             .disabled(self.git_history.nav.catalog.is_none() || self.loading || self.git_is_busy())
             .child(
                 div()
+                    .w_full()
+                    .text_left()
                     .flex()
                     .min_w_0()
                     .items_center()
@@ -50,7 +53,11 @@ impl Pokarak {
             .on_click(cx.listener(|app, _, w, cx| app.open_branch_filter(w, cx)))
     }
 
-    fn open_branch_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn open_branch_filter(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(root), Some(catalog)) =
             (self.current.clone(), self.git_history.nav.catalog.clone())
         else {
@@ -101,7 +108,7 @@ impl Pokarak {
                 _subscription: subscription,
             }
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             dialog
                 .title("그래프 브랜치 필터")
                 .on_ok(|_, _, _| false)

@@ -1,5 +1,6 @@
 //! Branch forms retain immutable sources and revalidate before explicit writes.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use gpui_kit::component::{checkbox::Checkbox, select::SelectEvent};
 use pokarak_core::operations::branches::BranchStart;
 use std::{cell::Cell, rc::Rc};
@@ -175,7 +176,7 @@ impl Pokarak {
         let starts = Arc::new(starts);
         let weak = cx.entity().downgrade();
         window.close_all_dialogs(cx);
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let source = selected_start(&starts, selected.read(cx).selected_value().map(String::as_str), explicit.read(cx).value().as_ref());
             let remote = source.as_ref().is_ok_and(|s| s.reference.starts_with("refs/remotes/"));
             let track = remote && tracking.get();
@@ -307,7 +308,7 @@ impl Pokarak {
             .detach();
         let weak = cx.entity().downgrade();
         window.close_all_dialogs(cx);
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let disabled = branch_form_disabled(&weak, &state.root, cx) || validate_new_name(&state, name.read(cx).value().trim()).is_err();
             let (weak, name, state, old, oid) = (weak.clone(), name.clone(), state.clone(), old.clone(), oid.clone());
             dialog.title("로컬 브랜치 이름 변경").width(ui_px(650.)).on_ok(|_, _, _| false)
@@ -344,7 +345,7 @@ impl Pokarak {
         }
         let weak = cx.entity().downgrade();
         window.close_all_dialogs(cx);
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let disabled = branch_form_disabled(&weak, &root, cx);
             let (weak, root, job) = (weak.clone(), root.clone(), job.clone());
             dialog

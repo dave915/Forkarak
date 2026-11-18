@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use pokarak_core::operations::worktrees::WorktreeBranch;
 
 impl Pokarak {
@@ -87,7 +88,7 @@ impl Pokarak {
             .cloned()
             .collect();
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let palette = Palette::new(cx);
             let mut list = div()
                 .id("manage-worktree-list")
@@ -231,7 +232,7 @@ impl Pokarak {
     ) {
         window.close_dialog(cx);
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let weak = weak.clone();
             let tree = tree.clone();
             let root = root.clone();
@@ -291,7 +292,7 @@ impl Pokarak {
         }
         let branch = choice(available, None, window, cx);
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let (weak, path, name, branch, root, head) = (
                 weak.clone(),
                 path.clone(),

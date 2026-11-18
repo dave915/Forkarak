@@ -1,5 +1,6 @@
 //! Shared native task, log and extension surfaces. Every executable action is explicit.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use crate::{
     extension_host::{self, ExtensionHost, ExtensionRegistry, InstalledExtension, SPRING_ID},
     task_runtime::{self, LogBuffer, LogOptions, RunId, StreamKind, TaskProfile, TaskRuntime},
@@ -1081,7 +1082,7 @@ impl Pokarak {
         }
         let weak = cx.entity().downgrade();
         w.close_all_dialogs(cx);
-        w.open_dialog(cx, move |dialog, _, cx| {
+        w.open_app_dialog(cx, move |dialog, _, cx| {
             let result = parse_profile(&name, &program, &args, &cwd, &env, &root, cx);
             let error = result.as_ref().err().map(ToString::to_string);
             let stale = weak
@@ -1584,7 +1585,7 @@ impl Pokarak {
             .detach();
         let weak = cx.entity().downgrade();
         w.close_all_dialogs(cx);
-        w.open_dialog(cx, move |dialog, _, cx| {
+        w.open_app_dialog(cx, move |dialog, _, cx| {
             let source = PathBuf::from(path.read(cx).value().as_ref());
             let valid = source.is_absolute() && source.exists();
             let browse_input = path.clone();
@@ -1660,7 +1661,7 @@ impl Pokarak {
     fn confirm_extension_remove(&mut self, id: String, w: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         w.close_all_dialogs(cx);
-        w.open_dialog(cx,move |dialog,_,_|{let weak=weak.clone();let id=id.clone();dialog.title("확장 제거").child(format!("{id} 확장의 실행 프로세스를 중지하고 앱 데이터의 설치 번들을 제거합니다. 저장소 파일은 변경하지 않습니다.")).footer(div().flex().justify_end().gap_2().child(close()).child(Button::new("extension-confirm-remove").label("제거").on_click(move |_,w,cx|{w.close_all_dialogs(cx);let _=weak.update(cx,|app,cx|app.change_extension(id.clone(),ExtensionChange::Remove,w,cx));})))});
+        w.open_app_dialog(cx,move |dialog,_,_|{let weak=weak.clone();let id=id.clone();dialog.title("확장 제거").child(format!("{id} 확장의 실행 프로세스를 중지하고 앱 데이터의 설치 번들을 제거합니다. 저장소 파일은 변경하지 않습니다.")).footer(div().flex().justify_end().gap_2().child(close()).child(Button::new("extension-confirm-remove").label("제거").on_click(move |_,w,cx|{w.close_all_dialogs(cx);let _=weak.update(cx,|app,cx|app.change_extension(id.clone(),ExtensionChange::Remove,w,cx));})))});
     }
     fn change_extension(
         &mut self,
@@ -1712,7 +1713,7 @@ impl Pokarak {
         }
         let weak = cx.entity().downgrade();
         w.close_all_dialogs(cx);
-        w.open_dialog(cx, move |dialog, _, cx| {
+        w.open_app_dialog(cx, move |dialog, _, cx| {
             let stale = weak
                 .read_with(cx, |app, _| {
                     app.current.clone().unwrap_or_default() != root

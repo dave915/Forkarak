@@ -510,6 +510,7 @@ impl Pokarak {
     }
 
     fn confirm_index_amend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::dialogs::DialogWindowExt as _;
         if self.commit_disabled() {
             return;
         }
@@ -533,7 +534,7 @@ impl Pokarak {
             });
         }
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let confirmed = previous.oid.clone();
             let expected = snapshot.clone();
             let disabled = weak.upgrade().is_none_or(|app| app.read(cx).commit_disabled());
@@ -561,8 +562,9 @@ impl Pokarak {
     }
 
     fn show_commit_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::dialogs::DialogWindowExt as _;
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let Some(view) = weak.upgrade() else {
                 return dialog;
             };

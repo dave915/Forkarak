@@ -1,6 +1,7 @@
 //! One explicit workflow entry; every write uses git_actions' shared job guard.
 mod status;
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use pokarak_core::operations::workflow::{
     ConflictContent, ConflictFile, ConflictSnapshot, InProgress, ProgressKind, Resolution,
     StashEntry, WorkflowState,
@@ -220,7 +221,7 @@ impl Pokarak {
     ) {
         let weak = cx.entity().downgrade();
         window.close_all_dialogs(cx);
-        window.open_dialog(cx, move |dialog,_,cx| {
+        window.open_app_dialog(cx, move |dialog,_,cx| {
             let busy = workflow_disabled(&weak, &state.root, cx);
             let mut entries = div().id("stash-pop-targets").max_h(ui_px(240.)).overflow_y_scroll().v_flex().gap_2();
             if state.stashes.is_empty() { entries = entries.child(workflow_note("보관된 stash가 없습니다.")); }
@@ -261,7 +262,7 @@ impl Pokarak {
     fn show_workflow(&mut self, state: WorkflowState, window: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         window.close_all_dialogs(cx);
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let busy = workflow_disabled(&weak, &state.root, cx);
             let save_root = state.root.clone();
             let mut body = div().v_flex().gap_2().child(workflow_scope(&state.root))
@@ -315,7 +316,7 @@ impl Pokarak {
             cx.new(|cx| InputState::new(window, cx).placeholder("변경사항을 설명하는 메시지"));
         self.workflow.include_untracked = false;
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog,_,cx| {
+        window.open_app_dialog(cx, move |dialog,_,cx| {
             let selected = weak.upgrade().is_some_and(|view| view.read(cx).workflow.include_untracked); let input = message.clone();
             let target = root.clone();
             dialog.title("변경사항을 stash에 보관").width(ui_px(620.)).margin_top(ui_px(36.)).on_ok(|_,_,_|false)
@@ -368,7 +369,7 @@ impl Pokarak {
             cx.new(|cx| InputState::new(window, cx).placeholder("내용을 볼 저장소 상대 파일 경로"));
         let weak = cx.entity().downgrade();
         window.close_all_dialogs(cx);
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let busy = workflow_disabled(&weak, &root, cx);
             let mut inspect = div().flex().gap_2().child(Input::new(&path).flex_1());
             for (untracked, label, id) in [
@@ -458,7 +459,7 @@ impl Pokarak {
             window,
             cx,
         );
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             dialog
                 .title(title.clone())
                 .width(ui_px(740.))
@@ -478,7 +479,7 @@ impl Pokarak {
         cx: &mut Context<Self>,
     ) {
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let target = root.clone();
             let job = job.clone();
             let label = title.clone();
@@ -628,7 +629,7 @@ impl Pokarak {
     fn present_conflict(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         window.close_all_dialogs(cx);
-        window.open_dialog(cx, move |dialog, window, cx| {
+        window.open_app_dialog(cx, move |dialog, window, cx| {
             let Some(view) = weak.upgrade() else { return dialog; };
             let app = view.read(cx);
             let Some(draft) = &app.workflow.draft else { return dialog; };
@@ -734,7 +735,7 @@ impl Pokarak {
         };
         let key = draft.key();
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx,move |dialog,_,cx| {
+        window.open_app_dialog(cx,move |dialog,_,cx| {
             let target=key.clone();
             dialog.title("작성한 충돌 해결 초안 버리기").width(ui_px(620.)).overlay_closable(false).on_ok(|_,_,_|false)
                 .child(div().v_flex().gap_2().child(workflow_scope(&key.0)).child(workflow_note(&format!("{}의 보관 중인 편집 결과와 side 선택을 버립니다. 작업 파일과 index는 바꾸지 않습니다.",key.1.display()))))

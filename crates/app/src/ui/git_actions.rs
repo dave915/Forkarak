@@ -12,6 +12,7 @@ mod source;
 mod tags;
 mod worktree_manager;
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 pub(in crate::ui) use contextual::branch_context_menu;
 pub(super) mod integration;
 use gpui_kit::component::{
@@ -406,7 +407,7 @@ impl Pokarak {
         cx: &mut Context<Self>,
     ) {
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let mut sections = div()
                 .id("git-action-sections")
                 .max_h(ui_px(355.))
@@ -561,7 +562,7 @@ impl Pokarak {
         let empty = candidates.is_empty();
         let branch = choice(candidates, None, window, cx);
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let mut body = div().v_flex().gap_4().child(scope(&state.root, state.current_branch.as_deref()));
             body = if create { body.child(field("이름", &name)).child(note("현재 HEAD에서 브랜치만 만듭니다. 체크아웃은 별도로 실행합니다.")) }
             else { body.child(select_field("로컬 브랜치", &branch)).child(note(if empty { "선택할 브랜치가 없습니다. 체크아웃된 브랜치는 제외됩니다." } else { "이 워크트리나 다른 워크트리에서 체크아웃된 브랜치는 제외됩니다." })) };
@@ -616,7 +617,7 @@ impl Pokarak {
         });
         window.close_dialog(cx);
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let weak = weak.clone();
             let root_for_action = root.clone();
             let checkout_source = checkout_source.clone();
@@ -650,7 +651,7 @@ impl Pokarak {
         cx: &mut Context<Self>,
     ) {
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let palette = Palette::new(cx);
             let mut rows = div().id("git-remotes-list").v_flex().gap_4().max_h(ui_px(380.)).overflow_y_scroll();
             if state.remotes.is_empty() { rows = rows.child(note("등록된 원격 저장소가 없습니다.")); }
@@ -743,7 +744,7 @@ impl Pokarak {
                 .placeholder("https://host/repo.git, git@host:repo.git, /local/path")
         });
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let target = weak.clone();
             let name_for_action = name.clone();
             let url_for_action = url.clone();
@@ -773,7 +774,7 @@ impl Pokarak {
     ) {
         let name = cx.new(|cx| InputState::new(window, cx).default_value(old_name.clone()));
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let target = weak.clone();
             let root_for_action = root.clone();
             let old_for_action = old_name.clone();
@@ -807,7 +808,7 @@ impl Pokarak {
                 .placeholder("author@example.com")
         });
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let target = weak.clone();
             let name_for_action = name.clone();
             let email_for_action = email.clone();

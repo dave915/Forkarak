@@ -1,5 +1,6 @@
 //! Bounded, in-memory diagnostics belong to the exact worktree that ran the job.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 
 const HISTORY_LIMIT: usize = 20;
 const OUTPUT_LIMIT: usize = 32 * 1024;
@@ -253,7 +254,7 @@ impl Pokarak {
             return;
         };
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let records = weak.upgrade().filter(|view| view.read(cx).current.as_ref() == Some(&root)).and_then(|view| view.read(cx).git_ui.history.get(&root).cloned()).unwrap_or_default();
             let mut body = div().id("git-log-records").v_flex().gap_3().max_h(ui_px(345.)).overflow_y_scroll().child(scope(&root, None)).child(note("워크트리별 최근 20개 작업 · 앱 종료 시 지워집니다. 각 출력은 최대 32 KiB입니다."));
             if records.is_empty() { body = body.child(note("이 워크트리에서 실행한 Git 작업이 없습니다.")); }
@@ -286,7 +287,7 @@ impl Pokarak {
         editor.update(cx, |editor, cx| editor.set_readonly(true, cx));
         self.git_ui.live_editor = Some((root.clone(), record.id, editor.clone()));
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let current = weak
                 .upgrade()
                 .and_then(|view| {

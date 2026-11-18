@@ -1,5 +1,6 @@
 //! Local sync reads and explicitly confirmed, immutable network destinations.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use gpui_kit::component::{checkbox::Checkbox, select::SelectEvent};
 use pokarak_core::operations::{branches::BranchStart, sync::BranchSync};
 
@@ -247,7 +248,7 @@ impl Pokarak {
             return;
         };
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let detail = weak
                 .upgrade()
                 .filter(|view| view.read(cx).current.as_ref() == Some(&root))
@@ -382,7 +383,7 @@ impl Pokarak {
             None
         };
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let _keep_subscription = &subscription;
             let mut body = div().id("git-network-form").max_h(ui_px(340.)).overflow_y_scroll().v_flex().gap_3().child(scope(&state.root, state.current_branch.as_deref())).child(note(&sync_detail(&sync))).child(select_field("원격 저장소", &remote));
             if push {
@@ -459,7 +460,7 @@ impl Pokarak {
         } = confirmation;
         window.close_dialog(cx);
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let target = weak.clone(); let root_for_action = root.clone(); let label_for_action = label.clone(); let job = job.clone();
             dialog.title(format!("{label} 확인")).width(ui_px(660.)).margin_top(ui_px(16.)).child(div().id("git-job-confirm-detail").max_h(ui_px(310.)).overflow_y_scroll().v_flex().gap_3().child(scope(&root, None)).child(detail.clone()).child(note("Git hooks와 기존 인증 설정을 사용합니다. 확인 중 대상 커밋이나 원격 설정이 바뀌면 중단합니다."))).footer(div().flex().justify_end().gap_2().child(close_button()).child(theme::action_button("git-confirm", false).label(label.clone()).when(destructive, |b| b.danger()).when(!destructive, |b| b.primary()).on_click(move |_, w, cx| {
                 let job = job.clone(); let _ = target.update(cx, |app, cx| { w.close_dialog(cx); app.run_git_job(root_for_action.clone(), label_for_action.clone(), move |git| job(git), w, cx); });

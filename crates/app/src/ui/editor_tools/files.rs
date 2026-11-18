@@ -1,5 +1,6 @@
 //! Explicit forms call only the guarded core operations; no UI filesystem writes.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use pokarak_core::operations::files as operations;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -218,7 +219,7 @@ impl Pokarak {
         let path = self.selected().unwrap_or_default();
         let owner = cx.entity().downgrade();
         let form = cx.new(|cx| FileForm::new(owner, root, path, window, cx));
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             dialog
                 .title("파일 / 폴더 관리")
                 .width(ui_px(620.))

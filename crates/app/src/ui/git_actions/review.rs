@@ -1,6 +1,7 @@
 //! Immutable native commit/file previews. File reads use retained trees, never
 //! re-resolved mutable form fields or current working files.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use pokarak_core::{
     comparison::RefComparison,
     history::{Commit, CommitDetail},
@@ -65,7 +66,7 @@ impl Pokarak {
         window.close_dialog(cx);
         let weak = cx.entity().downgrade();
         let review = Arc::new(review);
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let busy = weak.upgrade().is_none_or(|view| {
                 let app = view.read(cx);
                 app.git_is_busy() || app.current.as_ref() != Some(&review.root) || app.opening_path.is_some()
@@ -156,7 +157,7 @@ impl Pokarak {
         let selected = Rc::new(Cell::new(0));
         let weak = cx.entity().downgrade();
         window.close_dialog(cx);
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let mut tabs = div().flex().gap_2();
             for (index, label) in ["Diff", "이전 코드", "이후 코드"].into_iter().enumerate()
             {

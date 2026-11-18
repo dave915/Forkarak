@@ -1,5 +1,6 @@
 //! Tags are explicit operations, independent of branch Push and application releases.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use std::{cell::Cell, rc::Rc};
 impl Pokarak {
     pub(super) fn show_tag_create(
@@ -18,7 +19,7 @@ impl Pokarak {
         let annotated = Rc::new(Cell::new(false));
         let weak = cx.entity().downgrade();
         window.close_dialog(cx);
-        window.open_dialog(cx,move |dialog,_,cx| {
+        window.open_app_dialog(cx,move |dialog,_,cx| {
             let flag = annotated.clone(); let notify = weak.clone();
             let check = gpui_kit::component::checkbox::Checkbox::new("tag-annotated").label("주석 태그 · 메시지 포함").checked(annotated.get()).on_click(move |checked,_,cx| { flag.set(*checked); let _ = notify.update(cx, |_,cx| cx.notify()); });
             let mut body = div().v_flex().gap_3().child(scope(&root,None)).child(field("새 태그 이름",&name)).child(field("대상 커밋 / 태그 / 브랜치",&target_ref)).child(check);
@@ -77,7 +78,7 @@ impl Pokarak {
         );
         let weak = cx.entity().downgrade();
         window.close_dialog(cx);
-        window.open_dialog(cx,move |dialog,_,cx| {
+        window.open_app_dialog(cx,move |dialog,_,cx| {
             let disabled = tag.read(cx).selected_value().is_none() || remote.read(cx).selected_value().is_none();
             let (weak,state,tag,remote) = (weak.clone(),state.clone(),tag.clone(),remote.clone());
             dialog.on_close({ let owner = weak.clone(); move |_,_,cx| { let _ = owner.update(cx, |app,_| app.invalidate_workflow_read()); } }).title("태그 하나 Push").width(ui_px(660.)).child(div().v_flex().gap_3().child(scope(&state.root,None)).child(select_field("전송할 로컬 태그",&tag)).child(select_field("보낼 원격 저장소",&remote)).child(note("선택한 태그 하나만 전송합니다. 서버 상태는 확인하지 않았으며 실행 시 기존 태그와 충돌하면 실패합니다. 강제 전송은 하지 않습니다.")))

@@ -1,6 +1,7 @@
 //! Explicit Clone/Init with an exclusive new destination and owned cancellation.
 //! No analysis is started by setup or by viewing the result.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use pokarak_core::operations::{
     OperationProgress,
     repository::{clone_repository, init_repository_with_control},
@@ -68,7 +69,7 @@ impl Pokarak {
         });
         let weak = cx.entity().downgrade();
         window.close_dialog(cx);
-        window.open_dialog(cx,move |dialog,_,cx| {
+        window.open_app_dialog(cx,move |dialog,_,cx| {
             let title = if clone { "Clone · 저장소 복제" } else { "Init · 새 저장소 만들기" };
             let validation = destination(&path.read(cx).value()).map_err(|e|e.to_string());
             let mut body = div().v_flex().gap_3().child(field(if clone { "복제할 URL / 로컬 저장소" } else { "초기 브랜치" },&source)).child(field("새 저장소 폴더 · 절대 경로",&path))
@@ -91,7 +92,7 @@ impl Pokarak {
     ) {
         let weak = cx.entity().downgrade();
         window.close_dialog(cx);
-        window.open_dialog(cx,move |dialog,_,cx| {
+        window.open_app_dialog(cx,move |dialog,_,cx| {
             let target = weak.clone(); let selected = setup.clone();
             let disabled = weak.upgrade().is_none_or(|view| view.read(cx).git_is_busy());
             dialog.title(if setup.clone { "Clone 확인" } else { "Init 확인" }).width(ui_px(700.))

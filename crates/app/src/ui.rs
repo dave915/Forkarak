@@ -4,6 +4,7 @@ mod branch_review;
 mod cli_control;
 mod code_edit;
 mod code_workspace;
+mod dialogs;
 mod diff_tools;
 mod draft_reconciliation;
 mod editor_tools;

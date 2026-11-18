@@ -72,6 +72,24 @@ fn network_defaults(
     }
 }
 
+fn sync_label(sync: &BranchSync) -> String {
+    let branch = sync.branch.as_deref().unwrap_or("detached HEAD");
+    let Some(upstream) = &sync.upstream else {
+        return format!("{branch} · 업스트림 없음");
+    };
+    let reference = upstream
+        .reference
+        .strip_prefix("refs/remotes/")
+        .or_else(|| upstream.reference.strip_prefix("refs/heads/"))
+        .unwrap_or(&upstream.reference);
+    let count = |n: Option<usize>| n.map(|n| n.to_string()).unwrap_or_else(|| "?".into());
+    format!(
+        "{branch} → {reference}  ↑{} ↓{}",
+        count(sync.ahead),
+        count(sync.behind)
+    )
+}
+
 fn sync_detail(sync: &BranchSync) -> String {
     let branch = sync.branch.as_deref().unwrap_or("detached HEAD");
     let upstream = sync
@@ -195,29 +213,7 @@ impl Pokarak {
             })
             .unwrap_or("브랜치 알 수 없음");
         let (label, tooltip) = match metadata {
-            Some(SyncRead::Ready(sync)) => {
-                let branch = sync.branch.as_deref().unwrap_or("detached HEAD");
-                let upstream = sync
-                    .upstream
-                    .as_ref()
-                    .map(|u| {
-                        u.reference
-                            .strip_prefix("refs/remotes/")
-                            .or_else(|| u.reference.strip_prefix("refs/heads/"))
-                            .unwrap_or(&u.reference)
-                    })
-                    .unwrap_or("upstream 없음");
-                let count =
-                    |n: Option<usize>| n.map(|n| n.to_string()).unwrap_or_else(|| "?".into());
-                (
-                    format!(
-                        "{branch} → {upstream}  ↑{} ↓{}",
-                        count(sync.ahead),
-                        count(sync.behind)
-                    ),
-                    sync_detail(sync),
-                )
-            }
+            Some(SyncRead::Ready(sync)) => (sync_label(sync), sync_detail(sync)),
             Some(SyncRead::Failed(error)) => (
                 format!("{fallback} · 동기화 ?"),
                 format!("동기화 메타데이터 읽기 실패\n{error}"),
@@ -502,7 +498,7 @@ pub(super) fn check_field(
 
 #[cfg(test)]
 mod tests {
-    use super::{network_defaults, sync_detail};
+    use super::{network_defaults, sync_detail, sync_label};
     use pokarak_core::operations::{
         Identity, Remote, RepositoryState,
         sync::{BranchSync, Upstream},
@@ -539,6 +535,7 @@ mod tests {
     #[test]
     fn differently_named_upstream_and_changing_source_never_retargets_trunk() {
         let (state, sync) = data();
+        assert_eq!(sync_label(&sync), "main → origin/trunk  ↑1 ↓2");
         let initial = network_defaults(&state, &sync, Some("main"));
         assert_eq!(initial.remote.as_deref(), Some("origin"));
         assert_eq!(initial.branch, "trunk");
@@ -565,6 +562,7 @@ mod tests {
                 .is_empty()
         );
         sync.upstream = None;
+        assert_eq!(sync_label(&sync), "main · 업스트림 없음");
         assert!(network_defaults(&state, &sync, Some("main")).set_upstream);
     }
     fn fixture_git(root: &std::path::Path, global: &std::path::Path, args: &[&str]) -> String {

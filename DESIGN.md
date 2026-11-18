@@ -40,6 +40,12 @@ Code View can open a second editor group to the right. Each group has its own ta
 
 Split Right duplicates the selected file into the right group. File tabs, the tree, and file search also offer Open to Side. A tab can move between groups. Drag the divider to resize the groups. Each visible group needs 360 logical pixels. When the window becomes too narrow, the left group displays a split-hidden notice. Widening the window restores the right group. Closing the last right tab removes the split, and closing the last left tab promotes the right group. The worktree restores both tab sets and the divider position on return.
 
+## Running tests
+
+Code View can run the test at the caret, run the file’s tests, or repeat the last test for the worktree. Forkarak uses the existing argv-based task runner and the worktree’s execution permission. It recognizes Gradle, Maven, Cargo, and npm projects. Existing language analysis can identify the enclosing test. When analysis is off, test discovery reads the source and build manifests.
+
+A run with unsaved files offers Save All and Run, Run Disk Version, or Cancel. Starting another test in the same worktree replaces its current test run after the process exits. The footer opens that worktree’s result and logs. Fresh Gradle and Maven JUnit reports show the total and failed tests. Selecting a failure opens its first stack frame in the worktree. Runs without a fresh report retain the command output and its clickable source locations. Test runs use temporary profiles.
+
 ## Signature behavior
 
 The staging file lists support Cmd-click to toggle files and Shift-click to select a range. Explicit mark controls are keyboard accessible. Selected-file counts, clear selection and selected-only Stage/Unstage actions stay with their own staged/unstaged list. File marks are bound to the worktree and index snapshot; replacing that snapshot clears the marks. Diff line marks and the single-file preview remain independent.

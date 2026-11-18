@@ -57,22 +57,9 @@ fn inactive_color(color: Rgba, palette: Palette, node: bool) -> Rgba {
     if palette.is_dark() {
         color.opacity(if node { 0.35 } else { 0.24 })
     } else {
-        // Width/shape carry the hover emphasis. Fading a dark hue on a light
+        // Stroke width carries the hover emphasis. Fading a dark hue on a light
         // selected row would erase unrelated lanes and their branch identities.
         color
-    }
-}
-
-fn node_shape(track: usize, palette: Palette) -> (f32, bool) {
-    if palette.is_dark() {
-        (4., false)
-    } else {
-        // Independent cues for neighboring hues and line crossings: round or
-        // square, hollow or filled, always keyed by track rather than column.
-        (
-            if track.is_multiple_of(2) { 4. } else { 1. },
-            track % 4 >= 2,
-        )
     }
 }
 
@@ -140,14 +127,13 @@ pub(super) fn graph_view(
                 None => track_color(row.track, palette),
             };
             let radius = ui_px(4.);
-            let (corner, filled) = node_shape(row.track, palette);
             window.paint_quad(quad(
                 Bounds::new(
                     point(x(row.lane) - radius, middle - radius),
                     size(radius * 2., radius * 2.),
                 ),
-                ui_px(corner),
-                if filled { color } else { palette.rgb(BG) },
+                radius,
+                palette.rgb(BG),
                 ui_px(1.8),
                 color,
                 BorderStyle::Solid,
@@ -168,9 +154,7 @@ pub(super) fn reference_name(name: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BranchTrace, Commit, GraphRow, HistoryEntry, inactive_color, node_shape, track_color,
-    };
+    use super::{BranchTrace, Commit, GraphRow, HistoryEntry, inactive_color, track_color};
     use crate::theme::Palette;
 
     #[test]
@@ -302,15 +286,7 @@ mod tests {
             positions.values().any(|lanes| lanes.len() > 1),
             "fixture must exercise lane shifts"
         );
-        let shapes: HashSet<_> = (0..4)
-            .map(|track| {
-                let (corner, filled) = node_shape(track, light);
-                (corner as u8, filled)
-            })
-            .collect();
-        assert_eq!(shapes.len(), 4);
         let dark = Palette::for_test(true);
         assert!((inactive_color(track_color(0, dark), dark, false).a - 0.24).abs() < 0.001);
-        assert_eq!(node_shape(3, dark), (4., false));
     }
 }

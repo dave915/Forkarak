@@ -42,13 +42,15 @@ fn utf16_byte(text: &str, column: u32) -> usize {
     }
     text.len()
 }
-fn match_range(text: &str, column: u32, query: Option<&str>) -> Option<std::ops::Range<usize>> {
+fn match_range(text: &str, start: usize, query: Option<&str>) -> Option<std::ops::Range<usize>> {
     if let Some(query) = query
         && !query.is_empty()
     {
-        return text.find(query).map(|at| at..at + query.len());
+        return text
+            .get(start..)?
+            .starts_with(query)
+            .then_some(start..start + query.len());
     }
-    let start = utf16_byte(text, column);
     let end = text[start..]
         .char_indices()
         .take_while(|(_, ch)| ch.is_alphanumeric() || *ch == '_')
@@ -114,54 +116,55 @@ fn prepare_rows_with_sources(
             .as_deref()
             .map(|s| s.lines().collect())
             .unwrap_or_default();
-        let mut visible: BTreeMap<u32, (String, Option<usize>, u32)> = BTreeMap::new();
-        let mut targets: BTreeMap<u32, Vec<(usize, u32)>> = BTreeMap::new();
+        // Each row keeps its own search hit, including its provider-supplied excerpt.
+        let mut visible: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
         for (index, hit) in group {
-            targets
-                .entry(hit.line)
-                .or_default()
-                .push((index, hit.column));
-            let start = hit.line.saturating_sub(2);
             let end = (hit.line as usize + 3).min(lines.len());
-            for (row, text) in lines.iter().enumerate().take(end).skip(start as usize) {
-                visible
-                    .entry(row as u32)
-                    .or_insert_with(|| ((*text).to_owned(), None, 0));
+            for row in hit.line.saturating_sub(2) as usize..end {
+                visible.entry(row as u32).or_default();
             }
-            let text = lines
-                .get(hit.line as usize)
-                .map(|s| (*s).to_owned())
-                .unwrap_or_else(|| hit.preview.clone());
-            visible.insert(hit.line, (text, Some(index), hit.column));
+            visible.entry(hit.line).or_default().push(index);
         }
         let mut previous = None;
-        for (line, (text, index, column)) in visible {
+        for (line, targets) in visible {
             if previous.is_some_and(|p| line > p + 1) {
                 rows.push(Row::Gap);
             }
             previous = Some(line);
-            let syntax = full_syntax
-                .clone()
-                .unwrap_or_else(|| Arc::new(syntax::CodeSyntax::new(&path, &text)));
-            let syntax_line = if full_syntax.is_some() {
-                line as usize
-            } else {
-                0
-            };
-            let candidates: Vec<_> = targets
-                .get(&line)
-                .map(|hits| hits.iter().map(|(i, col)| (Some(*i), *col)).collect())
-                .unwrap_or_else(|| vec![(index, column)]);
-            for (index, column) in candidates {
-                let highlight = index.and_then(|_| match_range(&text, column, query));
+            let source_line = lines.get(line as usize).copied();
+            let context_only = targets.is_empty().then_some(None);
+            for index in targets.into_iter().map(Some).chain(context_only) {
+                let hit = index.map(|i| &hits[i]);
+                let column = hit.map_or(0, |hit| hit.column);
+                let text = source_line
+                    .or_else(|| hit.map(|hit| hit.preview.as_str()))
+                    .unwrap_or_default();
+                let syntax = full_syntax
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(syntax::CodeSyntax::new(&path, text)));
+                let syntax_line = if full_syntax.is_some() {
+                    line as usize
+                } else {
+                    0
+                };
+                let highlight = hit.and_then(|_| {
+                    let mut start = utf16_byte(text, column);
+                    if source_line.is_none() && query.is_some() {
+                        // Core literal excerpts retain up to 61 Unicode characters before the hit.
+                        if let Some((end, _)) = text.char_indices().nth(61) {
+                            start = start.min(end);
+                        }
+                    }
+                    match_range(text, start, query)
+                });
                 rows.push(Row::Line {
                     location: SourceLocation {
                         path: path.clone(),
                         line,
                         column,
-                        preview: text.clone(),
+                        preview: text.to_owned(),
                     },
-                    text: text.clone(),
+                    text: text.to_owned(),
                     hit: index,
                     highlight,
                     syntax: syntax.clone(),
@@ -254,8 +257,8 @@ impl Pokarak {
         let groups: Vec<_> = self.results.iter().map(|r| r.group).collect();
         let query = self
             .result_title
-            .starts_with("본문 검색:")
-            .then(|| self.filter.clone());
+            .strip_prefix("본문 검색: ")
+            .map(str::to_owned);
         self.result_rows = Arc::new(prepare_grouped_rows(
             &hits,
             &groups,
@@ -769,8 +772,11 @@ mod tests {
     }
     #[test]
     fn unicode_match_highlights_are_valid_utf8_ranges() {
-        assert_eq!(match_range("😀 total()", 3, None), Some(5..10));
-        assert_eq!(match_range("한 total total", 0, Some("total")), Some(4..9));
+        assert_eq!(match_range("😀 total()", 5, None), Some(5..10));
+        assert_eq!(
+            match_range("한 total total", 10, Some("total")),
+            Some(10..15)
+        );
         assert!(matches!(Surface::from_option("bottom"), Surface::Bottom));
         assert!(matches!(Surface::from_option("bad"), Surface::Popover));
         let _ = HashMap::<String, String>::new();
@@ -809,6 +815,60 @@ mod tests {
             .collect();
         assert_eq!(targets, vec![(0, 0), (1, 4)]);
     }
+    #[test]
+    fn repeated_literal_matches_keep_their_columns_and_own_clipped_excerpts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q", "--template=", "--"])
+                .arg(&root)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let line = format!("😀 token + token {}token + token", "한😀".repeat(40));
+        std::fs::write(root.join("sample.txt"), &line).unwrap();
+        let hits = pokarak_core::search(&root, "token", 10).unwrap();
+        let ranges = line
+            .match_indices("token")
+            .map(|(i, _)| i..i + 5)
+            .collect::<Vec<_>>();
+        assert_eq!(hits.len(), ranges.len());
+        for context in [false, true] {
+            let rows = prepare_rows(
+                &hits,
+                &super::result_revisions(&hits),
+                Some("token"),
+                context,
+            );
+            let mut checked = 0;
+            for row in rows {
+                if let Row::Line {
+                    text,
+                    hit: Some(i),
+                    highlight,
+                    ..
+                } = row
+                {
+                    let range = highlight.unwrap();
+                    assert_eq!(&text[range.clone()], "token");
+                    let prefix = &line[..ranges[i].start];
+                    let shown = if context {
+                        prefix.len()
+                    } else {
+                        prefix.chars().rev().take(61).map(char::len_utf8).sum()
+                    };
+                    assert_eq!(range.start, shown);
+                    checked += 1;
+                }
+            }
+            assert_eq!(checked, ranges.len());
+        }
+    }
+
     #[test]
     fn source_and_match_styles_form_nonoverlapping_utf8_runs() {
         let text = "한 total()";

@@ -66,6 +66,9 @@ impl DocumentSnapshot {
     pub fn is_current(&self) -> bool {
         self.valid.load(Ordering::Acquire)
     }
+    pub(crate) fn same_revision(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.valid, &other.valid)
+    }
     pub(crate) fn check(&self) -> Result<()> {
         if !self.is_current() {
             bail!("Stale document snapshot; displayed source changed");
@@ -138,7 +141,7 @@ impl TextEdit {
         Ok(output)
     }
 }
-fn byte_offset(text: &str, pos: Position) -> Result<usize> {
+pub(crate) fn byte_offset(text: &str, pos: Position) -> Result<usize> {
     validate_position(text, pos.line, pos.character)?;
     let row = text
         .split_inclusive('\n')
@@ -154,6 +157,32 @@ fn byte_offset(text: &str, pos: Position) -> Result<usize> {
     }
     Ok(text.len())
 }
+#[derive(Clone, Debug)]
+pub struct WorkspaceEdit {
+    pub files: Vec<FileEdits>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileEdits {
+    pub path: PathBuf,
+    pub edits: Vec<TextEdit>,
+    /// Exact source used to interpret every UTF-16 range, including line endings.
+    pub original: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct CodeAction {
+    pub title: String,
+    pub kind: Option<String>,
+    pub preferred: bool,
+    pub disabled: Option<String>,
+    pub edit: Option<WorkspaceEdit>,
+    /// Opaque resolver data. A deferred action without a data property uses JSON null.
+    pub resolve_data: Option<Value>,
+    pub(crate) wire: Value,
+    pub(crate) request: Arc<crate::workspace_edit::EditRequest>,
+}
+
 #[derive(Clone, Debug)]
 pub struct CompletionResult {
     pub items: Vec<CompletionItem>,
@@ -201,11 +230,14 @@ impl CompletionItem {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub range: TextRange,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub severity: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     pub message: String,
 }

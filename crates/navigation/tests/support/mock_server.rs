@@ -72,6 +72,7 @@ fn main() {
         .open("protocol.jsonl")
         .unwrap();
     let mut stdin = BufReader::new(std::io::stdin().lock());
+    let mut rename_requests = 0;
     let mut docs = HashMap::<String, Value>::new();
     fs::write("launch.json", serde_json::to_string(&args).unwrap()).unwrap();
     let mut root_uri = String::new();
@@ -136,6 +137,12 @@ fn main() {
                         "executeCommandProvider": {"commands":if mode.starts_with("ts-diagnostics") {json!(["typescript.tsserverRequest","DANGEROUS"])} else {json!([])}},
                         "completionProvider": if mode == "unsupported-editor" {Value::Bool(false)} else {json!({"resolveProvider":true})},
                         "hoverProvider":mode != "unsupported-editor",
+                        "renameProvider": match mode {
+                            "unsupported-editor" => json!(false),
+                            "edits-word" => json!(true),
+                            _ => json!({"prepareProvider":true})
+                        },
+                        "codeActionProvider":if mode == "unsupported-editor" {json!(false)} else {json!({"resolveProvider":mode != "edits-no-resolve"})},
                         "signatureHelpProvider":if mode == "unsupported-editor" {Value::Bool(false)} else {json!({"triggerCharacters":["(",","]})},
                         "diagnosticProvider": if mode.starts_with("push") || mode.starts_with("ts-diagnostics") {Value::Null} else {json!({"interFileDependencies":false,"workspaceDiagnostics":false})},
                         "documentFormattingProvider": mode != "unsupported-editor",
@@ -233,6 +240,36 @@ fn main() {
             }
             "textDocument/didClose" => {
                 docs.remove(params["textDocument"]["uri"].as_str().unwrap());
+            }
+            "textDocument/rename"
+            | "textDocument/prepareRename"
+            | "textDocument/codeAction"
+            | "codeAction/resolve" => {
+                let (reply, phase) = match method {
+                    "textDocument/rename" => ("rename.json", "rename"),
+                    "textDocument/prepareRename" => ("prepare.json", "prepare"),
+                    "textDocument/codeAction" => ("actions.json", "actions"),
+                    _ => ("resolve.json", "resolve"),
+                };
+                if mode.strip_prefix("edits-delay-") == Some(phase) {
+                    fs::write("request.started", method).unwrap();
+                    while !std::path::Path::new("respond.now").exists() {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
+                if method == "textDocument/rename" {
+                    rename_requests += 1;
+                }
+                let reply = if mode == "edits-confirm"
+                    && method == "textDocument/rename"
+                    && rename_requests == 2
+                {
+                    "confirm.rename.json"
+                } else {
+                    reply
+                };
+                let bytes = fs::read(reply).unwrap();
+                response(id, serde_json::from_slice(&bytes).unwrap());
             }
             "textDocument/hover" | "textDocument/signatureHelp" | "completionItem/resolve" => {
                 if mode == "editor-null" {

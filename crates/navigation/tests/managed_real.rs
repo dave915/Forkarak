@@ -588,3 +588,198 @@ fn real_bundled_java_resource_manifest() -> Result<()> {
     assert!(resources.join("language-tools/manifest.json").is_file());
     Ok(())
 }
+
+fn assert_method_rename(
+    nav: &mut Navigator,
+    source: &DocumentSnapshot,
+    caller: &std::path::Path,
+) -> Result<()> {
+    let (line, column) = offset(source.text(), "greet(");
+    let (_, old) = nav
+        .prepare_rename_buffer(source, line, column + 1)?
+        .value
+        .context("prepareRename returned null")?;
+    assert_eq!(old, "greet");
+    let edit = nav
+        .rename_buffer(source, line, column + 1, "welcome")?
+        .value;
+    let paths: Vec<_> = edit.files.iter().map(|f| f.path.as_path()).collect();
+    assert!(
+        paths.contains(&source.path()) && paths.contains(&caller),
+        "{paths:?}"
+    );
+    assert_eq!(paths.len(), 2);
+    for f in edit.files {
+        assert_eq!(f.edits.len(), 1);
+        assert!(f.original.contains("greet("));
+        assert_eq!(
+            pokarak_navigation::TextEdit::apply_all(&f.original, &f.edits)?,
+            f.original.replace("greet(", "welcome(")
+        );
+    }
+    Ok(())
+}
+
+fn assert_missing_import(
+    nav: &mut Navigator,
+    source: &DocumentSnapshot,
+    needle: &str,
+    expected: &str,
+) -> Result<()> {
+    let diagnostics = nav.diagnostics(source)?.value;
+    let (line, column) = offset(source.text(), needle);
+    let range = diagnostics
+        .iter()
+        .find(|d| {
+            d.range.start.line == line
+                && d.range.start.character <= column
+                && d.range.end.character >= column
+        })
+        .with_context(|| format!("Missing diagnostic for {needle}: {diagnostics:?}"))?
+        .range;
+    let actions = nav.code_actions_buffer(source, range, &diagnostics)?.value;
+    let mut summary = Vec::new();
+    for action in actions {
+        summary.push((action.title.clone(), action.disabled.clone()));
+        if action.disabled.is_some()
+            || !action
+                .kind
+                .as_deref()
+                .is_some_and(|kind| kind.starts_with("quickfix"))
+            || !action.title.to_lowercase().contains("import")
+        {
+            continue;
+        }
+        let resolved = nav.resolve_code_action_buffer(source, &action)?.value;
+        if let Some(edit) = resolved.edit {
+            for file in edit.files {
+                if file.path == source.path() {
+                    assert_eq!(file.original, source.text());
+                    let text =
+                        pokarak_navigation::TextEdit::apply_all(&file.original, &file.edits)?;
+                    if text.replace('\"', "'").contains(expected) && text.contains(needle) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    bail!("No quick fix added {expected}: {summary:?}")
+}
+
+#[test]
+#[ignore = "requires managed TypeScript; cross-file method rename and sibling import edits"]
+fn real_workspace_edits_typescript() -> Result<()> {
+    let p = Project::new();
+    p.write("tsconfig.json",r#"{"compilerOptions":{"strict":true,"target":"es2020","module":"esnext"},"include":["*.ts"]}"#);
+    let service = "export class Greeter { greet() { return 1; } }\n";
+    let caller = "import { Greeter } from './service';\nnew Greeter().greet();\n";
+    let missing = "export const n = helperValue();\n";
+    p.write("service.ts", service);
+    p.write("caller.ts", caller);
+    p.write(
+        "helper.ts",
+        "export function helperValue() { return 42; }\n",
+    );
+    p.write("missing.ts", "export const n = 0;\n");
+    let mut nav = p.nav("typescript")?;
+    assert_method_rename(
+        &mut nav,
+        &p.snapshot("service.ts", service, 8),
+        &p.root.join("caller.ts"),
+    )?;
+    assert_missing_import(
+        &mut nav,
+        &p.snapshot("missing.ts", missing, 13),
+        "helperValue",
+        "import { helperValue } from './helper'",
+    )?;
+    assert_eq!(
+        fs::read_to_string(p.root.join("missing.ts"))?,
+        "export const n = 0;\n"
+    );
+    assert_eq!(fs::read_to_string(p.root.join("service.ts"))?, service);
+    assert_eq!(fs::read_to_string(p.root.join("caller.ts"))?, caller);
+    nav.shutdown();
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires bundled JDT LS; cross-file method rename and missing-type import edits"]
+fn real_workspace_edits_bundled_jdt() -> Result<()> {
+    let p = Project::new();
+    let resources = PathBuf::from(
+        std::env::var_os("FORKARAK_BUNDLED_RESOURCES").context("set FORKARAK_BUNDLED_RESOURCES")?,
+    );
+    let tools = ManagedTools::new(
+        p.root.parent().unwrap().join("managed-state"),
+        Some(resources),
+    )?;
+    let java = tools
+        .status("java")?
+        .installed
+        .context("Packaged Java missing")?;
+    assert_eq!(
+        java.distribution,
+        pokarak_navigation::ToolDistribution::Bundled
+    );
+    p.write(".project",r#"<projectDescription><name>workspace-edits</name><projects/><buildSpec><buildCommand><name>org.eclipse.jdt.core.javabuilder</name><arguments/></buildCommand></buildSpec><natures><nature>org.eclipse.jdt.core.javanature</nature></natures></projectDescription>"#);
+    p.write(".classpath",r#"<classpath><classpathentry kind="src" path="src"/><classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/><classpathentry kind="output" path="bin"/></classpath>"#);
+    let service = "package demo;\npublic class Greeter { public int greet() { return 1; } }\n";
+    let caller = "package demo;\nclass Caller { int call() { return new Greeter().greet(); } }\n";
+    let missing = "package demo;\nclass Missing { UniqueHelper field; }\n";
+    p.write("src/demo/Greeter.java", service);
+    p.write("src/demo/Caller.java", caller);
+    p.write(
+        "src/tools/UniqueHelper.java",
+        "package tools;\npublic class UniqueHelper {}\n",
+    );
+    p.write("src/demo/Missing.java", "package demo;\nclass Missing {}\n");
+    let mut nav = Navigator::with_options(
+        p.root.clone(),
+        java.servers,
+        NavigatorOptions {
+            config_file: None,
+            initialize_timeout: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(25),
+            ..Default::default()
+        },
+    );
+    assert_method_rename(
+        &mut nav,
+        &p.snapshot("src/demo/Greeter.java", service, 8),
+        &p.root.join("src/demo/Caller.java"),
+    )?;
+    assert_missing_import(
+        &mut nav,
+        &p.snapshot("src/demo/Missing.java", missing, 13),
+        "UniqueHelper",
+        "import tools.UniqueHelper;",
+    )?;
+    let repaired = p.snapshot(
+        "src/demo/Missing.java",
+        "package demo;\nclass Missing { tools.UniqueHelper field; }\n",
+        14,
+    );
+    let diagnostics = nav.diagnostics(&repaired)?.value;
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|d| d.message.contains("cannot be resolved")),
+        "{diagnostics:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(p.root.join("src/demo/Missing.java"))?,
+        "package demo;\nclass Missing {}\n"
+    );
+    assert_eq!(
+        fs::read_to_string(p.root.join("src/demo/Greeter.java"))?,
+        service
+    );
+    assert_eq!(
+        fs::read_to_string(p.root.join("src/demo/Caller.java"))?,
+        caller
+    );
+    nav.shutdown();
+    Ok(())
+}

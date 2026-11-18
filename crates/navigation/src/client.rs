@@ -57,10 +57,11 @@ pub(crate) struct Client {
     open_close: bool,
     server_messages: String,
     jetbrains: bool,
+    jdt: bool,
     import_in_progress: bool,
     import_error: Option<String>,
     // Keep server state outside the inspected repository, unique per root + instance.
-    _workspace: tempfile::TempDir,
+    workspace: tempfile::TempDir,
 }
 
 impl Client {
@@ -225,9 +226,10 @@ impl Client {
             open_close: false,
             server_messages: String::new(),
             jetbrains,
+            jdt: crate::config::is_jdt(config),
             import_in_progress: false,
             import_error: None,
-            _workspace: workspace,
+            workspace,
         };
         client.transport.set_snapshot(snapshot.cloned());
         let deadline = Instant::now() + options.initialize_timeout;
@@ -243,7 +245,7 @@ impl Client {
             if let Some(path) = &managed_tsserver {
                 init_options["tsserver"]["path"] = json!(path);
             }
-            // No build, installation, executable-command, edit, or dynamic-registration capability.
+            // Only client-initiated text edits. Never accept server-initiated workspace writes.
             if jetbrains {
                 init_options = json!({"indexDir": workspace_path.join("index").to_string_lossy()});
             } else if config.language == "java" {
@@ -265,11 +267,13 @@ impl Client {
                 "workspaceFolders": client.workspace_folders()?,
                 "capabilities": {
                     "general": {"positionEncodings": ["utf-16"]},
-                    "workspace": {"configuration": true, "workspaceFolders": true, "applyEdit": false},
+                    "workspace": {"configuration": true, "workspaceFolders": true, "applyEdit": false, "workspaceEdit":{"documentChanges":true,"resourceOperations":[]}},
                     "textDocument": {
                         "synchronization": {"dynamicRegistration": false, "didSave": false, "willSave": false},
                         "definition": {"dynamicRegistration": false, "linkSupport": true},
                         "references": {"dynamicRegistration": false},
+                        "rename":{"dynamicRegistration":false,"prepareSupport":true},
+                        "codeAction":{"dynamicRegistration":false,"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix","refactor","refactor.extract","refactor.inline","refactor.rewrite","source","source.organizeImports"]}},"resolveSupport":{"properties":["edit"]},"dataSupport":true,"isPreferredSupport":true,"disabledSupport":true},
                         "implementation": {"dynamicRegistration": false, "linkSupport": true},
                         "completion": {"dynamicRegistration": false, "completionItem": {"snippetSupport": true, "insertReplaceSupport": true, "documentationFormat":["markdown","plaintext"], "resolveSupport":{"properties":["documentation","detail","additionalTextEdits"]}}},
                         "hover":{"dynamicRegistration":false,"contentFormat":["markdown","plaintext"]},
@@ -354,6 +358,16 @@ impl Client {
 
     pub(crate) fn capabilities(&self) -> Value {
         self.capabilities.clone()
+    }
+
+    pub(crate) fn edit_document(&self, path: &Path) -> Option<(&str, i64, Option<i64>)> {
+        self.documents
+            .get(path)
+            .map(|doc| (doc.text.as_str(), doc.version, doc.buffer_version))
+    }
+
+    pub(crate) fn session_path(&self) -> &Path {
+        self.workspace.path()
     }
 
     pub fn server_messages(&self) -> &str {
@@ -461,6 +475,16 @@ impl Client {
     }
 
     fn request(&mut self, method: &str, params: Value, deadline: Instant) -> Result<Value> {
+        self.request_observing(method, params, deadline, |_| {})
+    }
+
+    fn request_observing(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+        mut observe: impl FnMut(&Value),
+    ) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
         self.transport
@@ -475,6 +499,7 @@ impl Client {
                 .receive(deadline)
                 .with_context(|| format!("Waiting for {method}"))?;
             if message.get("method").is_some() {
+                observe(&message);
                 self.record_notification(&message);
                 if message.get("id").is_some() {
                     self.server_request(&message, deadline)?;
@@ -776,7 +801,53 @@ impl Client {
         {
             return self.typescript_diagnostics(snapshot, deadline);
         }
+        if self.jdt
+            && self.capabilities["executeCommandProvider"]["commands"]
+                .as_array()
+                .is_some_and(|commands| {
+                    commands
+                        .iter()
+                        .any(|c| c == "java.project.refreshDiagnostics")
+                })
+        {
+            return self.jdt_diagnostics(snapshot, deadline);
+        }
         self.push_diagnostics(snapshot.path(), deadline)
+    }
+
+    /// JDT's per-file reconciliation publishes before its command reply but omits
+    /// the version. Drain prior document lifecycle jobs, then observe only the
+    /// explicit reconciliation for the synchronized working copy in this session.
+    fn jdt_diagnostics(&mut self, snapshot: &DocumentSnapshot, deadline: Instant) -> Result<Value> {
+        let uri = path_to_uri(snapshot.path())?;
+        let params = json!({"command":"java.project.refreshDiagnostics","arguments":[uri,"thisFile",false,true]});
+        self.request("workspace/executeCommand", params.clone(), deadline)?;
+        snapshot.check()?;
+        let version = self.documents[snapshot.path()].version;
+        let mut report = None;
+        let mut conflicting = false;
+        self.request_observing("workspace/executeCommand", params, deadline, |message| {
+            let publish = &message["params"];
+            if message["method"] == "textDocument/publishDiagnostics"
+                && publish["uri"]
+                    .as_str()
+                    .and_then(|uri| crate::uri_to_path(uri).ok())
+                    .as_deref()
+                    == Some(snapshot.path())
+                && (publish["version"].is_null() || publish["version"].as_i64() == Some(version))
+                && publish["diagnostics"].is_array()
+            {
+                conflicting |= report
+                    .as_ref()
+                    .is_some_and(|prior| prior != &publish["diagnostics"]);
+                report = Some(publish["diagnostics"].clone());
+            }
+        })?;
+        if conflicting {
+            bail!("JDT returned conflicting diagnostics for the current source; retry");
+        }
+        snapshot.check()?;
+        report.context("JDT did not publish diagnostics during explicit reconciliation")
     }
 
     /// This is deliberately not a generic execute-command API. These two fixed
@@ -875,6 +946,7 @@ impl Client {
         language: &str,
         deadline: Instant,
     ) -> Result<()> {
+        snapshot.check()?;
         let path = snapshot.path();
         let text = snapshot.text();
         if !self.open_close || self.sync_kind == 0 {

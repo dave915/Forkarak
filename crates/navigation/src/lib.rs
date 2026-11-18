@@ -12,6 +12,7 @@ pub mod managed;
 mod paths;
 mod snippet;
 mod transport;
+mod workspace_edit;
 
 use anyhow::{Context, Result, bail};
 use client::{Client, read_document};
@@ -27,8 +28,9 @@ use std::{
 };
 
 pub use buffer::{
-    BufferResult, CompletionItem, CompletionResult, Diagnostic, DocumentSnapshot, DocumentSymbol,
-    FormatterConfig, FormattingOptions, Position, TextEdit, TextRange,
+    BufferResult, CodeAction, CompletionItem, CompletionResult, Diagnostic, DocumentSnapshot,
+    DocumentSymbol, FileEdits, FormatterConfig, FormattingOptions, Position, TextEdit, TextRange,
+    WorkspaceEdit,
 };
 pub use cancellation::CancellationHandle;
 pub use config::{NavigatorOptions, default_configs, discover_program, installed_configs};

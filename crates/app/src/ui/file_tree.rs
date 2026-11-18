@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::component::tooltip::Tooltip;
 use std::{collections::BTreeMap, ffi::OsString};
 
 #[derive(Clone, Debug)]
@@ -17,6 +18,23 @@ struct FileTree {
     // Counts and controls must include files hidden by collapsed ancestors.
     file_count: usize,
     directories: HashSet<PathBuf>,
+}
+
+fn file_mode_labels(snapshot: Option<&Snapshot>, all: bool, visible: usize) -> [String; 2] {
+    let Some(snapshot) = snapshot else {
+        return ["변경".into(), "전체".into()];
+    };
+    let label = |name: &str, selected: bool, total: usize| {
+        if selected && visible < total {
+            format!("{name} {visible}/{total}")
+        } else {
+            format!("{name} {total}")
+        }
+    };
+    [
+        label("변경", !all, snapshot.changes.len()),
+        label("전체", all, snapshot.files.len()),
+    ]
 }
 
 #[derive(Default)]
@@ -395,6 +413,8 @@ impl Pokarak {
             .then_some(self.file_cursor);
         let tree = self.file_tree();
         let count = tree.file_count;
+        let snapshot = self.snapshot();
+        let [changed_label, all_label] = file_mode_labels(snapshot, all, count);
         let has_folders = !tree.directories.is_empty();
         let filtering = !self.text_search && !self.filter.is_empty();
         let rows = Arc::new(tree.rows);
@@ -417,104 +437,93 @@ impl Pokarak {
                 div()
                     .h(ui_px(34.))
                     .flex_none()
-                    .px_2()
+                    .px(ui_px(4.))
                     .flex()
                     .items_center()
-                    .gap_1()
-                    .child(
-                        Button::new("changes")
-                            .label("변경 파일")
-                            .ghost()
-                            .small()
-                            .selected(!all)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(root) = &this.current {
-                                    this.sessions.get_mut(root).unwrap().saved.all_files = false;
-                                }
-                                this.file_cursor = 0;
-                                this.persist(cx);
-                                cx.notify();
-                            })),
+                    .gap(ui_px(2.))
+                    .children(
+                        [
+                            (false, "changes", changed_label),
+                            (true, "all-files", all_label),
+                        ]
+                        .map(|(all_files, id, label)| {
+                            Button::new(id)
+                                .tooltip(label.clone())
+                                .label(label)
+                                .ghost()
+                                .small()
+                                .flex_initial()
+                                .min_w(ui_px(38.))
+                                .px(ui_px(3.))
+                                .selected(all == all_files)
+                                .toggled(all == all_files)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if let Some(root) = &this.current {
+                                        this.sessions.get_mut(root).unwrap().saved.all_files =
+                                            all_files;
+                                    }
+                                    this.file_cursor = 0;
+                                    this.persist(cx);
+                                    cx.notify();
+                                }))
+                        }),
                     )
-                    .child(
-                        Button::new("all-files")
-                            .label("전체 파일")
-                            .ghost()
-                            .small()
-                            .selected(all)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(root) = &this.current {
-                                    this.sessions.get_mut(root).unwrap().saved.all_files = true;
-                                }
-                                this.file_cursor = 0;
-                                this.persist(cx);
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(ui_text(11.))
-                            .text_color(palette.rgb(MUTED))
-                            .child(count.to_string()),
+                    .when(
+                        !all && snapshot.is_some_and(|s| !s.changes.is_empty()),
+                        |row| {
+                            let label = self.review_counts();
+                            row.child(
+                                div()
+                                    .id("files-review-count")
+                                    .flex_1()
+                                    .min_w(ui_px(40.))
+                                    .text_right()
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .text_size(ui_text(11.))
+                                    .text_color(palette.rgb(MUTED))
+                                    .child(label.clone())
+                                    .tooltip(move |w, cx| Tooltip::new(label.clone()).build(w, cx)),
+                            )
+                        },
                     ),
             )
-            .children(self.snapshot().and_then(|snapshot| {
+            .children(snapshot.and_then(|snapshot| {
                 skipped_paths_notice("copy-skipped-files", &snapshot.skipped_paths)
             }))
             .when(!all, |d| d.child(self.review_filter_controls(cx)))
-            // "검토 0/0" carries no information when nothing changed.
-            .when(
-                self.snapshot().is_some_and(|s| !s.changes.is_empty()),
-                |d| {
-                    d.child(
-                        div()
-                            .px_2()
-                            .pb_1()
-                            .text_size(ui_text(11.))
-                            .text_color(palette.rgb(MUTED))
-                            .child(self.review_counts()),
-                    )
-                },
-            )
             .child(
                 div()
-                    .px_2()
+                    .flex_none()
+                    .px(ui_px(4.))
                     .pb_2()
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap(ui_px(2.))
                     .child(
                         Input::new(&self.search_input)
                             .small()
+                            .flex_1()
+                            .min_w_0()
                             .prefix(IconName::Search),
                     )
                     .child(
                         Button::new("text-search")
                             .icon(IconName::TextSearch)
                             .ghost()
-                            .small()
+                            .with_size(ui_px(24.))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.focus_search(true, window, cx)
                             }))
                             .shortcut_tooltip("본문 검색", &FindText, None),
-                    ),
-            )
-            .child(
-                div()
-                    .h(ui_px(30.))
-                    .flex_none()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
+                    )
                     .child(
                         Button::new("expand-all-folders")
                             .icon(IconName::ChevronsUpDown)
-                            .label("모두 펼치기")
+                            .accessibility_label("모든 폴더 펼치기")
                             .ghost()
-                            .small()
+                            .with_size(ui_px(24.))
                             .disabled(!has_folders || filtering)
                             .tooltip("모든 폴더 펼치기 · 트리에서 → 펼치기 / Enter 전환")
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -525,9 +534,9 @@ impl Pokarak {
                     .child(
                         Button::new("collapse-all-folders")
                             .icon(IconName::ChevronsDownUp)
-                            .label("모두 접기")
+                            .accessibility_label("모든 폴더 접기")
                             .ghost()
-                            .small()
+                            .with_size(ui_px(24.))
                             .disabled(!has_folders || filtering)
                             .tooltip("모든 폴더 접기 · 트리에서 ← 접기 / Enter 전환")
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -713,7 +722,7 @@ impl Pokarak {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileTree, TreeMove, build_tree, tree_move, visible_cursor};
+    use super::{FileTree, TreeMove, build_tree, file_mode_labels, tree_move, visible_cursor};
     use crate::prefs::{Preferences, SavedView};
     use pokarak_core::{ChangedFile, CompareMode, FileStatus, Snapshot};
     use std::{
@@ -778,6 +787,31 @@ mod tests {
             .iter()
             .map(|r| r.path.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn mode_buttons_show_both_totals_and_the_active_filtered_count() {
+        let fixture = fixture();
+        let snapshot = pokarak_core::snapshot(fixture.path(), &CompareMode::Uncommitted).unwrap();
+        let collapsed = HashSet::from([PathBuf::from("docs")]);
+        for (all, query, expected) in [
+            (false, "", ["변경 4", "전체 5"]),
+            (true, "", ["변경 4", "전체 5"]),
+            (false, "docs/", ["변경 1/4", "전체 5"]),
+            (true, "docs/", ["변경 4", "전체 2/5"]),
+            (false, "missing", ["변경 0/4", "전체 5"]),
+        ] {
+            let tree = build_tree(&snapshot, all, query, &collapsed);
+            assert_eq!(
+                file_mode_labels(Some(&snapshot), all, tree.file_count),
+                expected
+            );
+        }
+        assert_eq!(file_mode_labels(None, false, 0), ["변경", "전체"]);
+        assert_eq!(
+            file_mode_labels(Some(&Snapshot::default()), false, 0),
+            ["변경 0", "전체 0"]
+        );
     }
 
     #[test]

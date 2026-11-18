@@ -272,6 +272,10 @@ mod tests {
             let index_before = git(&root, &["ls-files", "--stage", "--", "main.rs"]);
             edit(&mut state, &root, path, &format!("{original}typed"));
             assert!(state.dirty(&root, path));
+            assert_eq!(
+                state.buffer(&root, path).unwrap().status(),
+                "미저장 편집 · ⌘S 저장"
+            );
             assert_eq!(state.buffer(&root, path).unwrap().save_label(), "● 저장");
             state.persist().unwrap();
             let older = state.drafts();
@@ -287,7 +291,7 @@ mod tests {
             let buffer = state.buffer(&root, path).unwrap();
             assert!(!buffer.stale && buffer.error.is_none());
             assert_eq!(buffer.save_label(), "저장");
-            assert_eq!(buffer.status(), "변경 없음");
+            assert_eq!(buffer.status(), "파일 저장됨");
             state.persist().unwrap();
             state.storage.write(old_generation, &older).unwrap();
             assert!(
@@ -749,9 +753,9 @@ impl Buffer {
         if self.stale {
             "외부 변경 감지 — 디스크 내용을 확인하세요."
         } else if self.dirty() {
-            "미저장 변경 — ⌘S 저장"
+            "미저장 편집 · ⌘S 저장"
         } else {
-            "변경 없음"
+            "파일 저장됨"
         }
     }
 

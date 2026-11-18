@@ -183,7 +183,8 @@ impl Pokarak {
         let saved = self.session().map(|session| &session.saved);
         let collapsed = saved.is_some_and(|view| view.graph_detail_collapsed);
         let count = match self.change_count {
-            Some(count) => format!("{count}개 파일"),
+            Some((count, 0)) => format!("{count}개 파일"),
+            Some((count, skipped)) => format!("{count}개 확인 · {skipped}개 미확인"),
             None if self.count_pending => "변경 수 확인 중…".into(),
             None => "변경 수 미확인".into(),
         };

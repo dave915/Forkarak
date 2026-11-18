@@ -306,7 +306,8 @@ pub struct Pokarak {
     current_project: Option<PathBuf>,
     opening_path: Option<PathBuf>,
     inventory: Vec<Worktree>,
-    change_count: Option<usize>,
+    /// Verified working changes and the number of paths omitted for permissions.
+    change_count: Option<(usize, usize)>,
     graph_fingerprint: Option<String>,
     count_pending: bool,
     projects: Vec<SavedProject>,
@@ -338,6 +339,7 @@ pub struct Pokarak {
     result_title: String,
     result_semantic: bool,
     results_open: bool,
+    result_skipped_paths: Vec<PathBuf>,
     result_scroll: UniformListScrollHandle,
     result_surface: result_presentation::Surface,
     result_rows: Arc<Vec<result_presentation::Row>>,
@@ -695,6 +697,7 @@ impl Pokarak {
             result_title: String::new(),
             result_semantic: false,
             results_open: false,
+            result_skipped_paths: Vec::new(),
             result_scroll: UniformListScrollHandle::new(),
             result_surface: result_presentation::Surface::Popover,
             result_rows: Arc::new(vec![]),
@@ -1197,7 +1200,10 @@ impl Pokarak {
         let pending_file = self.take_pending_cli_file();
         self.capture_code_buffers(cx);
         self.inventory = snapshot.worktrees.clone();
-        self.change_count = Some(snapshot.worktree.changed_files);
+        self.change_count = Some((
+            snapshot.worktree.changed_files,
+            snapshot.skipped_paths.len(),
+        ));
         self.graph_fingerprint = None;
         self.count_pending = false;
         let root = self.current.clone().unwrap();
@@ -1807,6 +1813,7 @@ impl Pokarak {
             "navigation.results_placement",
             "popover",
         ));
+        self.result_skipped_paths.clear();
         self.results = excerpts;
         self.result_title = title.clone();
         self.result_semantic = semantic;
@@ -1897,10 +1904,10 @@ impl Pokarak {
             search_options::Exclusions::read(&self.prefs, self.current_project.as_deref());
         let patterns = exclusions.patterns();
         let task = cx.background_spawn(async move {
-            let locations =
-                pokarak_core::search_with_exclusions(&search_root, &query, 300, &patterns)?;
-            let revisions = result_revisions(&locations);
-            anyhow::Ok((locations, revisions))
+            let report =
+                pokarak_core::search_with_exclusions_report(&search_root, &query, 300, &patterns)?;
+            let revisions = result_revisions(&report.matches);
+            anyhow::Ok((report, revisions))
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
@@ -1913,7 +1920,8 @@ impl Pokarak {
                     return;
                 }
                 match result {
-                    Ok((locations, revisions)) => {
+                    Ok((report, revisions)) => {
+                        let locations = report.matches;
                         this.result_revisions = revisions;
                         this.error = None;
                         this.status = if locations.len() >= 300 {
@@ -1931,11 +1939,13 @@ impl Pokarak {
                             window,
                             cx,
                         );
+                        this.result_skipped_paths = report.skipped_paths;
                     }
                     Err(error) => {
                         this.error = Some(format!("본문 검색 실패 · {error:#}"));
                         this.status = "본문 검색 실패 · 검색창에서 Enter로 다시 시도".into();
                         this.result_title = "본문 검색 실패".into();
+                        this.result_skipped_paths.clear();
                         this.result_semantic = false;
                         this.results_root = this.current.clone();
                         this.result_surface = result_presentation::Surface::Files;

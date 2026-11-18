@@ -95,6 +95,56 @@ impl Fixture {
 }
 
 #[test]
+fn partial_inspection_lists_readable_changes_and_preserves_the_index() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let locked = f.root.join("-option.txt");
+    fs::write(f.root.join("file.txt"), "changed and searchable").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0)).unwrap();
+    if fs::File::open(&locked).is_ok() {
+        return; // Privileged runners can read mode-000 files.
+    }
+    let index = fs::read(f.root.join(".git/index")).unwrap();
+    for (command, flags) in [
+        ("status", &[][..]),
+        ("files", &["--changed"][..]),
+        ("files", &["--changed", "--name-only"][..]),
+        ("search", &["--query", "searchable"][..]),
+    ] {
+        let result = f.ok(command, flags);
+        assert_eq!(result["skipped_paths"], serde_json::json!(["-option.txt"]));
+        assert!(
+            !result
+                .get("changes")
+                .or_else(|| result.get("files"))
+                .or_else(|| result.get("matches"))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(
+        f.ok("diff", &["--path", "file.txt"])["patch"]
+            .as_str()
+            .unwrap()
+            .contains("+changed and searchable")
+    );
+    assert!(
+        f.fail("diff", &["--path", "-option.txt"])["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("permission denied")
+    );
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        f.ok("files", &["--changed"])["skipped_paths"],
+        serde_json::json!([])
+    );
+    assert_eq!(fs::read(f.root.join(".git/index")).unwrap(), index);
+}
+
+#[test]
 fn routes_reads_without_changing_index_and_scopes_worktrees() {
     let f = Fixture::new();
     let index = fs::read(f.root.join(".git/index")).unwrap();

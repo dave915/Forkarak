@@ -172,6 +172,38 @@ fn visible_cursor(rows: &[FileRow], previous: Option<&Path>, fallback: usize) ->
     fallback.min(rows.len().saturating_sub(1))
 }
 
+pub(super) fn skipped_paths_notice(id: &'static str, paths: &[PathBuf]) -> Option<Button> {
+    let first = paths.first()?;
+    let count = paths.len();
+    let label = format!("권한으로 제외된 파일 {count}개");
+    let tooltip = format!(
+        "{}{} · 클릭하면 제외된 경로를 모두 복사합니다",
+        first.display(),
+        if count == 1 {
+            String::new()
+        } else {
+            format!(" 외 {}개", count - 1)
+        }
+    );
+    let paths = paths
+        .iter()
+        .map(|p| p.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(
+        Button::new(id)
+            .small()
+            .ghost()
+            .icon(IconName::Copy)
+            .accessibility_label(format!("{label} · 경로 복사"))
+            .label(label)
+            .tooltip(tooltip)
+            .on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(paths.clone()))
+            }),
+    )
+}
+
 impl Pokarak {
     fn file_tree(&self) -> FileTree {
         let Some(session) = self.session() else {
@@ -355,6 +387,9 @@ impl Pokarak {
                             .child(count.to_string()),
                     ),
             )
+            .children(self.snapshot().and_then(|snapshot| {
+                skipped_paths_notice("copy-skipped-files", &snapshot.skipped_paths)
+            }))
             .when(!all, |d| d.child(self.review_filter_controls(cx)))
             .child(
                 div()

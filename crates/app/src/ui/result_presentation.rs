@@ -445,6 +445,8 @@ impl Pokarak {
                 .p_3()
                 .child(if failed {
                     "검색하지 못했습니다. 오류를 확인하고 다시 시도하세요."
+                } else if !self.result_skipped_paths.is_empty() {
+                    "읽을 수 있는 파일에서 일치하는 결과를 찾지 못했습니다."
                 } else {
                     "결과가 없습니다."
                 })
@@ -574,6 +576,10 @@ impl Pokarak {
             .track_focus(&self.results_focus)
             .bg(palette.rgb(SIDE))
             .child(header)
+            .children(file_tree::skipped_paths_notice(
+                "copy-skipped-search",
+                &self.result_skipped_paths,
+            ))
             .child(
                 div()
                     .px_2()

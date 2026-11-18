@@ -243,15 +243,15 @@ impl Pokarak {
         self.count_pending = self.git_history.active;
         let generation = self.request;
         let target = root.clone();
-        let task =
-            cx.background_spawn(async move { pokarak_core::worktree_change_summary(&target) });
+        let task = cx
+            .background_spawn(async move { pokarak_core::worktree_change_summary_report(&target) });
         cx.spawn(async move |view, cx| {
             let result = task.await;
             let _ = view.update(cx, |app, cx| {
                 let fingerprint = result
                     .as_ref()
                     .ok()
-                    .map(|(_, fingerprint)| fingerprint.clone());
+                    .map(|summary| summary.fingerprint.clone());
                 if !app.auto_refresh.finish(&root, ticket, fingerprint) {
                     return;
                 }
@@ -263,9 +263,10 @@ impl Pokarak {
                     return;
                 }
                 match result {
-                    Ok((count, fingerprint)) => {
-                        app.change_count = Some(count);
-                        app.graph_fingerprint = Some(fingerprint);
+                    Ok(summary) => {
+                        app.change_count =
+                            Some((summary.changed_files, summary.skipped_paths.len()));
+                        app.graph_fingerprint = Some(summary.fingerprint);
                         app.external_change |= app.auto_refresh.ready;
                     }
                     Err(error) => {

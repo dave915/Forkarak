@@ -16,11 +16,11 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-pub const USAGE: &str = "forkarak ctl <command> [options]\nRead: status/worktrees/branches/files [--changed [--name-only]]/search --query TEXT [--limit N]/diff --path FILE/read --path FILE\nAll repository commands require --repo PATH (absolute or relative selected worktree). status/files/diff accept --base BRANCH. files --changed --name-only returns paths under files and skips line statistics.\nWrite: write --path FILE --expected-file BEFORE --content-file AFTER | stage/unstage --path FILE [--path FILE ...] | commit --message TEXT | merge --branch BRANCH\nAll writes require --repo PATH --yes. write replaces an existing UTF-8 file only if exact expected bytes still match.\nGUI: sessions | gui status --session SOCKET | gui open-project/select-worktree/refresh --session SOCKET --repo PATH | gui open-file --session SOCKET --repo PATH --path FILE [--line N] | gui view --session SOCKET --repo PATH --mode graph|code\nAgent guide: instructions [--agent claude|codex]\nEvery ctl command returns one JSON object on stdout; ok=false means a nonzero exit. File paths are relative to the worktree, not the shell cwd.";
+pub const USAGE: &str = "forkarak ctl <command> [options]\nRead: status/worktrees/branches/files [--changed [--name-only]]/search --query TEXT [--limit N]/diff --path FILE/read --path FILE\nAll repository commands require --repo PATH (absolute or relative selected worktree). status/files/diff accept --base BRANCH. files --changed --name-only returns paths under files and skips line statistics. status/files/search include skipped_paths for files omitted from content inspection due to permissions.\nWrite: write --path FILE --expected-file BEFORE --content-file AFTER | stage/unstage --path FILE [--path FILE ...] | commit --message TEXT | merge --branch BRANCH\nAll writes require --repo PATH --yes. write replaces an existing UTF-8 file only if exact expected bytes still match.\nGUI: sessions | gui status --session SOCKET | gui open-project/select-worktree/refresh --session SOCKET --repo PATH | gui open-file --session SOCKET --repo PATH --path FILE [--line N] | gui view --session SOCKET --repo PATH --mode graph|code\nAgent guide: instructions [--agent claude|codex]\nEvery ctl command returns one JSON object on stdout; ok=false means a nonzero exit. File paths are relative to the worktree, not the shell cwd.";
 
 pub fn instructions(agent: &str) -> String {
     format!(
-        "# Forkarak instructions for {agent}\n\nUse `forkarak ctl` to inspect the explicitly selected Git worktree. First run `forkarak ctl status --repo /absolute/worktree`. Read result.repo to verify the canonical target. Never assume the GUI's selected worktree. All responses are JSON: check ok before reading result; errors exit nonzero.\n\n```sh\nforkarak ctl worktrees --repo /absolute/worktree\nforkarak ctl branches --repo /absolute/worktree\nforkarak ctl files --repo /absolute/worktree --changed\nforkarak ctl search --repo /absolute/worktree --query 'literal text' --limit 50\nforkarak ctl diff --repo /absolute/worktree --path src/main.rs\nforkarak ctl read --repo /absolute/worktree --path src/main.rs\n```\n\nSearch is literal text, never semantic references; locations are zero-based UTF-16. `--base main` on status/files/diff includes branch changes against merge-base. Read, diff and search never start language servers, builds or Git writes. Paths with spaces must be quoted. Prefix a repository literally named ctl with `./` for GUI launch, or use `forkarak -- ctl`.\n\nOnly perform a write when the user requests it. Every write needs `--yes`. For editing, decode result.text from read into a temporary UTF-8 expected file outside the worktree; put the complete replacement in another file. Do not redirect read's JSON envelope into the expected file.\n\n```sh\nforkarak ctl write --repo /absolute/worktree --path src/main.rs --expected-file /tmp/before.txt --content-file /tmp/after.txt --yes\nforkarak ctl stage --repo /absolute/worktree --path src/main.rs --yes\nforkarak ctl unstage --repo /absolute/worktree --path src/main.rs --yes\nforkarak ctl commit --repo /absolute/worktree --message 'Describe the change' --yes\nforkarak ctl merge --repo /absolute/worktree --branch feature/example --yes\n```\n\nSave rejects stale bytes, traversal, symlinks, Git metadata, binary and oversized files. It does not stage. Stage/unstage accept only named files; commit uses only the current index. Merge requires a clean worktree and guards source/destination refs. Hooks/filters can run only on explicit Git writes. A failed Git write can leave conflicts or partial state: inspect status and stop for user direction; never silently retry, force, discard, reset, stash or checkout.\n\nFor a running GUI, call `forkarak ctl sessions`, choose the intended socket, then `forkarak ctl gui status --session SOCKET`. Open a project with `gui open-project --session SOCKET --repo PATH`; wait until status shows the intended repo and loading=false before `gui open-file`, `gui view` or `gui refresh`. GUI success acknowledges navigation scheduling; status reports loading/error. GUI controls never authorize writes, trust, builds or language analysis.\n"
+        "# Forkarak instructions for {agent}\n\nUse `forkarak ctl` to inspect the explicitly selected Git worktree. First run `forkarak ctl status --repo /absolute/worktree`. Read result.repo to verify the canonical target. Never assume the GUI's selected worktree. All responses are JSON: check ok before reading result; errors exit nonzero.\n\n```sh\nforkarak ctl worktrees --repo /absolute/worktree\nforkarak ctl branches --repo /absolute/worktree\nforkarak ctl files --repo /absolute/worktree --changed\nforkarak ctl search --repo /absolute/worktree --query 'literal text' --limit 50\nforkarak ctl diff --repo /absolute/worktree --path src/main.rs\nforkarak ctl read --repo /absolute/worktree --path src/main.rs\n```\n\nSearch is literal text, never semantic references; locations are zero-based UTF-16. Check result.skipped_paths on status, files and search for paths whose contents could not be inspected. `--base main` on status/files/diff includes branch changes against merge-base. Read, diff and search never start language servers, builds or Git writes. Paths with spaces must be quoted. Prefix a repository literally named ctl with `./` for GUI launch, or use `forkarak -- ctl`.\n\nOnly perform a write when the user requests it. Every write needs `--yes`. For editing, decode result.text from read into a temporary UTF-8 expected file outside the worktree; put the complete replacement in another file. Do not redirect read's JSON envelope into the expected file.\n\n```sh\nforkarak ctl write --repo /absolute/worktree --path src/main.rs --expected-file /tmp/before.txt --content-file /tmp/after.txt --yes\nforkarak ctl stage --repo /absolute/worktree --path src/main.rs --yes\nforkarak ctl unstage --repo /absolute/worktree --path src/main.rs --yes\nforkarak ctl commit --repo /absolute/worktree --message 'Describe the change' --yes\nforkarak ctl merge --repo /absolute/worktree --branch feature/example --yes\n```\n\nSave rejects stale bytes, traversal, symlinks, Git metadata, binary and oversized files. It does not stage. Stage/unstage accept only named files; commit uses only the current index. Merge requires a clean worktree and guards source/destination refs. Hooks/filters can run only on explicit Git writes. A failed Git write can leave conflicts or partial state: inspect status and stop for user direction; never silently retry, force, discard, reset, stash or checkout.\n\nFor a running GUI, call `forkarak ctl sessions`, choose the intended socket, then `forkarak ctl gui status --session SOCKET`. Open a project with `gui open-project --session SOCKET --repo PATH`; wait until status shows the intended repo and loading=false before `gui open-file`, `gui view` or `gui refresh`. GUI success acknowledges navigation scheduling; status reports loading/error. GUI controls never authorize writes, trust, builds or language analysis.\n"
     )
 }
 
@@ -204,9 +204,18 @@ fn run(args: &[OsString]) -> Result<Value> {
         "worktrees" => Ok(
             json!({"repo":root,"worktrees":serde_json::to_value(pokarak_core::worktree_inventory(&root)?)?}),
         ),
-        "search" => Ok(
-            json!({"repo":root,"kind":"literal_text","locations_zero_based_utf16":true,"limit":flags.number("--limit", 100, 10000)?,"matches":serde_json::to_value(pokarak_core::search(&root, flags.text("--query")?, flags.number("--limit", 100, 10000)?)?)?}),
-        ),
+        "search" => {
+            let limit = flags.number("--limit", 100, 10000)?;
+            let report = pokarak_core::search_with_exclusions_report(
+                &root,
+                flags.text("--query")?,
+                limit,
+                &[],
+            )?;
+            Ok(
+                json!({"repo":root,"kind":"literal_text","locations_zero_based_utf16":true,"limit":limit,"matches":report.matches,"skipped_paths":report.skipped_paths}),
+            )
+        }
         "read" => {
             let path = relative(&root, &flags.path("--path")?)?;
             Ok(json!({"repo":root,"path":path,"text":pokarak_core::read_file(&root,&path)?}))
@@ -256,7 +265,7 @@ fn run(args: &[OsString]) -> Result<Value> {
         "status" => {
             let snapshot = pokarak_core::snapshot(&root, &compare)?;
             Ok(
-                json!({"repo":root,"worktree":serde_json::to_value(snapshot.worktree)?,"compare":compare,"changes":serde_json::to_value(snapshot.changes)?,"fingerprint":snapshot.fingerprint}),
+                json!({"repo":root,"worktree":serde_json::to_value(snapshot.worktree)?,"compare":compare,"changes":serde_json::to_value(snapshot.changes)?,"skipped_paths": snapshot.skipped_paths, "fingerprint":snapshot.fingerprint}),
             )
         }
         "files"
@@ -264,7 +273,7 @@ fn run(args: &[OsString]) -> Result<Value> {
         {
             let snapshot = pokarak_core::snapshot_current(&root, &compare)?;
             Ok(
-                json!({"repo":root,"compare":compare,"changes":serde_json::to_value(snapshot.changes)?}),
+                json!({"repo":root,"compare":compare,"changes":serde_json::to_value(snapshot.changes)?,"skipped_paths":snapshot.skipped_paths}),
             )
         }
         "branches" => {
@@ -279,14 +288,23 @@ fn run(args: &[OsString]) -> Result<Value> {
                     .into_iter()
                     .map(|file| file.path)
                     .collect();
-                Ok(json!({"repo":root,"compare":compare,"files":serde_json::to_value(paths)?}))
+                Ok(
+                    json!({"repo":root,"compare":compare,"files":serde_json::to_value(paths)?,"skipped_paths":inventory.skipped_paths}),
+                )
             } else {
-                Ok(json!({"repo":root,"files":serde_json::to_value(inventory.files)?}))
+                Ok(
+                    json!({"repo":root,"files":serde_json::to_value(inventory.files)?,"skipped_paths":inventory.skipped_paths}),
+                )
             }
         }
         "diff" => {
             let path = relative(&root, &flags.path("--path")?)?;
             let inventory = pokarak_core::snapshot_current_inventory(&root, &compare)?;
+            ensure!(
+                !inventory.skipped_paths.contains(&path),
+                "Cannot inspect {}: permission denied",
+                path.display()
+            );
             let file = inventory
                 .changes
                 .iter()

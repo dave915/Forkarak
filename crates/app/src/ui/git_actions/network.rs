@@ -16,9 +16,9 @@ struct JobConfirmation {
     job: GitJob,
 }
 
-pub(super) enum SyncRead {
+pub(in crate::ui) enum SyncRead {
     Loading,
-    Ready(BranchSync),
+    Ready { sync: BranchSync, has_remotes: bool },
     Failed(String),
 }
 
@@ -31,13 +31,17 @@ struct NetworkDefaults {
 
 fn network_defaults(
     state: &RepositoryState,
-    sync: &BranchSync,
+    sync: Option<&BranchSync>,
     source: Option<&str>,
 ) -> NetworkDefaults {
     // branch_sync describes only the current branch. Never reuse its upstream
     // for a different source selected in the Push picker.
-    let current_source = source == state.current_branch.as_deref();
-    let upstream = current_source.then_some(sync.upstream.as_ref()).flatten();
+    let current_source = source.is_some()
+        && source == state.current_branch.as_deref()
+        && sync.is_some_and(|s| s.branch.as_deref() == source);
+    let upstream = sync
+        .filter(|_| current_source)
+        .and_then(|s| s.upstream.as_ref());
     let remote = if let Some(upstream) = upstream {
         // '.' is a local tracking relationship, not a network destination.
         if upstream.remote == "." {
@@ -50,12 +54,7 @@ fn network_defaults(
                 .map(|r| r.name.clone())
         }
     } else if current_source {
-        state
-            .remotes
-            .iter()
-            .find(|r| r.name == "origin")
-            .or_else(|| (state.remotes.len() == 1).then(|| &state.remotes[0]))
-            .map(|r| r.name.clone())
+        preferred_remote(&state.remotes)
     } else {
         None
     };
@@ -70,8 +69,16 @@ fn network_defaults(
     NetworkDefaults {
         remote,
         branch,
-        set_upstream: current_source && sync.upstream.is_none(),
+        set_upstream: current_source && upstream.is_none(),
     }
+}
+
+fn preferred_remote(remotes: &[Remote]) -> Option<String> {
+    remotes
+        .iter()
+        .find(|r| r.name == "origin")
+        .or_else(|| (remotes.len() == 1).then(|| &remotes[0]))
+        .map(|r| r.name.clone())
 }
 
 fn sync_label(sync: &BranchSync) -> String {
@@ -176,7 +183,13 @@ impl Pokarak {
         let generation = self.request;
         self.git_ui.sync.insert(root.clone(), SyncRead::Loading);
         let target = root.clone();
-        let task = cx.background_spawn(async move { GitOperations::open(&target)?.branch_sync() });
+        let task = cx.background_spawn(async move {
+            let git = GitOperations::open(&target)?;
+            anyhow::Ok(SyncRead::Ready {
+                sync: git.branch_sync()?,
+                has_remotes: !git.remotes()?.is_empty(),
+            })
+        });
         cx.spawn_in(window, async move |view, cx| {
             let result = task.await;
             let _ = view.update_in(cx, |app, _, cx| {
@@ -189,7 +202,7 @@ impl Pokarak {
                     return;
                 }
                 let value = match result {
-                    Ok(sync) => SyncRead::Ready(sync),
+                    Ok(ready) => ready,
                     Err(error) => SyncRead::Failed(format!("{error:#}")),
                 };
                 app.git_ui.sync.insert(root, value);
@@ -199,9 +212,13 @@ impl Pokarak {
         .detach();
     }
 
-    /// Branch name, ahead/behind counts and detail tooltip for the in-content
-    /// Git action group. Counts are `None` until local metadata is ready.
-    pub(in crate::ui) fn git_sync_summary(&self) -> (String, Option<usize>, Option<usize>, String) {
+    pub(in crate::ui) fn active_sync_read(&self) -> Option<&SyncRead> {
+        self.current
+            .as_ref()
+            .and_then(|root| self.git_ui.sync.get(root))
+    }
+
+    pub(in crate::ui) fn git_sync_summary(&self) -> (String, String) {
         let fallback = self
             .active_worktree()
             .map(|tree| {
@@ -212,37 +229,25 @@ impl Pokarak {
                 }
             })
             .unwrap_or_else(|| "브랜치 알 수 없음".into());
-        match self
-            .current
-            .as_ref()
-            .and_then(|root| self.git_ui.sync.get(root))
-        {
-            Some(SyncRead::Ready(sync)) => (
-                sync.branch.clone().unwrap_or(fallback),
-                sync.ahead,
-                sync.behind,
+        match self.active_sync_read() {
+            Some(SyncRead::Ready { sync, .. }) => (
+                sync.branch
+                    .clone()
+                    .unwrap_or_else(|| "detached HEAD".into()),
                 format!("Git 작업 대상\n{}", sync_detail(sync)),
             ),
-            Some(SyncRead::Failed(error)) => (
-                fallback,
-                None,
-                None,
-                format!("동기화 메타데이터 읽기 실패\n{error}"),
-            ),
+            Some(SyncRead::Failed(error)) => {
+                (fallback, format!("동기화 메타데이터 읽기 실패\n{error}"))
+            }
             _ => (
                 fallback,
-                None,
-                None,
                 "로컬 Git 참조를 읽고 있습니다. 네트워크 연결은 하지 않습니다.".into(),
             ),
         }
     }
 
     pub(in crate::ui) fn git_sync_button(&self, cx: &mut Context<Self>) -> Button {
-        let metadata = self
-            .current
-            .as_ref()
-            .and_then(|root| self.git_ui.sync.get(root));
+        let metadata = self.active_sync_read();
         let fallback = self
             .active_worktree()
             .map(|tree| {
@@ -254,7 +259,7 @@ impl Pokarak {
             })
             .unwrap_or("브랜치 알 수 없음");
         let (label, tooltip) = match metadata {
-            Some(SyncRead::Ready(sync)) => (sync_label(sync), sync_detail(sync)),
+            Some(SyncRead::Ready { sync, .. }) => (sync_label(sync), sync_detail(sync)),
             Some(SyncRead::Failed(error)) => (
                 format!("{fallback} · 동기화 ?"),
                 format!("동기화 메타데이터 읽기 실패\n{error}"),
@@ -290,7 +295,7 @@ impl Pokarak {
                 .upgrade()
                 .filter(|view| view.read(cx).current.as_ref() == Some(&root))
                 .map(|view| match view.read(cx).git_ui.sync.get(&root) {
-                    Some(SyncRead::Ready(sync)) => sync_detail(sync),
+                    Some(SyncRead::Ready { sync, .. }) => sync_detail(sync),
                     Some(SyncRead::Failed(error)) => format!("메타데이터 읽기 실패\n{error}"),
                     _ => "로컬 Git 참조 확인 중…".into(),
                 })
@@ -371,7 +376,10 @@ impl Pokarak {
     ) {
         let fetch = matches!(page, Page::Fetch);
         let title = if fetch { "Fetch" } else { "Pull (ff-only)" };
-        let defaults = network_defaults(&state, &sync, state.current_branch.as_deref());
+        let mut defaults = network_defaults(&state, Some(&sync), state.current_branch.as_deref());
+        if fetch && state.current_branch.is_none() {
+            defaults.remote = preferred_remote(&state.remotes);
+        }
         let remote_values = state.remotes.iter().map(|r| r.name.clone()).collect();
         let remote = optional_choice(remote_values, defaults.remote.as_deref(), window, cx);
         let destination = cx.new(|cx| {
@@ -519,11 +527,11 @@ mod tests {
     fn differently_named_upstream_and_changing_source_never_retargets_trunk() {
         let (state, sync) = data();
         assert_eq!(sync_label(&sync), "main → origin/trunk  ↑1 ↓2");
-        let initial = network_defaults(&state, &sync, Some("main"));
+        let initial = network_defaults(&state, Some(&sync), Some("main"));
         assert_eq!(initial.remote.as_deref(), Some("origin"));
         assert_eq!(initial.branch, "trunk");
         assert!(!initial.set_upstream);
-        let changed = network_defaults(&state, &sync, Some("unpublished"));
+        let changed = network_defaults(&state, Some(&sync), Some("unpublished"));
         assert_eq!(changed.remote, None);
         assert_eq!(changed.branch, "unpublished");
         assert!(!changed.set_upstream);
@@ -534,21 +542,47 @@ mod tests {
         sync.upstream.as_mut().unwrap().remote = ".".into();
         sync.ahead = None;
         sync.behind = None;
-        assert_eq!(network_defaults(&state, &sync, Some("main")).remote, None);
+        assert_eq!(
+            network_defaults(&state, Some(&sync), Some("main")).remote,
+            None
+        );
         let detail = sync_detail(&sync);
         assert!(detail.contains("알 수 없음"));
         assert!(detail.contains("기록 없음"));
         sync.upstream.as_mut().unwrap().branch = "refs/tags/v1".into();
         assert!(
-            network_defaults(&state, &sync, Some("main"))
+            network_defaults(&state, Some(&sync), Some("main"))
                 .branch
                 .is_empty()
         );
         sync.upstream = None;
         assert_eq!(sync_label(&sync), "main · 업스트림 없음");
-        assert!(network_defaults(&state, &sync, Some("main")).set_upstream);
+        assert!(network_defaults(&state, Some(&sync), Some("main")).set_upstream);
     }
-    fn fixture_git(root: &std::path::Path, global: &std::path::Path, args: &[&str]) -> String {
+
+    #[test]
+    fn push_picker_never_enables_tracking_for_unknown_detached_or_mismatched_metadata() {
+        let (mut state, mut sync) = data();
+        sync.branch = Some("other".into());
+        for metadata in [None, Some(&sync)] {
+            let defaults = network_defaults(&state, metadata, Some("main"));
+            assert_eq!(defaults.branch, "main");
+            assert!(defaults.remote.is_none() && !defaults.set_upstream);
+        }
+        state.current_branch = None;
+        sync.branch = None;
+        sync.upstream = None;
+        let defaults = network_defaults(&state, Some(&sync), None);
+        assert!(defaults.remote.is_none() && defaults.branch.is_empty() && !defaults.set_upstream);
+        let picked = network_defaults(&state, Some(&sync), Some("unpublished"));
+        assert_eq!(picked.branch, "unpublished");
+        assert!(picked.remote.is_none() && !picked.set_upstream);
+    }
+    pub(super) fn fixture_git(
+        root: &std::path::Path,
+        global: &std::path::Path,
+        args: &[&str],
+    ) -> String {
         let output = std::process::Command::new("git")
             .env("GIT_CONFIG_GLOBAL", global)
             .env("GIT_CONFIG_NOSYSTEM", "1")

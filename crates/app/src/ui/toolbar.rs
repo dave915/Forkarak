@@ -3,6 +3,8 @@ use git_actions::Page;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::component::native_menu::NativeMenu;
+mod sync;
+use sync::{SyncControl, SyncControls};
 
 impl Pokarak {
     pub(super) fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -107,7 +109,7 @@ impl Pokarak {
             )
             .child(
                 content_toolbar_icon("compact-git-more", IconName::Ellipsis, "Git 작업 더 보기")
-                    .tooltip("Git 작업 더 보기 · 브랜치, Stash, Fetch, Pull, Push")
+                    .tooltip("Git 작업 더 보기 · 브랜치, Stash, 원격 동기화")
                     .on_click(cx.listener(|a, _, w, cx| a.show_compact_git_menu(w, cx))),
             )
             .into_any_element()
@@ -119,6 +121,9 @@ impl Pokarak {
             .session()
             .is_some_and(|s| matches!(s.saved.comparison, CompareMode::Branch(_)));
         let mut menu = NativeMenu::new();
+        let sync = SyncControls::for_worktree(self.active_sync_read(), self.active_worktree());
+        let pull = sync.pull.menu_label();
+        let push = sync.push.menu_label();
         for (label, command) in [
             ("워크트리 선택…  ⌘⇧J", "worktree"),
             ("브랜치 전체 변경 비교…", "compare"),
@@ -133,8 +138,8 @@ impl Pokarak {
             ("Stash…", "stash"),
             ("Pop…", "pop"),
             ("Fetch…", "fetch"),
-            ("Pull…", "pull"),
-            ("Push…", "push"),
+            (pull.as_str(), sync.pull.command),
+            (push.as_str(), sync.push.command),
             ("Git 작업…", "actions"),
             ("Git 작업 기록…", "log"),
         ] {
@@ -142,7 +147,8 @@ impl Pokarak {
                 keycaps::menu_label(label, &self.prefs, self.current_project.as_deref()),
                 (busy && !matches!(command, "log" | "graph-detail"))
                     || (command.starts_with("graph-") && !self.git_history.active)
-                    || (command == "head" && !branch),
+                    || (command == "head" && !branch)
+                    || sync.blocked(command),
                 Box::new(RunToolbar {
                     root: self.current.clone(),
                     generation: self.request,
@@ -216,6 +222,10 @@ impl Pokarak {
         }
         let changed_files =
             !self.git_history.active && self.session().is_some_and(|s| !s.saved.all_files);
+        let sync = SyncControls::for_worktree(self.active_sync_read(), self.active_worktree());
+        if sync.blocked(&action.command) {
+            return;
+        }
         match action.command.as_str() {
             "unreviewed-only" if changed_files => self.toggle_unreviewed_filter(cx),
             "next-unreviewed" if changed_files && self.can_open_next_unreviewed() => {
@@ -248,6 +258,11 @@ impl Pokarak {
             "fetch" => self.load_git_page(Some(Page::Fetch), w, cx),
             "pull" => self.load_git_page(Some(Page::Pull), w, cx),
             "push" => self.load_git_page(Some(Page::Push), w, cx),
+            "publish" => {
+                if let Some(tree) = self.active_worktree() {
+                    self.open_publish_branch(tree.path.clone(), tree.branch.clone(), w, cx);
+                }
+            }
             "stash" => self.open_git_workflow(w, cx),
             "pop" => self.open_stash_pop(w, cx),
             "actions" => self.open_git_actions(w, cx),
@@ -288,7 +303,8 @@ impl Pokarak {
         let palette = Palette::new(cx);
         let graph = self.git_history.active;
         let detail_label = self.graph_detail_label();
-        let (target, ahead, behind, target_detail) = self.git_sync_summary();
+        let (target, target_detail) = self.git_sync_summary();
+        let sync = SyncControls::for_worktree(self.active_sync_read(), self.active_worktree());
         let changes = match self.change_count {
             Some((count, _)) if count > 0 => Some(count),
             _ => None,
@@ -307,29 +323,46 @@ impl Pokarak {
             .flex_none()
             .on_click(cx.listener(|app, _, w, cx| app.open_git_commit(w, cx)))
             .shortcut_tooltip("Stage / 커밋", &OpenGitCommit, None);
-        let count_button = |id: &'static str,
-                            icon: IconName,
-                            name: &'static str,
-                            count: Option<usize>,
-                            tooltip: String,
-                            page: Page| {
-            let accessible = match count {
-                Some(n) if n > 0 => format!("{name} · {n}개"),
-                _ => name.to_owned(),
+        let sync_button = |id: &'static str, icon: IconName, control: SyncControl| {
+            let accessible = match control.count {
+                Some(n) => format!("{} · {n}개", control.name),
+                None => control.name.to_owned(),
             };
-            Button::new(id)
+            let action = RunToolbar {
+                root: self.current.clone(),
+                generation,
+                command: control.command.into(),
+            };
+            let tooltip = control.tooltip();
+            let button = Button::new(id)
                 .icon(icon)
-                .when_some(count.filter(|n| *n > 0), |button, n| {
-                    button.label(n.to_string())
+                .when(control.command == "publish", |button| {
+                    button.label(control.name)
                 })
+                .when_some(control.count, |button, n| button.label(n.to_string()))
                 .accessibility_label(accessible)
                 .ghost()
                 .small()
                 .h(ui_px(26.))
                 .flex_none()
-                .tooltip(tooltip)
-                .disabled(busy)
-                .on_click(cx.listener(move |app, _, w, cx| app.load_git_page(Some(page), w, cx)))
+                .disabled(busy || control.disabled_reason.is_some())
+                .on_click(
+                    cx.listener(move |app, _, w, cx| app.run_toolbar_command(&action, w, cx)),
+                );
+            if control.disabled_reason.is_some() {
+                // The disabled control stays inert. Its containing hitbox owns the hover.
+                div()
+                    .id((id, 0usize))
+                    .flex_none()
+                    .aria_description(tooltip.clone())
+                    .child(button)
+                    .tooltip(move |w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(w, cx)
+                    })
+                    .into_any_element()
+            } else {
+                button.tooltip(tooltip).into_any_element()
+            }
         };
         div()
             .id("git-action-group")
@@ -382,29 +415,15 @@ impl Pokarak {
                                 app.load_git_page(Some(Page::Fetch), w, cx)
                             })),
                     )
-                    .child(count_button(
+                    .child(sync_button(
                         "toolbar-pull",
                         IconName::ArrowDownToLine,
-                        "Pull",
-                        behind,
-                        match behind {
-                            Some(n) if n > 0 => {
-                                format!("Pull · 받을 커밋 {n}개 (마지막 Fetch 기준)")
-                            }
-                            _ => "Pull · 현재 브랜치에 fast-forward로 받기".into(),
-                        },
-                        Page::Pull,
+                        sync.pull,
                     ))
-                    .child(count_button(
+                    .child(sync_button(
                         "toolbar-push",
                         IconName::ArrowUpFromLine,
-                        "Push",
-                        ahead,
-                        match ahead {
-                            Some(n) if n > 0 => format!("Push · 보낼 커밋 {n}개"),
-                            _ => "Push · 원격에 보내기".into(),
-                        },
-                        Page::Push,
+                        sync.push,
                     ))
                     .child(
                         content_toolbar_icon("toolbar-stash", IconName::Archive, "Stash")

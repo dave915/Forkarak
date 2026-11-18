@@ -137,6 +137,7 @@ impl Pokarak {
             if let Some(write) = &review.write {
                 let target = weak.clone(); let review = review.clone(); let write = write.clone();
                 let label = match &write {
+                    ReviewWrite::Push(push) if push.set_upstream => "게시",
                     ReviewWrite::Push(_) => "푸시",
                     ReviewWrite::Merge { .. } => "병합",
                     ReviewWrite::Rebase => "Rebase 실행",

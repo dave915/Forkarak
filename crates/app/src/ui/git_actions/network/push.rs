@@ -7,6 +7,9 @@ use super::*;
 use gpui_kit::component::select::SelectEvent;
 use std::{cell::Cell, rc::Rc};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::ui::git_actions) struct PushTarget {
     pub local: String,
@@ -16,13 +19,37 @@ pub(in crate::ui::git_actions) struct PushTarget {
 }
 
 impl PushTarget {
+    fn form_defaults<'a>(
+        state: &'a RepositoryState,
+        sync: Option<&BranchSync>,
+        edit: Option<&'a Self>,
+    ) -> (Option<&'a str>, NetworkDefaults) {
+        if let Some(target) = edit {
+            return (
+                Some(&target.local),
+                NetworkDefaults {
+                    remote: Some(target.remote.clone()),
+                    branch: target.branch.clone(),
+                    set_upstream: target.set_upstream,
+                },
+            );
+        }
+        let local = state.current_branch.as_deref().filter(|branch| {
+            state
+                .local_branches
+                .iter()
+                .any(|name| name.as_str() == *branch)
+        });
+        (local, network_defaults(state, sync, local))
+    }
+
     pub(super) fn configured(state: &RepositoryState, sync: &BranchSync) -> Option<Self> {
         let local = state.current_branch.as_ref()?;
         let upstream = sync.upstream.as_ref()?;
         if sync.branch.as_ref() != Some(local) || upstream.missing || upstream.remote == "." {
             return None;
         }
-        let defaults = network_defaults(state, sync, Some(local));
+        let defaults = network_defaults(state, Some(sync), Some(local));
         let remote = defaults.remote?;
         (!defaults.branch.is_empty()).then(|| Self {
             local: local.clone(),
@@ -62,7 +89,12 @@ impl PushTarget {
         );
         Ok(Review {
             root: state.root.clone(),
-            title: "Push".into(),
+            title: if self.set_upstream {
+                "브랜치 게시"
+            } else {
+                "Push"
+            }
+            .into(),
             description: format!(
                 "Push URL · {}\n업스트림 · {}",
                 config.push_urls.join("\n"),
@@ -80,11 +112,60 @@ impl PushTarget {
 
 struct PushRepository {
     state: RepositoryState,
-    sync: BranchSync,
+    sync: anyhow::Result<BranchSync>,
     starts: Vec<BranchStart>,
 }
 
+impl PushRepository {
+    fn read(ops: &GitOperations) -> anyhow::Result<Self> {
+        Ok(Self {
+            state: ops.state()?,
+            sync: ops.branch_sync(),
+            starts: ops.branch_starts()?,
+        })
+    }
+
+    fn validate_publish(&self, branch: &str) -> anyhow::Result<()> {
+        let sync = self
+            .sync
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!("업스트림 확인 실패 · {error:#}"))?;
+        anyhow::ensure!(
+            self.state.current_branch.as_deref() == Some(branch)
+                && sync.branch.as_deref() == Some(branch)
+                && sync.upstream.is_none()
+                && self.state.local_branches.iter().any(|name| name == branch),
+            "현재 브랜치 또는 업스트림이 바뀌었습니다. 새로고침 후 게시 대상을 다시 확인하세요."
+        );
+        anyhow::ensure!(
+            !self.state.remotes.is_empty(),
+            "등록된 원격 저장소가 없습니다."
+        );
+        Ok(())
+    }
+}
+
 impl Pokarak {
+    pub(in crate::ui) fn open_publish_branch(
+        &mut self,
+        root: PathBuf,
+        branch: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workflow_read(
+            root,
+            move |ops| {
+                let repository = PushRepository::read(&ops)?;
+                repository.validate_publish(&branch)?;
+                Ok(repository)
+            },
+            |app, repository, w, cx| app.branch_push_form(repository, None, None, w, cx),
+            window,
+            cx,
+        );
+    }
+
     pub(in crate::ui::git_actions) fn open_branch_push(
         &mut self,
         root: PathBuf,
@@ -94,13 +175,13 @@ impl Pokarak {
     ) {
         let use_upstream = edit.is_none();
         self.workflow_read(root, move |ops| {
-            let state = ops.state()?;
-            let sync = ops.branch_sync()?;
-            let starts = ops.branch_starts()?;
+            let repository = PushRepository::read(&ops)?;
+            let PushRepository { state, sync, starts } = &repository;
             let review = if use_upstream {
-                PushTarget::configured(&state, &sync).map(|target| target.review(&ops, &state, &starts))
+                sync.as_ref().ok().and_then(|s| PushTarget::configured(state, s))
+                    .map(|target| target.review(&ops, state, starts))
             } else { None };
-            Ok((PushRepository { state, sync, starts }, review))
+            Ok((repository, review))
         }, move |app, (repository, review), w, cx| {
             let notice = match review {
                 Some(Ok(review)) if matches!(&review.source, ReviewSource::Operation(p) if p.remote_state_known) => {
@@ -109,7 +190,7 @@ impl Pokarak {
                 }
                 Some(Ok(_)) => Some("로컬에서 원격 기준을 확인할 수 없습니다.".to_owned()),
                 Some(Err(error)) => Some(format!("기본 대상 확인 실패 · {error}")),
-                None => None,
+                None => repository.sync.as_ref().err().map(|error| format!("업스트림을 확인할 수 없습니다. 보낼 대상과 받을 대상을 선택하세요.\n{error:#}")),
             };
             app.branch_push_form(repository, edit, notice, w, cx);
         }, window, cx);
@@ -130,18 +211,8 @@ impl Pokarak {
         } = repository;
         let state = Arc::new(state);
         let starts = Arc::new(starts);
-        let local = edit
-            .as_ref()
-            .map(|t| t.local.as_str())
-            .or(state.current_branch.as_deref());
-        let defaults = match &edit {
-            Some(t) => NetworkDefaults {
-                remote: Some(t.remote.clone()),
-                branch: t.branch.clone(),
-                set_upstream: t.set_upstream,
-            },
-            None => network_defaults(&state, &sync, local),
-        };
+        let (local, defaults) =
+            PushTarget::form_defaults(&state, sync.as_ref().ok(), edit.as_ref());
         let source = optional_choice(state.local_branches.clone(), local, window, cx);
         let remote = optional_choice(
             state.remotes.iter().map(|r| r.name.clone()).collect(),
@@ -167,7 +238,7 @@ impl Pokarak {
             move |app: &mut Pokarak, _, event: &SelectEvent<SearchableVec<String>>, w, cx| {
                 let SelectEvent::Confirm(local) = event;
                 app.invalidate_workflow_read();
-                let defaults = network_defaults(&state, &sync, local.as_deref());
+                let defaults = network_defaults(&state, sync.as_ref().ok(), local.as_deref());
                 destination.update(cx, |input, cx| input.set_value(defaults.branch, w, cx));
                 remote.update(cx, |input, cx| match defaults.remote {
                     Some(name) => input.set_selected_value(&name, w, cx),
@@ -279,7 +350,11 @@ impl Pokarak {
             let disabled = push.is_none()
                 || super::super::branch_forms::branch_form_disabled(&weak, &state.root, cx);
             compact::dialog(dialog, &weak)
-                .title("Push 대상")
+                .title(if tracking {
+                    "브랜치 게시"
+                } else {
+                    "Push 대상"
+                })
                 .child(body)
                 .footer(
                     div()

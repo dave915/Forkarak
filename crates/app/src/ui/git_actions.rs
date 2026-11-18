@@ -6,6 +6,7 @@ mod contextual;
 mod history;
 mod ignore;
 mod network;
+pub(super) use network::SyncRead;
 mod recovery;
 mod repository;
 mod review;

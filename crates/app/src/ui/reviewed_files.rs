@@ -660,6 +660,20 @@ impl Pokarak {
         self.session().is_some_and(|s| s.unreviewed_only)
     }
 
+    pub(super) fn toggle_unreviewed_filter(&mut self, cx: &mut Context<Self>) {
+        if let Some(root) = &self.current
+            && let Some(s) = self.sessions.get_mut(root)
+        {
+            s.unreviewed_only = !s.unreviewed_only;
+            self.file_cursor = 0;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn can_open_next_unreviewed(&self) -> bool {
+        !self.loading && !self.file_loading && !self.git_is_busy()
+    }
+
     pub(super) fn next_unreviewed_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(source) = self.current_review_source() else {
             return;
@@ -707,22 +721,14 @@ impl Pokarak {
                     .ghost()
                     .small()
                     .selected(only)
-                    .on_click(cx.listener(|app, _, _, cx| {
-                        if let Some(root) = &app.current
-                            && let Some(s) = app.sessions.get_mut(root)
-                        {
-                            s.unreviewed_only = !s.unreviewed_only;
-                        }
-                        app.file_cursor = 0;
-                        cx.notify();
-                    })),
+                    .on_click(cx.listener(|app, _, _, cx| app.toggle_unreviewed_filter(cx))),
             )
             .child(
                 Button::new("next-unreviewed")
                     .label("다음 미검토")
                     .ghost()
                     .small()
-                    .disabled(self.loading || self.file_loading || self.git_is_busy())
+                    .disabled(!self.can_open_next_unreviewed())
                     .on_click(cx.listener(|app, _, w, cx| app.next_unreviewed_file(w, cx))),
             )
             .into_any_element()

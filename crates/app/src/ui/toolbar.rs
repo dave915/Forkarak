@@ -2,6 +2,7 @@ use super::*;
 use git_actions::Page;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::menu::DropdownMenu;
+use gpui_kit::component::native_menu::NativeMenu;
 
 impl Pokarak {
     pub(super) fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -113,7 +114,6 @@ impl Pokarak {
     }
 
     fn show_compact_git_menu(&self, window: &mut Window, cx: &mut Context<Self>) {
-        use gpui_kit::component::native_menu::NativeMenu;
         let busy = self.loading || self.git_is_busy();
         let branch = self
             .session()
@@ -153,6 +153,55 @@ impl Pokarak {
         menu.show(window.mouse_position(), window, cx);
     }
 
+    pub(super) fn file_review_menu_button(&self, cx: &mut Context<Self>) -> Button {
+        let label = if self.snapshot().is_some() {
+            self.review_counts()
+        } else {
+            "검토".into()
+        };
+        let only = self.show_unreviewed_only();
+        let detail = if only {
+            format!("{label} · 검토 메뉴 · 미검토만 표시 중")
+        } else {
+            format!("{label} · 검토 메뉴 · 미검토만 / 다음 미검토")
+        };
+        Button::new("files-review-count")
+            .label(label)
+            .accessibility_label(detail.clone())
+            .tooltip(detail)
+            .ghost()
+            .xsmall()
+            .h(ui_px(24.))
+            .flex_initial()
+            .ml_auto()
+            .min_w(ui_px(68.))
+            .px(ui_px(2.))
+            .dropdown_caret(true)
+            .selected(only)
+            .when(only, |button| button.icon(IconName::ListFilter))
+            .on_click(cx.listener(|app, event, window, cx| {
+                let action = |command: &str| {
+                    Box::new(RunToolbar {
+                        root: app.current.clone(),
+                        generation: app.request,
+                        command: command.into(),
+                    })
+                };
+                NativeMenu::new()
+                    .menu_with_check(
+                        "미검토만",
+                        app.show_unreviewed_only(),
+                        action("unreviewed-only"),
+                    )
+                    .menu_with_disabled(
+                        "다음 미검토",
+                        !app.can_open_next_unreviewed(),
+                        action("next-unreviewed"),
+                    )
+                    .show(event.position(), window, cx);
+            }))
+    }
+
     pub(super) fn run_toolbar_command(
         &mut self,
         action: &RunToolbar,
@@ -165,7 +214,13 @@ impl Pokarak {
         {
             return;
         }
+        let changed_files =
+            !self.git_history.active && self.session().is_some_and(|s| !s.saved.all_files);
         match action.command.as_str() {
+            "unreviewed-only" if changed_files => self.toggle_unreviewed_filter(cx),
+            "next-unreviewed" if changed_files && self.can_open_next_unreviewed() => {
+                self.next_unreviewed_file(w, cx)
+            }
             "graph-filter" if self.git_history.active => self.open_branch_filter(w, cx),
             "graph-search" if self.git_history.active => self.open_graph_search(w, cx),
             "graph-detail" if self.git_history.active => {

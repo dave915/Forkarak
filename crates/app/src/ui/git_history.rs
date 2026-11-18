@@ -540,10 +540,11 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        use crate::ui::dialogs::DialogWindowExt as _;
         window.close_all_dialogs(cx);
         self.git_history.active = true;
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx,move |dialog,_,cx| {
+        window.open_app_dialog(cx,move |dialog,_,cx| {
             let busy=weak.upgrade().is_none_or(|v|history_disabled(v.read(cx)));
             let destination=target.clone(); let source=commit.oid.clone();
             dialog.title(format!("{} 확인",action.label())).width(ui_px(650.)).margin_top(ui_px(20.)).overlay_closable(false).on_ok(|_,_,_|false)

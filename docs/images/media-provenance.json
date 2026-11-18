@@ -1,21 +1,43 @@
 {
   "code-workspace.png": {
-    "source_revision": "c6509b7",
-    "source": "editor-comparison/forkarak-native.png",
+    "source_revision": "ee729a85b49a9baa697f3cca0fd061e1f443f690",
+    "source": "Forkarak native GPUI window rendered with the macOS headless Metal renderer and shipped fonts",
     "logical_bounds": {
       "width": 1440,
       "height": 900
     },
-    "condition": "Default panels in Code after explicit mode selection; read-only working file."
+    "scale_factor": 2,
+    "condition": "All files in the Code view of the order-service fixture. OrderService.java is active beside the checkout controller tab."
+  },
+  "java-symbol-navigation.jpg": {
+    "source_revision": "ee729a85b49a9baa697f3cca0fd061e1f443f690",
+    "source": "Forkarak native GPUI window rendered with the macOS headless Metal renderer and shipped fonts",
+    "logical_bounds": {
+      "width": 1440,
+      "height": 900
+    },
+    "scale_factor": 2,
+    "condition": "Java symbol results tab for orderTotal. The bundled Eclipse JDT Language Server returned one definition and two call sites in the authored Eclipse project. Project imports were disabled."
   },
   "graph-review.png": {
-    "source_revision": "f8cb1ec4ad7e222faec4c7dcc4a2165b264c3ae6",
-    "source_worker_capture": "compact-ui-media/final-history-wide.png",
+    "source_revision": "ee729a85b49a9baa697f3cca0fd061e1f443f690",
+    "source": "Forkarak native GPUI window rendered with the macOS headless Metal renderer and shipped fonts",
     "logical_bounds": {
       "width": 1440,
       "height": 900
     },
-    "condition": "Actual authored Java fixture, committed snapshot, current compact reader. No active workflow banner."
+    "scale_factor": 2,
+    "condition": "The feature/free-shipping commit is selected in the Graph view. Its changed file list and unified diff are visible."
+  },
+  "project-tabs.jpg": {
+    "source_revision": "ee729a85b49a9baa697f3cca0fd061e1f443f690",
+    "source": "Forkarak native GPUI window rendered with the macOS headless Metal renderer and shipped fonts",
+    "logical_bounds": {
+      "width": 1440,
+      "height": 900
+    },
+    "scale_factor": 2,
+    "condition": "The project picker is open over the editor with order-service, storefront, and checkout-tests loaded."
   },
   "icon-presets.png": {
     "source_revision": "ed24efe",

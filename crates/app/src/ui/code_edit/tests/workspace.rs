@@ -192,7 +192,9 @@ fn native_range_replacement_preserves_utf8_boundaries_for_one_undo_step() {
         ("😀", "😁", "😁"),
         ("한글", "한글!", "!"),
         ("가나다", "가다", ""),
-        ("\r\n", "\n", ""),
+        ("\r\n", "\n", "\n"),
+        ("\r\n", "\r!", "\r!"),
+        ("a\r\nb", "a\rX\nb", "\rX\n"),
     ] {
         let (range, replacement) = changed_range(old, new);
         assert_eq!(replacement, middle);

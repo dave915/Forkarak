@@ -446,9 +446,13 @@ else:
             self.assertFalse(any("포카락.app/" in entry for entry in archive.namelist()))
             self.assertIn("Forkarak.app/Contents/MacOS/forkarak", archive.namelist())
             self.assertIn("Forkarak.app/Contents/Resources/Forkarak.icns", archive.namelist())
+            self.assertIn("Forkarak.app/Contents/Resources/Assets.car", archive.namelist())
+            self.assertEqual(archive.read("Forkarak.app/Contents/Resources/Assets.car"),
+                             (ROOT / "assets/icons/app/liquid-compiled/Assets.car").read_bytes())
             self.assertIn("Forkarak.app/Contents/Resources/forkarak-cli.sh", archive.namelist())
         self.assertEqual(plist["CFBundleExecutable"], "forkarak")
         self.assertEqual(plist["CFBundleIconFile"], "Forkarak.icns")
+        self.assertEqual(plist["CFBundleIconName"], "Forkarak")
         self.assertEqual(plist["CFBundleDisplayName"], "Forkarak")
         self.assertEqual(plist["CFBundleName"], "Forkarak")
         self.assertEqual(plist["CFBundleIdentifier"], "dev.pokarak.app")

@@ -1,0 +1,23 @@
+{
+  "source-sha256": "11fbc6d79f12436bf69b3bd89d55e987f2767bd13dde8f600a2118cf297571f9",
+  "renderer": "Apple Icon Composer ictool",
+  "renderer-version": {
+    "bundle-version": "56",
+    "short-bundle-version": "1.0"
+  },
+  "renderer-sha256": "08f1915c36e602dc3c5fbd43a212e6905f2d6183776459755c49255dcb999120",
+  "platform": "macOS",
+  "rendition": "Default",
+  "width": 1024,
+  "height": 1024,
+  "scale": 1,
+  "light-angle": 45,
+  "images": {
+    "charcoal.png": "8b5b946eb4e2cffb9f2fb88b2774b5f1eee25a6526ad9f2f87d4d9144af36635",
+    "deep-blue.png": "878175c4a1c550fa09dcdf907818b3bd85e0168dfafa0fd716824f3cca06ec56",
+    "deep-green.png": "41dfc2c377a77a8f778b7a0f4b1b23a8a58808dc8f247a3fce2136587cc37b11",
+    "plum.png": "1d222e5b221900f683f6187cd9e84e9f8001dfcec9e67e86032ac4a647e07a6c",
+    "ivory.png": "f37c4b62ac5ff84674d46a2b692dae56395219b5a54cdf835e6404f9a0feedfe",
+    "light-blue.png": "5a20c1ab900e13187f118764d4e3dada6e67fcb564ea9bbb316c3f3d6328f3e4"
+  }
+}

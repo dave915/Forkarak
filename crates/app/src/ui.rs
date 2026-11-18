@@ -2309,7 +2309,8 @@ impl Render for Pokarak {
         self.sync_editor_bindings(cx);
         self.sync_editor_options(window, cx);
         self.sync_language_tools(cx);
-        let compact = theme::logical_px(window.viewport_size().width) < 1100.
+        let narrow = theme::logical_px(window.viewport_size().width) < 1100.;
+        let compact = narrow
             && self.prefs.option_bool(
                 self.current_project.as_deref(),
                 "layout.auto_collapse",
@@ -2362,35 +2363,56 @@ impl Render for Pokarak {
         } else {
             self.render_welcome(cx)
         };
-        let context = self
-            .opening_path
+        let worktree = self.opening_path.as_deref().or(self.current.as_deref());
+        let comparison = self
+            .current
             .as_ref()
-            .or(self.current.as_ref())
-            .map(|p| {
-                let path = p.to_string_lossy();
-                if self.opening_path.is_none() {
-                    let comparison = if self.git_history.active {
-                        self.visible_comparison_label()
-                    } else {
-                        self.applied_comparison_label()
-                    };
-                    format!("{path}  ·  {comparison}")
+            .filter(|_| self.opening_path.is_none())
+            .map(|_| {
+                if self.git_history.active {
+                    self.visible_comparison_label()
                 } else {
-                    path.to_string()
+                    self.applied_comparison_label()
                 }
+            });
+        let worktree_name = worktree
+            .map(|path| {
+                path.file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy()
+                    .into_owned()
             })
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
-        let context_tooltip = context.clone();
+        let full_path = worktree
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| worktree_name.clone());
+        let context_tooltip = match &comparison {
+            Some(label) => format!("{full_path} · {label}"),
+            None => full_path,
+        };
         let context = div()
             .id("workspace-status-context")
             .flex_1()
             .min_w_0()
-            .text_ellipsis()
+            .flex()
+            .items_center()
+            .gap_1()
+            .overflow_hidden()
             .tooltip(move |window, cx| {
                 gpui_kit::component::tooltip::Tooltip::new(context_tooltip.clone())
                     .build(window, cx)
             })
-            .child(context);
+            .child(
+                div()
+                    .min_w_0()
+                    .when(comparison.is_some(), |name| name.max_w(relative(0.40)))
+                    .text_ellipsis()
+                    .child(worktree_name),
+            )
+            .when_some(comparison, |row, label| {
+                row.child("·")
+                    .child(div().min_w_0().text_ellipsis().child(label))
+            });
         #[cfg(target_os = "macos")]
         let body = self.with_terminal_dock(body, window);
         let body = self.with_execution_manager(body, window, cx);
@@ -2476,7 +2498,7 @@ impl Render for Pokarak {
                 .when(self.current.is_some(), |row| row.child(self.git_sync_button(cx)))
                 .child(self.output_button("status-output", cx))
                 .child(div().max_w(ui_px(400.)).min_w_0().text_ellipsis().child(keycaps::explanation(&self.git_running_status().unwrap_or_else(|| self.status.clone()), &self.prefs, self.current_project.as_deref(), palette)))
-                .child(keycaps::explanation(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의·사용처  /  ⌘B 정의  /  ⌥F7 사용처" }, &self.prefs, self.current_project.as_deref(), palette)))
+                .when(!narrow || self.current.is_none(), |row| row.child(keycaps::explanation(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의·사용처  /  ⌘B 정의  /  ⌥F7 사용처" }, &self.prefs, self.current_project.as_deref(), palette))))
     }
 }
 

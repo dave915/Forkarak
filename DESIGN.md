@@ -28,6 +28,12 @@ Selected controls and rows use cool blue fills in dark mode. Git dialog controls
 
 Settings offers Forkarak, IntelliJ, and VS Code macOS presets. Existing settings open with the Forkarak preset. Each command first looks for a project override, then a global override, then the selected preset. An explicitly empty override clears the shortcut. Selecting a preset preserves custom shortcuts. A command can have a menu or palette entry even when its preset leaves the key empty. Hints, tooltips, and native menu shortcuts follow the active project’s effective bindings.
 
+## Rename and quick fixes
+
+Rename opens an input at the symbol. A rename that reaches another file first shows the paths, edit counts, and affected lines. Quick Fix lists the actions available at the caret and explains disabled actions. Both commands use the current worktree’s explicitly enabled language analysis.
+
+Applying a workspace edit updates the affected drafts together, including files that have no open tab. Forkarak checks the source each edit was computed against before applying the batch. The result shows its file and edit counts and offers Undo and Save All. Undo checks for intervening changes across the batch. Save All follows each file’s format-on-save setting and reports individual file conflicts. A failed save leaves the affected draft available for recovery.
+
 ## Signature behavior
 
 The staging file lists support Cmd-click to toggle files and Shift-click to select a range. Explicit mark controls are keyboard accessible. Selected-file counts, clear selection and selected-only Stage/Unstage actions stay with their own staged/unstaged list. File marks are bound to the worktree and index snapshot; replacing that snapshot clears the marks. Diff line marks and the single-file preview remain independent.

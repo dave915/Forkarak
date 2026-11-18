@@ -84,10 +84,8 @@ pub(super) fn effective<'a>(
     id: &str,
     fallback: &'a str,
 ) -> &'a str {
-    prefs
-        .option(project, "keyboard.bindings")
-        .and_then(|v| v.get(id))
-        .and_then(|v| v.as_str())
+    keyboard::shortcut(id)
+        .map(|s| keyboard::Keyboard::new(prefs, project).key(s))
         .unwrap_or(fallback)
 }
 
@@ -140,7 +138,7 @@ fn explanation_parts(text: &str, prefs: &Preferences, project: Option<&Path>) ->
         } else {
             tail.chars()
                 .next()
-                .filter(|ch| ch.is_ascii_alphanumeric() || "/[]↑↓←→⏎".contains(*ch))
+                .filter(|ch| ch.is_ascii_alphanumeric() || "/[].;\\↑↓←→⏎".contains(*ch))
                 .map_or(0, char::len_utf8)
         };
         if key_end == 0 {
@@ -161,15 +159,16 @@ fn explanation_parts(text: &str, prefs: &Preferences, project: Option<&Path>) ->
             });
             chord.make_ascii_lowercase();
             let normalized = strokes(&chord);
-            let override_key = super::settings::KEYBOARD_DEFAULTS
+            let override_key = keyboard::KEYBOARD_DEFAULTS
                 .iter()
-                .find(|(id, _, default)| {
+                .find(|s| {
                     // Option-arrow also belongs to DiffReview. That fixed hint
                     // must not inherit an editor-only move-line override.
-                    !["move_line_up", "move_line_down"].contains(id)
-                        && strokes(default) == normalized
+                    !["move_line_up", "move_line_down"].contains(&s.id)
+                        && !s.forkarak.is_empty()
+                        && strokes(s.forkarak) == normalized
                 })
-                .map(|(id, _, default)| effective(prefs, project, id, default))
+                .map(|s| effective(prefs, project, s.id, s.forkarak))
                 .unwrap_or(&chord);
             parts.push(Part::Binding(override_key.into()));
         }
@@ -208,28 +207,47 @@ pub(super) fn explanation(
 /// Native menus keep system text/key equivalents; embedded explanatory chords
 /// use the same glyphs and current overrides, separated for readability.
 pub(super) fn menu_label(text: &str, prefs: &Preferences, project: Option<&Path>) -> String {
-    explanation_parts(text, prefs, project)
+    let label: String = explanation_parts(text, prefs, project)
         .into_iter()
         .map(|part| match part {
             Part::Text(text) => text,
-            Part::Binding(binding) => strokes(&binding)
-                .unwrap_or_default()
-                .iter()
-                .map(|stroke| {
-                    keys(stroke)
-                        .iter()
-                        .map(Kbd::format)
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .collect::<Vec<_>>()
-                .join("  "),
+            Part::Binding(binding) => format_binding(&binding),
         })
-        .collect()
+        .collect();
+    label.trim_end().into()
 }
 
-pub(super) fn popup_item(text: &str) -> PopupMenuItem {
-    let parts = explanation_parts(text, &Preferences::default(), None);
+pub(super) fn command_label(
+    label: &str,
+    id: &str,
+    prefs: &Preferences,
+    project: Option<&Path>,
+) -> String {
+    let key = effective(prefs, project, id, "");
+    if key.is_empty() {
+        label.into()
+    } else {
+        format!("{label}  {}", format_binding(key))
+    }
+}
+
+pub(super) fn format_binding(binding: &str) -> String {
+    strokes(binding)
+        .unwrap_or_default()
+        .iter()
+        .map(|stroke| {
+            keys(stroke)
+                .iter()
+                .map(Kbd::format)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+pub(super) fn popup_item(text: &str, prefs: &Preferences, project: Option<&Path>) -> PopupMenuItem {
+    let parts = explanation_parts(text, prefs, project);
     if !parts.iter().any(|p| matches!(p, Part::Binding(_))) {
         return PopupMenuItem::new(text.to_owned());
     }
@@ -368,6 +386,43 @@ mod tests {
         }
         assert_eq!(strokes("cmd-k cmd-f7").unwrap().len(), 2);
         assert!(strokes("not-a-modifier-f7").is_none());
+    }
+
+    #[test]
+    fn footer_and_native_menu_follow_preset_chords_unbinding_and_project_overrides() {
+        use crate::ui::{app_menus, editor_tools::PinTab, keyboard::Keyboard};
+        use gpui_kit::{Action, MenuItem};
+        use serde_json::json;
+        let project = std::path::Path::new("/preset-test");
+        let mut prefs = Preferences::default();
+        prefs.set_option(None, "keyboard.preset", json!("intellij"));
+        prefs.set_option(Some(project), "keyboard.preset", json!("vscode"));
+        prefs.set_option(None, "keyboard.bindings", json!({"find_file":"ctrl-f8"}));
+        prefs.set_option(Some(project), "keyboard.bindings", json!({"save_file":""}));
+        assert_eq!(
+            menu_label("⌘B 정의 / ⌥F7 사용처 / ⌘P 찾기", &prefs, Some(project)),
+            "F12 정의 / ⇧ F12 사용처 / ⌃ F8 찾기"
+        );
+        assert_eq!(menu_label("파일 구조 ⌘⇧O", &prefs, None), "파일 구조 ⌘ F12");
+        assert_eq!(
+            super::command_label("파일 저장", "save_file", &prefs, Some(project)),
+            "파일 저장"
+        );
+        let menus = app_menus(Keyboard::new(&prefs, Some(project)));
+        let title = menus
+            .into_iter()
+            .flat_map(|m| m.items)
+            .find_map(|item| match item {
+                MenuItem::Action { name, action, .. } if action.name() == PinTab.name() => {
+                    Some(name)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            title.as_ref(),
+            format!("미리보기 탭 고정  {}", super::format_binding("cmd-k enter"))
+        );
     }
 
     #[test]

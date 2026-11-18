@@ -287,14 +287,14 @@ impl Pokarak {
             );
         }
         menu = menu.separator();
-        for (label, command) in [
-            ("정의로 이동", Command::Definition),
-            ("사용처  ⌥F7", Command::References),
-            ("구현체", Command::Implementation),
+        for (label, id, command) in [
+            ("정의로 이동", "find_definition", Command::Definition),
+            ("사용처", "find_references", Command::References),
+            ("구현체", "find_implementation", Command::Implementation),
         ] {
             menu = identity.item(
                 menu,
-                keycaps::menu_label(label, &self.prefs, self.current_project.as_deref()),
+                keycaps::command_label(label, id, &self.prefs, self.current_project.as_deref()),
                 command,
                 !navigation,
                 false,

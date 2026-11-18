@@ -99,7 +99,6 @@ pub(super) struct LanguageTools {
 pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-space", Complete, Some("ForkarakCode")),
-        KeyBinding::new("cmd-shift-o", Symbols, Some("ForkarakCode")),
         KeyBinding::new("alt-f1", Hover, Some("ForkarakCode")),
         KeyBinding::new("escape", Dismiss, Some("ForkarakLanguage")),
     ]);
@@ -114,6 +113,9 @@ pub(super) fn actions(
         root.on_action(
             cx.listener(|a, _: &Complete, w, cx| a.request_language(Tool::Complete, None, w, cx)),
         )
+        .on_action(cx.listener(|a, _: &FindImplementation, w, cx| {
+            a.request_navigation(NavigationKind::Implementation, None, w, cx)
+        }))
         .on_action(cx.listener(|a, _: &Diagnostics, w, cx| {
             a.request_language(Tool::Diagnostics, None, w, cx)
         }))
@@ -948,8 +950,12 @@ impl Pokarak {
                             return;
                         }
                         a.status = result.status.clone();
-                        if matches!(tool, Tool::Navigate(NavigationKind::Definition))
-                            && result.semantic
+                        if matches!(
+                            tool,
+                            Tool::Navigate(
+                                NavigationKind::Definition | NavigationKind::Implementation
+                            )
+                        ) && result.semantic
                             && result.locations.len() == 1
                         {
                             a.results_open = false;

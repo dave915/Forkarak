@@ -109,13 +109,6 @@ pub(super) const FIELDS: &[Field] = &[
     ),
     field!(
         Editor,
-        "editor.direct_edit",
-        "파일 열기 모드",
-        "과거 커밋 파일은 항상 읽기 전용입니다.",
-        Kind::Bool
-    ),
-    field!(
-        Editor,
         "editor.editorconfig",
         ".editorconfig 적용",
         "프로젝트 규칙을 기본 들여쓰기보다 우선합니다.",
@@ -430,8 +423,7 @@ pub(super) fn default_value(key: &str) -> Value {
         | "extensions.settings" => json!({}),
         "search.exclude" | "spring.jdk" | "spring.gradle" | "spring.maven" | "spring.profiles"
         | "ai.path" => json!(""),
-        "editor.direct_edit"
-        | "editor.word_wrap"
+        "editor.word_wrap"
         | "editor.format_on_save"
         | "review.split_diff"
         | "review.hide_whitespace"

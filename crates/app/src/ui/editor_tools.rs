@@ -129,7 +129,6 @@ impl Pokarak {
         };
         let project = self.current_project.as_deref();
         let keys = [
-            "editor.direct_edit",
             "editor.editorconfig",
             "editor.detect_indent",
             "editor.tab_size",
@@ -184,7 +183,7 @@ impl Pokarak {
             self.start_code_edit(window, cx);
         }
         if !self.code_edits.editing(&root, &path) {
-            self.status = "‘편집’을 먼저 선택하세요. 과거 코드는 읽기 전용입니다.".into();
+            self.status = "이 소스는 읽기 전용입니다. 현재 작업 파일을 여세요.".into();
             cx.notify();
             return;
         }
@@ -294,7 +293,6 @@ impl Pokarak {
         }
         if let Some(previous) = self.code_edits.tools.preview.remove(root)
             && !self.code_edits.dirty(root, &previous)
-            && !self.code_edits.editing(root, &previous)
             && let Some(session) = self.sessions.get_mut(root)
         {
             // Positions/history are retained; only the reusable tab is replaced.

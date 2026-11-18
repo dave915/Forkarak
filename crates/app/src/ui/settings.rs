@@ -267,13 +267,6 @@ fn field_row(
             let current = value.as_bool().unwrap_or(false);
             let (state, view) = (state.clone(), view.clone());
             let label = match field.key {
-                "editor.direct_edit" => {
-                    if current {
-                        "바로 편집"
-                    } else {
-                        "읽기"
-                    }
-                }
                 "review.split_diff" => {
                     if current {
                         "좌우"

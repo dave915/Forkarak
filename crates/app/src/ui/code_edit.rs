@@ -1,4 +1,4 @@
-//! Small, explicitly enabled working-file editor. Drafts outlive reader entities
+//! Direct working-file editor. Drafts outlive reader entities
 //! and project sessions; the core operation owns the actual filesystem write.
 use super::draft_reconciliation::DraftComparison;
 use super::*;
@@ -29,8 +29,7 @@ mod tests {
             .buffers
             .get_mut(&FileKey::new(root, path).unwrap())
             .unwrap();
-        buffer.editing = true;
-        buffer.draft.text = text.into();
+        buffer.changed(text.into());
     }
 
     fn comparison_fixture() -> (tempfile::TempDir, CodeEdits, std::path::PathBuf) {
@@ -217,7 +216,7 @@ mod tests {
         let root = Path::new("/fixture/worktree");
         let path = Path::new("main.rs");
         state.loaded(root, path, "disk before refresh".into(), true, true);
-        assert!(!state.editing(root, path));
+        assert!(state.editing(root, path));
         // Keystroke arrives while the load is in flight.
         edit(&mut state, root, path, "unsaved 😀\r\n");
         assert_eq!(
@@ -239,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn editing_clean_buffer_keeps_its_save_baseline_on_external_change() {
+    fn clean_direct_editor_adopts_external_change_without_a_phantom_conflict() {
         let (_temp, mut state) = state();
         let root = Path::new("/fixture/worktree");
         let path = Path::new("main.rs");
@@ -247,9 +246,118 @@ mod tests {
         edit(&mut state, root, path, "original");
         assert_eq!(
             state.loaded(root, path, "external".into(), true, true),
-            "original"
+            "external"
         );
-        assert!(state.buffer(root, path).unwrap().stale);
+        assert!(!state.buffer(root, path).unwrap().stale);
+        assert!(state.editing(root, path));
+        assert!(!state.dirty(root, path));
+    }
+
+    #[test]
+    fn restoring_original_bytes_cleans_all_draft_consumers_and_late_checkpoints() {
+        let (_temp, mut state, root) = comparison_fixture();
+        let path = Path::new("main.rs");
+        // Exercise exact BOM, Unicode, CRLF/mixed newlines and final-newline policy.
+        for original in [
+            "\u{feff}한글 😀\r\nnext\n",
+            "no final newline 😀",
+            "",
+            "\r\n",
+        ] {
+            state.buffers.clear();
+            fs::write(root.join(path), original).unwrap();
+            let disk = pokarak_core::read_file(&root, path).unwrap();
+            state.loaded(&root, path, disk, true, true);
+            assert!(state.can_edit(&root, path)); // No activation action.
+            let index_before = git(&root, &["ls-files", "--stage", "--", "main.rs"]);
+            edit(&mut state, &root, path, &format!("{original}typed"));
+            assert!(state.dirty(&root, path));
+            assert_eq!(state.buffer(&root, path).unwrap().save_label(), "● 저장");
+            state.persist().unwrap();
+            let older = state.drafts();
+            let old_generation = state.generation;
+            // Undo and a manual full-byte restoration both reach this Change path.
+            edit(&mut state, &root, path, original);
+            assert!(!state.dirty(&root, path));
+            assert!(state.can_edit(&root, path)); // Clean still accepts typing.
+            assert!(state.retained_text(&root, path).is_none());
+            assert!(state.analysis_drafts(&root).is_empty());
+            assert!(!state.has_draft_under(&root, path));
+            assert!(state.drafts().is_empty());
+            let buffer = state.buffer(&root, path).unwrap();
+            assert!(!buffer.stale && buffer.error.is_none());
+            assert_eq!(buffer.save_label(), "저장");
+            assert_eq!(buffer.status(), "변경 없음");
+            state.persist().unwrap();
+            state.storage.write(old_generation, &older).unwrap();
+            assert!(
+                CodeEdits::load_from(state.storage.path.clone())
+                    .buffers
+                    .is_empty()
+            );
+            assert_eq!(fs::read(root.join(path)).unwrap(), original.as_bytes());
+            assert_eq!(
+                git(&root, &["ls-files", "--stage", "--", "main.rs"]),
+                index_before
+            );
+        }
+    }
+
+    #[test]
+    fn restoring_original_does_not_hide_a_real_external_conflict() {
+        let (_temp, mut state, root) = comparison_fixture();
+        let path = Path::new("main.rs");
+        fs::write(root.join(path), "external\r\n").unwrap();
+        state.loaded(&root, path, "external\r\n".into(), true, true);
+        edit(&mut state, &root, path, "original 😀\r\n");
+        assert!(!state.dirty(&root, path));
+        assert!(state.stale(&root, path));
+        assert!(state.drafts().is_empty());
+        assert_eq!(
+            state.loaded(&root, path, "external\r\n".into(), true, true),
+            "external\r\n"
+        );
+        assert!(!state.stale(&root, path));
+        assert!(state.can_edit(&root, path));
+    }
+
+    #[test]
+    fn unavailable_binary_and_historical_sources_cannot_reactivate_retained_input() {
+        let (_temp, mut state, root) = comparison_fixture();
+        let path = Path::new("main.rs");
+        // Deleted/unreadable retains actual edits, but never allows new typing.
+        state.loaded(&root, path, "original 😀\r\n".into(), false, true);
+        assert!(state.dirty(&root, path));
+        assert!(!state.can_edit(&root, path));
+        state.loaded(&root, path, "binary\0data".into(), true, true);
+        assert!(!state.can_edit(&root, path));
+        state.loaded(&root, path, "historic\n".into(), true, false);
+        assert!(state.dirty(&root, path));
+        assert!(!state.can_edit(&root, path));
+        state.loaded(&root, path, "original 😀\r\n".into(), true, true);
+        assert!(state.can_edit(&root, path));
+        assert_eq!(
+            state.buffer(&root, path).unwrap().draft.text,
+            "my draft 😀\r\n"
+        );
+    }
+
+    #[test]
+    fn legacy_clean_checkpoint_is_not_restored_as_a_draft() {
+        let (_temp, state) = state();
+        let root = Path::new("/fixture/worktree");
+        let path = Path::new("main.rs");
+        let draft = super::Draft {
+            key: FileKey::new(root, path).unwrap(),
+            expected: "unchanged\r\n".into(),
+            text: "unchanged\r\n".into(),
+        };
+        state.storage.write(1, &[draft]).unwrap();
+        let mut restored = CodeEdits::load_from(state.storage.path.clone());
+        assert!(restored.buffers.is_empty());
+        restored.loaded(root, path, "unchanged\r\n".into(), true, true);
+        assert!(restored.can_edit(root, path));
+        assert!(!restored.dirty(root, path));
     }
 
     #[test]
@@ -297,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_projects_and_restarting_restores_drafts_read_only_with_exact_bytes() {
+    fn restarting_restores_exact_drafts_and_reenables_input_after_disk_validation() {
         let (_temp, mut state) = state();
         let root = Path::new("/fixture/worktree");
         let path = Path::new("src/한글.kt");
@@ -309,7 +417,7 @@ mod tests {
         drop(state); // Reader entities and all project sessions can be gone.
         let mut restored = CodeEdits::load_from(storage);
         assert_eq!(restored.buffers.len(), 1);
-        assert!(!restored.editing(root, path)); // Explicit Edit is required again.
+        assert!(!restored.editing(root, path)); // Revalidate the working file first.
         assert_eq!(
             restored.loaded(root, path, "class A {}\r\n".into(), true, true),
             "class 한글 { val x = \"😀\" }\r\n"
@@ -318,7 +426,8 @@ mod tests {
             restored.buffer(root, path).unwrap().draft.expected,
             "class A {}\r\n"
         );
-        // A restored readonly draft must also survive an external refresh.
+        assert!(restored.editing(root, path)); // No Edit activation, even after restart.
+        // A restored draft must also survive an external refresh.
         assert_eq!(
             restored.loaded(root, path, "external".into(), true, true),
             "class 한글 { val x = \"😀\" }\r\n"
@@ -626,10 +735,30 @@ impl Buffer {
         self.draft.expected != self.draft.text
     }
 
+    fn save_label(&self) -> &'static str {
+        if self.saving {
+            "저장 중…"
+        } else if self.dirty() {
+            "● 저장"
+        } else {
+            "저장"
+        }
+    }
+
+    fn status(&self) -> &'static str {
+        if self.stale {
+            "외부 변경 감지 — 디스크 내용을 확인하세요."
+        } else if self.dirty() {
+            "미저장 변경 — ⌘S 저장"
+        } else {
+            "변경 없음"
+        }
+    }
+
     fn loaded(&mut self, disk: &str, available: bool) {
         // Even a queued refresh that began before the first keystroke must use
         // the buffer's state NOW, never its state at request time.
-        if self.dirty() || self.editing || self.saving {
+        if self.dirty() || self.saving {
             self.stale = !available || self.draft.expected != disk;
         } else {
             self.draft.expected = disk.to_owned();
@@ -646,6 +775,15 @@ impl Buffer {
         self.saving = false;
         self.stale = false;
         self.error = None;
+    }
+
+    fn changed(&mut self, text: String) {
+        if self.draft.text != text {
+            self.draft.text = text;
+            self.error = None;
+        }
+        // `editing` is input eligibility, never evidence of an unsaved draft.
+        // Keep a real external conflict until a disk read revalidates it.
     }
 }
 
@@ -692,6 +830,9 @@ impl CodeEdits {
                             Some("잘못된 경로가 있는 편집 초안 파일입니다.".into());
                         state.unreadable_storage = true;
                         break;
+                    }
+                    if draft.expected == draft.text {
+                        continue; // Older checkpoints can contain already-clean drafts.
                     }
                     state.buffers.insert(draft.key.clone(), Buffer::new(draft));
                 }
@@ -746,6 +887,9 @@ impl CodeEdits {
                 self.buffers.remove(&key);
                 self.bindings.remove(&key);
             }
+            if let Some(buffer) = self.buffers.get_mut(&key) {
+                buffer.editing = false;
+            }
         }
         let Some(key) = FileKey::new(root, path).filter(|_| live) else {
             return disk;
@@ -757,6 +901,10 @@ impl CodeEdits {
                 text: disk.clone(),
             })
         });
+        buffer.editing = available
+            && !self.unreadable_storage
+            && disk.len() <= pokarak_core::MAX_TEXT_BYTES
+            && !disk.as_bytes().contains(&0);
         buffer.loaded(&disk, available);
         buffer.draft.text.clone()
     }
@@ -767,7 +915,7 @@ impl CodeEdits {
     }
 
     pub(super) fn can_edit(&self, root: &Path, path: &Path) -> bool {
-        !self.unreadable_storage && self.buffer(root, path).is_some_and(|buffer| !buffer.saving)
+        !self.unreadable_storage && self.editing(root, path)
     }
 
     pub(super) fn has_draft_under(&self, root: &Path, path: &Path) -> bool {
@@ -787,6 +935,10 @@ impl CodeEdits {
 
     pub(super) fn dirty(&self, root: &Path, path: &Path) -> bool {
         self.buffer(root, path).is_some_and(Buffer::dirty)
+    }
+
+    pub(super) fn reader_status(&self, root: &Path, path: &Path) -> Option<&'static str> {
+        self.buffer(root, path).map(Buffer::status)
     }
 
     pub(super) fn stale(&self, root: &Path, path: &Path) -> bool {
@@ -876,7 +1028,7 @@ impl Pokarak {
                     && let Some(buffer) = self.code_edits.buffers.get_mut(&key)
                     && buffer.editing
                 {
-                    buffer.draft.text = editor.read(cx).value().to_string();
+                    buffer.changed(editor.read(cx).value().to_string());
                 }
             }
         }
@@ -985,20 +1137,9 @@ impl Pokarak {
         available: bool,
         live: bool,
     ) -> String {
-        let text = self.code_edits.loaded(root, path, disk, available, live);
-        if live
-            && available
-            && !self.code_edits.unreadable_storage
-            && self
-                .prefs
-                .option_bool(self.current_project.as_deref(), "editor.direct_edit", false)
-            && let Some(key) = FileKey::new(root, path)
-            && let Some(buffer) = self.code_edits.buffers.get_mut(&key)
-            && !buffer.saving
-        {
-            buffer.editing = true;
-        }
-        text
+        // The former editor.direct_edit preference is retired, including old
+        // explicit false/project overrides. Eligible Code files always accept input.
+        self.code_edits.loaded(root, path, disk, available, live)
     }
 
     pub(super) fn enable_direct_code_edit(
@@ -1008,21 +1149,8 @@ impl Pokarak {
         editor: &Entity<EditorState>,
         cx: &mut Context<Self>,
     ) {
-        if self.code_edits.unreadable_storage
-            || !self
-                .prefs
-                .option_bool(self.current_project.as_deref(), "editor.direct_edit", false)
-        {
-            return;
-        }
-        if let Some(key) = FileKey::new(root, path)
-            && let Some(buffer) = self.code_edits.buffers.get_mut(&key)
-            && !buffer.stale
-            && !buffer.saving
-        {
-            buffer.editing = true;
-            editor.update(cx, |state, cx| state.set_readonly(false, cx));
-        }
+        let readonly = !self.code_edits.can_edit(root, path);
+        editor.update(cx, |state, cx| state.set_readonly(readonly, cx));
     }
 
     pub(super) fn bind_code_editor(
@@ -1065,8 +1193,13 @@ impl Pokarak {
             if !buffer.editing {
                 return;
             }
-            buffer.draft.text = editor.read(cx).value().to_string();
-            buffer.error = None;
+            buffer.changed(editor.read(cx).value().to_string());
+            let status = buffer.status();
+            if app.current.as_ref() == Some(&changed_key.root)
+                && app.selected().as_ref() == Some(&changed_key.path)
+            {
+                app.status = status.into();
+            }
             app.pin_preview(&changed_key.root, &changed_key.path);
             app.refresh_inline_tools(&changed_key.root, &changed_key.path, &editor, cx);
             app.checkpoint_code_drafts(cx);
@@ -1079,10 +1212,12 @@ impl Pokarak {
 
     pub(super) fn start_code_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.code_edits.unreadable_storage
+            || self.git_history.active
             || self.file_loading
             || self.git_is_busy()
             || self.loading
             || window.has_active_dialog(cx)
+            || !self.session().is_some_and(|s| s.saved.code)
         {
             return;
         }
@@ -1097,14 +1232,12 @@ impl Pokarak {
         let Some(buffer) = self.code_edits.buffers.get_mut(&key) else {
             return;
         };
-        if buffer.saving {
+        if !buffer.editing || buffer.saving {
             return;
         }
-        buffer.editing = true;
         self.pin_preview(&root, &path);
         editor.update(cx, |state, cx| state.set_readonly(false, cx));
         editor.read(cx).focus_handle(cx).focus(window, cx);
-        self.status = "편집 중 — ⌘S 저장 · 초안은 파일 저장 전까지 별도로 보관됩니다.".into();
         cx.notify();
     }
 
@@ -1114,6 +1247,9 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Cmd-S can arrive before the queued Change event for an undo. Inspect
+        // the actual buffer before deciding whether format-on-save is needed.
+        self.capture_code_buffers(cx);
         if self.prefs.option_bool(
             self.current_project.as_deref(),
             "editor.format_on_save",
@@ -1348,7 +1484,13 @@ impl Pokarak {
         let Some(key) = FileKey::new(&root, &path) else {
             return;
         };
-        if self.code_edits.buffers.get(&key).is_none_or(|b| b.saving) {
+        self.capture_code_buffers(cx);
+        if self
+            .code_edits
+            .buffers
+            .get(&key)
+            .is_none_or(|b| b.saving || !b.dirty())
+        {
             return;
         }
         let weak = cx.entity().downgrade();
@@ -1385,49 +1527,26 @@ impl Pokarak {
             return div().into_any_element();
         };
         let busy = buffer.saving || self.file_loading || self.loading || self.git_is_busy();
-        let save = buffer.editing || buffer.dirty();
-        let name = if buffer.saving {
-            "저장 중…"
-        } else if buffer.dirty() {
-            "● 저장"
-        } else if save {
-            "편집 중"
-        } else {
-            "편집"
-        };
+        let name = buffer.save_label();
         let minimal = self
             .command_bar_density
             .get("working-reader")
             .copied()
             .unwrap_or_default()
             == reader_toolbar::Density::Minimal;
-        Button::new(if save { "save-code" } else { "edit-file" })
-            .icon(if save {
-                IconName::Save
-            } else {
-                IconName::Pencil
-            })
+        Button::new("save-code")
+            .icon(IconName::Save)
             .when(!minimal, |b| b.label(name))
             .accessibility_label(name)
-            .tooltip(if save {
-                "파일 저장  ⌘S"
-            } else {
-                "현재 작업 파일 편집"
-            })
+            .tooltip("파일 저장  ⌘S")
             .ghost()
             .small()
             .flex_none()
             .h(ui_px(28.))
             .when(minimal, |b| b.w(ui_px(28.)))
             .loading(buffer.saving)
-            .disabled(busy || self.code_edits.unreadable_storage || (save && !buffer.dirty()))
-            .on_click(cx.listener(move |app, _, w, cx| {
-                if save {
-                    app.save_code_file(false, w, cx)
-                } else {
-                    app.start_code_edit(w, cx)
-                }
-            }))
+            .disabled(busy || self.code_edits.unreadable_storage || !buffer.dirty())
+            .on_click(cx.listener(move |app, _, w, cx| app.save_code_file(false, w, cx)))
             .into_any_element()
     }
 
@@ -1448,11 +1567,6 @@ impl Pokarak {
             || buffer.is_none_or(|b| b.saving)
             || self.code_edits.unreadable_storage;
         for (label, command, disabled) in [
-            (
-                "편집",
-                Command::Edit,
-                busy || buffer.is_none_or(|b| b.editing),
-            ),
             (
                 "저장  ⌘S",
                 Command::Save,

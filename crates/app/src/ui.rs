@@ -1396,7 +1396,9 @@ impl Pokarak {
                     text,
                     code_workspace::FileDiff::prepare(diff, accepted_diff.as_deref()),
                     !deleted,
-                    !binary,
+                    !binary
+                        && std::fs::symlink_metadata(load_root.join(&load_path))
+                            .is_ok_and(|metadata| metadata.is_file()),
                 ))
             })()
         });
@@ -1445,10 +1447,10 @@ impl Pokarak {
                             &root,
                             &path,
                             text,
-                            available,
+                            available && text_file,
                             (live && text_file) || has_draft,
                         );
-                        let editing = this.code_edits.editing(&root, &path);
+                        let editing = this.code_edits.can_edit(&root, &path);
                         // Capture the live reader at acceptance: the user can scroll
                         // or select text while the filesystem read is in flight.
                         let current_editor = this
@@ -1585,7 +1587,11 @@ impl Pokarak {
                         if !code && !preserve_focus && !this.file_tree_focus.is_focused(window) {
                             this.focus.focus(window, cx);
                         }
-                        this.status = if this.navigation.is_some() {
+                        this.status = if code
+                            && let Some(buffer) = this.code_edits.reader_status(&root, &path)
+                        {
+                            buffer.into()
+                        } else if this.navigation.is_some() {
                             "코드 탐색 준비됨".into()
                         } else {
                             "파일 열람 중".into()
@@ -1980,8 +1986,7 @@ impl Pokarak {
         let editing = self
             .current
             .as_ref()
-            .is_some_and(|root| self.code_edits.editing(root, path))
-            && (!deleted || dirty);
+            .is_some_and(|root| self.code_edits.can_edit(root, path));
         let mut tabs = div()
             .id("file-tabs")
             .flex()

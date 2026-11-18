@@ -23,6 +23,12 @@ impl RefHover {
     }
 }
 
+struct BadgeStyle {
+    width: f32,
+    color: Rgba,
+    full: bool,
+}
+
 #[derive(Debug, PartialEq)]
 struct BadgeLayout {
     widths: Vec<f32>,
@@ -201,11 +207,10 @@ impl RefBadges {
         oid: &str,
         reference: &str,
         index: usize,
-        width: f32,
-        color: Rgba,
-        full: bool,
+        style: BadgeStyle,
         palette: Palette,
     ) -> AnyElement {
+        let BadgeStyle { width, color, full } = style;
         let label = format!(
             "{} · {} · 커밋 {}",
             ref_kind(reference),
@@ -339,9 +344,11 @@ impl RefBadges {
                 &commit.oid,
                 &refs[i],
                 i,
-                width,
-                color,
-                false,
+                BadgeStyle {
+                    width,
+                    color,
+                    full: false,
+                },
                 Palette::new(cx),
             ));
         }
@@ -457,7 +464,11 @@ impl Render for RefOverflow {
                 let count = refs.len();
                 let list_width = content_width.max(theme::logical_px(width));
                 let list = uniform_list("graph-overflow-refs", count, move |range, _, cx| {
-                    range.map(|i| badges.badge(&oid, &refs[i], i, list_width, color, true, Palette::new(cx))).collect()
+                    let palette = Palette::new(cx);
+                    range.map(|i| {
+                        let style = BadgeStyle { width: list_width, color, full: true };
+                        badges.badge(&oid, &refs[i], i, style, palette)
+                    }).collect()
                 }).w(ui_px(list_width)).h(ui_px((count.min(10) * 28) as f32)).track_scroll(&scroll);
                 div().v_flex().gap_1().w(width)
                     .child(div().text_size(ui_text(12.)).child(format!("{} · 브랜치 / 태그 {}개", short(&commit.oid), count)))

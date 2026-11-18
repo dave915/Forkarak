@@ -586,12 +586,14 @@ impl Pokarak {
             buttons = buttons.child(theme::action_button("git-branch-continue", !create && empty).label(if delete { "병합된 브랜치 삭제…" } else if create { "만들기…" } else { "체크아웃…" }).primary().on_click(move |_, window, cx| {
                 let selected_name = if create { Some(name.read(cx).value().trim().to_owned()) } else { selected.read(cx).selected_value().cloned() };
                 let Some(name) = selected_name.filter(|name| !name.is_empty()) else { return; };
+                if !create && !delete {
+                    let _ = target.update(cx, |app, cx| app.review_branch_checkout(state_for_action.root.clone(), name, state_for_action.current_branch.clone(), window, cx));
+                    return;
+                }
                 let (operation, detail) = if create {
                     (Operation::CreateBranch { name: name.clone() }, format!("새 로컬 브랜치: {name}\n시작점: 실행 시 이 워크트리의 HEAD\n생성 후 현재 브랜치를 유지합니다."))
-                } else if delete {
-                    (Operation::DeleteBranch { name: name.clone(), mode: DeleteMode::MergedOnly }, format!("삭제할 로컬 브랜치: {name}\nGit의 병합 여부 검사(-d)를 통과한 브랜치만 삭제합니다. 원격 브랜치는 삭제하지 않습니다."))
                 } else {
-                    (Operation::CheckoutBranch { name: name.clone() }, format!("전환할 로컬 브랜치: {name}\n이 워크트리의 파일이 변경됩니다. 덮어쓸 로컬 변경이나 파일이 있으면 중단합니다."))
+                    (Operation::DeleteBranch { name: name.clone(), mode: DeleteMode::MergedOnly }, format!("삭제할 로컬 브랜치: {name}\nGit의 병합 여부 검사(-d)를 통과한 브랜치만 삭제합니다. 원격 브랜치는 삭제하지 않습니다."))
                 };
                 let _ = target.update(cx, |app, cx| app.confirm_git_operation(GitConfirmation { root: state_for_action.root.clone(), label: title.into(), detail, operation, destructive: delete }, window, cx));
             }));
@@ -612,28 +614,18 @@ impl Pokarak {
             operation,
             destructive,
         } = confirmation;
-        let checkout_source = matches!(operation, Operation::CheckoutBranch { .. }).then(|| {
-            self.active_worktree()
-                .and_then(|tree| (!tree.is_detached).then(|| tree.branch.clone()))
-        });
         window.close_dialog(cx);
         let weak = cx.entity().downgrade();
         window.open_app_dialog(cx, move |dialog, _, _| {
             let weak = weak.clone();
             let root_for_action = root.clone();
-            let checkout_source = checkout_source.clone();
             let operation = operation.clone();
             let label_for_action = label.clone();
             let action = theme::action_button("git-confirm", false).label(label.clone()).when(destructive, |b| b.danger()).when(!destructive, |b| b.primary()).on_click(move |_, window, cx| {
                 let _ = weak.update(cx, |app, cx| {
                     window.close_dialog(cx);
                     let operation = operation.clone();
-                    let checkout_source = checkout_source.clone();
                     app.run_git_job(root_for_action.clone(), label_for_action.clone(), move |git| {
-                        if let Some(source) = checkout_source {
-                            anyhow::ensure!(git.state()?.current_branch == source, "현재 브랜치가 변경되었습니다. 체크아웃 대상을 다시 확인하세요.");
-                            anyhow::ensure!(git.in_progress()?.is_none(), "진행 중인 Git 작업을 먼저 완료하거나 중단하세요.");
-                        }
                         git.execute(&operation)
                     }, window, cx);
                 });

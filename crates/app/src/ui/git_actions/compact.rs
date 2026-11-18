@@ -1,4 +1,4 @@
-//! Shared layout for the branch Push and Merge dialogs.
+//! Shared layout for compact Git operation dialogs.
 use super::*;
 use gpui_kit::component::{dialog::Dialog, tooltip::Tooltip};
 use std::{cell::Cell, rc::Rc};

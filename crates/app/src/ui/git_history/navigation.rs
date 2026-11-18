@@ -5,6 +5,7 @@ use pokarak_core::history::navigation::{Catalog, RefGroup, SearchResults};
 #[derive(Default)]
 pub(super) struct NavigationUi {
     pub(super) catalog: Option<Arc<Catalog>>,
+    pending_jump: Option<Task<()>>,
 }
 
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
@@ -188,6 +189,40 @@ impl Pokarak {
         input.update(cx, |input, cx| input.focus(window, cx));
     }
 
+    // Switching from Code to Git inserts a header above the branch list. Keep the
+    // clicked row in place until macOS has distinguished a single click from a double.
+    fn defer_code_sidebar_jump(
+        &mut self,
+        root: PathBuf,
+        oid: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(target_os = "macos")]
+        let interval = Duration::from_secs_f64(objc2_app_kit::NSEvent::doubleClickInterval());
+        #[cfg(not(target_os = "macos"))]
+        let interval = Duration::from_millis(500);
+        let timer = cx.background_executor().timer(interval);
+        let history_request = self.git_history.request;
+        let request = self.request;
+        let file_request = self.file_request;
+        let focus = window.focused(cx);
+        self.git_history.nav.pending_jump = Some(cx.spawn_in(window, async move |this, cx| {
+            timer.await;
+            let _ = this.update_in(cx, |app, w, cx| {
+                if app.request == request
+                    && app.file_request == file_request
+                    && app.current.as_ref() == Some(&root)
+                    && app.git_history.accepts_code_sidebar(history_request, &root)
+                    && w.focused(cx) == focus
+                    && !w.has_active_dialog(cx)
+                {
+                    app.jump_to_graph_oid(oid, w, cx);
+                }
+            });
+        }));
+    }
+
     fn jump_to_graph_oid(&mut self, oid: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.loading
             || self.git_is_busy()
@@ -350,6 +385,7 @@ impl Pokarak {
                                 ))
                                 .on_click(move |_, _, cx| {
                                     let _ = target.update(cx, |app, cx| {
+                                        app.git_history.nav.pending_jump = None;
                                         if let Some(session) = app
                                             .current
                                             .as_ref()
@@ -438,6 +474,16 @@ impl Pokarak {
                         };
                         let open_worktree = tree.filter(|t| !t.is_prunable).map(|t| t.path.clone());
                         let is_active = tree.is_some_and(|t| t.path == scope);
+                        let checkout = reference
+                            .and_then(|r| checkout_target(&r.name, &occupied))
+                            .map(str::to_owned);
+                        let can_checkout = checkout.is_some();
+                        let from = current.clone();
+                        let tip = if can_checkout {
+                            format!("{tip} · 더블클릭하여 체크아웃")
+                        } else {
+                            tip
+                        };
                         let button = Button::new(("graph-reference", index))
                             .ghost()
                             .small()
@@ -469,11 +515,34 @@ impl Pokarak {
                                     ))
                                     .child(div().min_w_0().text_ellipsis().child(label)),
                             )
-                            .on_click(move |_, w, cx| {
+                            .on_click(move |event, w, cx| {
                                 let _ = target.update(cx, |app, cx| {
                                     if app.current.as_ref() == Some(&select_scope) {
-                                        if let Some(path) = &open_worktree {
+                                        app.git_history.nav.pending_jump = None;
+                                        if event.click_count() == 2
+                                            && !event.modifiers().modified()
+                                            && let Some(branch) = &checkout
+                                        {
+                                            app.review_branch_checkout(
+                                                select_scope.clone(),
+                                                branch.clone(),
+                                                from.clone(),
+                                                w,
+                                                cx,
+                                            );
+                                        } else if let Some(path) = &open_worktree {
                                             app.open_repository(path.clone(), w, cx);
+                                        } else if !app.git_history.active
+                                            && event.click_count() == 1
+                                            && !event.is_keyboard()
+                                            && !event.modifiers().modified()
+                                        {
+                                            app.defer_code_sidebar_jump(
+                                                select_scope.clone(),
+                                                jump.clone(),
+                                                w,
+                                                cx,
+                                            );
                                         } else {
                                             app.jump_to_graph_oid(jump.clone(), w, cx);
                                         }
@@ -499,8 +568,6 @@ impl Pokarak {
                         if let Some(r) = reference
                             .filter(|r| matches!(r.group, RefGroup::Local | RefGroup::Remote))
                         {
-                            let can_checkout =
-                                r.group == RefGroup::Local && !occupied.contains(&r.label);
                             return Some(
                                 row.context_menu(crate::ui::git_actions::branch_context_menu(
                                     weak.clone(),

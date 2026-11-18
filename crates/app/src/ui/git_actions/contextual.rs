@@ -169,7 +169,7 @@ impl Pokarak {
         }, window, cx);
     }
 
-    fn review_branch_checkout(
+    pub(in crate::ui) fn review_branch_checkout(
         &mut self,
         root: PathBuf,
         branch: String,
@@ -177,18 +177,89 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.workflow_read(root, |ops| ops.state(), move |app, state, window, cx| {
-            if state.current_branch != current || !state.local_branches.contains(&branch) || state.checked_out_branches.contains(&branch) {
-                app.error = Some("브랜치 또는 워크트리 상태가 변경되었습니다. 새로고침 후 체크아웃 대상을 다시 선택하세요.".into());
-                cx.notify();
-                return;
-            }
-            let from = current.as_deref().unwrap_or("detached HEAD");
-            app.confirm_git_operation(GitConfirmation {
-                root: state.root, label: "체크아웃".into(),
-                detail: format!("{from} → {branch}\n이 워크트리의 파일을 선택한 브랜치로 전환합니다. 덮어쓸 로컬 변경이 있으면 중단합니다."),
-                operation: Operation::CheckoutBranch {name: branch}, destructive: false,
-            }, window, cx);
-        }, window, cx);
+        self.workflow_read(
+            root,
+            |ops| ops.state(),
+            move |app, state, window, cx| {
+                if state.current_branch != current
+                    || !state.local_branches.contains(&branch)
+                    || state.checked_out_branches.contains(&branch)
+                {
+                    app.error = Some("브랜치 또는 워크트리 상태가 변경되었습니다. 새로고침 후 체크아웃 대상을 다시 선택하세요.".into());
+                    cx.notify();
+                    return;
+                }
+                app.confirm_branch_checkout(state.root, current, branch, window, cx);
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn confirm_branch_checkout(
+        &self,
+        root: PathBuf,
+        current: Option<String>,
+        branch: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.close_dialog(cx);
+        let weak = cx.entity().downgrade();
+        window.open_app_dialog(cx, move |dialog, _, cx| {
+            let target = weak.clone();
+            let action_root = root.clone();
+            let from = current.clone();
+            let to = branch.clone();
+            let confirm = theme::action_button("git-confirm", false)
+                .label("체크아웃")
+                .primary()
+                .on_click(move |_, window, cx| {
+                    let _ = target.update(cx, |app, cx| {
+                        window.close_dialog(cx);
+                        let from = from.clone();
+                        let to = to.clone();
+                        app.run_git_job(
+                            action_root.clone(),
+                            "체크아웃".into(),
+                            move |git| {
+                                anyhow::ensure!(
+                                    git.state()?.current_branch == from,
+                                    "현재 브랜치가 변경되었습니다. 체크아웃 대상을 다시 확인하세요."
+                                );
+                                anyhow::ensure!(
+                                    git.in_progress()?.is_none(),
+                                    "진행 중인 Git 작업을 먼저 완료하거나 중단하세요."
+                                );
+                                git.execute(&Operation::CheckoutBranch { name: to })
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                });
+            compact::dialog(dialog, &weak)
+                .title("브랜치를 체크아웃할까요?")
+                .child(
+                    div()
+                        .v_flex()
+                        .gap_2()
+                        .child(compact::row(
+                            "현재 브랜치",
+                            current.clone().unwrap_or_else(|| "detached HEAD".into()),
+                            cx,
+                        ))
+                        .child(compact::row("전환할 브랜치", branch.clone(), cx))
+                        .child(compact::worktree(&root, cx))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(close_button())
+                                .child(confirm),
+                        ),
+                )
+        });
     }
 }

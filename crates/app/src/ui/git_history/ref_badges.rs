@@ -222,6 +222,13 @@ impl RefBadges {
             visible(reference),
             short(oid)
         );
+        let checkout = checkout_target(reference, &self.occupied).map(str::to_owned);
+        let can_checkout = checkout.is_some();
+        let tip_label = if can_checkout {
+            format!("{label} · 더블클릭하여 체크아웃")
+        } else {
+            label.clone()
+        };
         let hover = self.clone();
         let select = self.clone();
         let tip = oid.to_owned();
@@ -237,7 +244,7 @@ impl RefBadges {
             .rounded(ui_px(3.))
             .bg(palette.graph_badge_fill(color, full))
             .text_color(color)
-            .tooltip(label.clone())
+            .tooltip(tip_label)
             .accessibility_label(label)
             .child(
                 div()
@@ -251,10 +258,24 @@ impl RefBadges {
                         visible(reference_name(reference))
                     }),
             )
-            .on_click(move |_, w, cx| {
+            .on_click(move |event, w, cx| {
                 cx.stop_propagation();
                 let _ = select.owner.update(cx, |app, cx| {
-                    if select.scope.accepts(app) && !history_disabled(app) {
+                    if !select.scope.accepts(app) {
+                        return;
+                    }
+                    if event.click_count() == 2
+                        && !event.modifiers().modified()
+                        && let (Some(root), Some(branch)) = (&select.scope.root, &checkout)
+                    {
+                        app.review_branch_checkout(
+                            root.clone(),
+                            branch.clone(),
+                            select.current.clone(),
+                            w,
+                            cx,
+                        );
+                    } else if !history_disabled(app) {
                         app.reveal_history_commit(jump.clone(), w, cx);
                     }
                 });
@@ -275,9 +296,7 @@ impl RefBadges {
                 root.clone(),
                 reference.to_owned(),
                 self.current.clone(),
-                reference
-                    .strip_prefix("refs/heads/")
-                    .is_some_and(|name| !self.occupied.contains(name)),
+                can_checkout,
             );
             return row
                 .context_menu(move |menu, window, cx| {

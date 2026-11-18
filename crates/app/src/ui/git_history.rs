@@ -604,6 +604,12 @@ impl Pokarak {
         });
     }
 }
+fn checkout_target<'a>(reference: &'a str, occupied: &HashSet<String>) -> Option<&'a str> {
+    reference
+        .strip_prefix("refs/heads/")
+        .filter(|name| !occupied.contains(*name))
+}
+
 fn history_disabled(app: &Pokarak) -> bool {
     app.git_is_busy()
         || app.loading
@@ -645,12 +651,31 @@ fn visible(text: &str) -> String {
 }
 #[cfg(test)]
 mod tests {
-    use super::{HistoryUi, extend_refresh_to_anchor};
+    use super::{HistoryUi, checkout_target, extend_refresh_to_anchor};
     use pokarak_core::history;
     use std::{
         path::{Path, PathBuf},
         process::Command,
     };
+
+    #[test]
+    fn only_unoccupied_local_refs_can_start_checkout() {
+        let occupied = ["main".to_owned(), "feature/busy".to_owned()].into();
+        assert_eq!(
+            checkout_target("refs/heads/feature/free", &occupied),
+            Some("feature/free")
+        );
+        for reference in [
+            "refs/heads/main",
+            "refs/heads/feature/busy",
+            "refs/remotes/feature/free",
+            "refs/tags/feature/free",
+            "HEAD",
+            "refs/stash",
+        ] {
+            assert_eq!(checkout_target(reference, &occupied), None, "{reference}");
+        }
+    }
 
     fn fixture_git(root: &Path, args: &[&str]) -> String {
         let mut command = Command::new("git");

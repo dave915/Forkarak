@@ -7,7 +7,8 @@ impl Pokarak {
     pub(super) fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::new(cx);
         let width = window.viewport_size().width;
-        let compact = width < ui_px(1180.);
+        let compact = width < ui_px(1240.).max(ui_text(1100.));
+        let narrow = width < ui_px(900.).max(ui_text(805.));
         let has_projects = !self.projects.is_empty();
         let content = div()
             .absolute()
@@ -27,17 +28,16 @@ impl Pokarak {
             })
             .when(has_projects, |bar| {
                 bar.child(self.project_tabs(window, cx)).child(
-                    Button::new("add-project")
-                        .icon(IconName::Plus)
-                        .ghost()
-                        .small()
-                        .accessibility_label("프로젝트 열기")
+                    toolbar_icon("add-project", IconName::Plus, "프로젝트 열기")
                         .on_click(cx.listener(|app, _, w, cx| app.choose_repository(w, cx)))
                         .shortcut_tooltip("프로젝트 열기", &OpenRepository, None),
                 )
             })
             .child(div().flex_1())
             .when(self.current.is_some(), |bar| {
+                if narrow {
+                    return bar.child(self.view_options());
+                }
                 let bar = bar
                     .when(!self.git_history.active, |bar| {
                         bar.child(self.reading_navigation(cx))
@@ -74,7 +74,7 @@ impl Pokarak {
             );
 
         let title = TitleBar::new()
-            .h(ui_px(36.))
+            .h(ui_px(42.))
             .pl(if window.is_fullscreen() {
                 px(0.)
             } else {
@@ -95,7 +95,7 @@ impl Pokarak {
             .gap(ui_px(2.))
             .h(ui_px(28.))
             .child(
-                toolbar_icon(
+                content_toolbar_icon(
                     "stage-commit",
                     IconName::GitCommitHorizontal,
                     "Stage / 커밋",
@@ -105,7 +105,7 @@ impl Pokarak {
                 .shortcut_tooltip("Stage / 커밋", &OpenGitCommit, None),
             )
             .child(
-                toolbar_icon("compact-git-more", IconName::Ellipsis, "Git 작업 더 보기")
+                content_toolbar_icon("compact-git-more", IconName::Ellipsis, "Git 작업 더 보기")
                     .tooltip("Git 작업 더 보기 · 브랜치, Stash, Fetch, Pull, Push")
                     .on_click(cx.listener(|a, _, w, cx| a.show_compact_git_menu(w, cx))),
             )
@@ -174,6 +174,7 @@ impl Pokarak {
                     .is_some_and(|s| s.saved.graph_detail_collapsed);
                 self.set_graph_detail_collapsed(!collapsed, cx);
             }
+            "code" => self.show_code_view(w, cx),
             "worktree" => self.open_worktree_picker(w, cx),
             "compare" => self.open_branch_review(w, cx),
             "head" => {
@@ -319,7 +320,7 @@ impl Pokarak {
                             }),
                     )
                     .child(
-                        toolbar_icon("toolbar-fetch", IconName::CloudDownload, "Fetch")
+                        content_toolbar_icon("toolbar-fetch", IconName::CloudDownload, "Fetch")
                             .tooltip("Fetch · 원격 브랜치 가져오기")
                             .disabled(busy)
                             .on_click(cx.listener(|app, _, w, cx| {
@@ -351,13 +352,13 @@ impl Pokarak {
                         Page::Push,
                     ))
                     .child(
-                        toolbar_icon("toolbar-stash", IconName::Archive, "Stash")
+                        content_toolbar_icon("toolbar-stash", IconName::Archive, "Stash")
                             .disabled(busy)
                             .on_click(cx.listener(|app, _, w, cx| app.open_git_workflow(w, cx)))
                             .shortcut_tooltip("Stash · 변경 보관 및 복원", &OpenGitWorkflow, None),
                     )
                     .child(
-                        toolbar_icon("git-actions", IconName::Ellipsis, "Git 작업 더 보기")
+                        content_toolbar_icon("git-actions", IconName::Ellipsis, "Git 작업 더 보기")
                             .tooltip("Git 작업 더 보기 · 브랜치, Pop, Merge/Rebase, 작업 기록")
                             .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
                                 let add =
@@ -421,6 +422,64 @@ impl Pokarak {
             .into_any_element()
     }
 
+    // Keep the active project visible when the window is narrow or zoomed in.
+    fn view_options(&self) -> impl IntoElement {
+        let graph = self.git_history.active;
+        let pending = self.opening_path.is_some() || self.session().is_none();
+        let can_go_back = self.session().is_some_and(|s| !s.history.is_empty());
+        let can_go_forward = self.session().is_some_and(|s| !s.forward.is_empty());
+        let busy = self.loading || self.git_is_busy();
+        let focus = self.focus.clone();
+        let show_code = RunToolbar {
+            root: self.current.clone(),
+            generation: self.request,
+            command: "code".into(),
+        };
+        let icon = if graph {
+            IconName::GitGraph
+        } else {
+            IconName::CodeXml
+        };
+        toolbar_button("toolbar-view-options", icon, "보기 옵션")
+            .label("보기")
+            .tooltip("Git 그래프, 코드 보기 및 패널")
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                let menu = menu
+                    .action_context(focus.clone())
+                    .menu_with_check_and_disabled(
+                        "Git 그래프",
+                        graph,
+                        Box::new(OpenGitHistory),
+                        graph || pending || busy,
+                    )
+                    .menu_with_check_and_disabled(
+                        "코드 보기",
+                        !graph,
+                        Box::new(show_code.clone()),
+                        !graph || pending || busy,
+                    )
+                    .separator()
+                    .menu_with_disabled("사이드바 표시 / 숨기기", Box::new(ToggleSidebar), pending)
+                    .menu_with_disabled(
+                        "파일 목록 표시 / 숨기기",
+                        Box::new(ToggleFiles),
+                        graph || pending,
+                    );
+                #[cfg(target_os = "macos")]
+                let menu = menu.menu_with_disabled(
+                    "워크트리 터미널",
+                    Box::new(OpenWorktreeTerminal),
+                    pending,
+                );
+                menu.separator()
+                    .when(!graph, |menu| {
+                        menu.menu_with_disabled("뒤로", Box::new(Back), !can_go_back)
+                            .menu_with_disabled("앞으로", Box::new(Forward), !can_go_forward)
+                    })
+                    .menu_with_disabled("저장소 새로고침", Box::new(Refresh), busy)
+            })
+    }
+
     fn workspace_modes(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = Palette::new(cx);
         let graph = self.git_history.active;
@@ -434,13 +493,10 @@ impl Pokarak {
             .rounded(ui_px(5.))
             .bg(palette.rgb(BG))
             .child(
-                Button::new("view-graph")
-                    .icon(IconName::GitGraph)
-                    .accessibility_label("Git 그래프")
-                    .when(!compact, |button| button.label("Git 그래프"))
-                    .ghost()
-                    .compact()
-                    .small()
+                toolbar_icon("view-graph", IconName::GitGraph, "Git 그래프")
+                    .when(!compact, |button| {
+                        button.w_auto().px(ui_px(7.)).label("Git 그래프")
+                    })
                     .selected(graph)
                     .toggled(graph)
                     .disabled(
@@ -456,14 +512,11 @@ impl Pokarak {
                     .shortcut_tooltip("Git 그래프", &OpenGitHistory, None),
             )
             .child(
-                Button::new("view-code")
-                    .icon(IconName::CodeXml)
-                    .accessibility_label("코드 보기")
+                toolbar_icon("view-code", IconName::CodeXml, "코드 보기")
                     .tooltip("코드 보기")
-                    .when(!compact, |button| button.label("코드 보기"))
-                    .ghost()
-                    .compact()
-                    .small()
+                    .when(!compact, |button| {
+                        button.w_auto().px(ui_px(7.)).label("코드 보기")
+                    })
                     .selected(!graph)
                     .toggled(!graph)
                     .disabled(self.loading)
@@ -478,21 +531,13 @@ impl Pokarak {
             .flex()
             .items_center()
             .child(
-                Button::new("back")
-                    .icon(IconName::ArrowLeft)
-                    .accessibility_label("뒤로")
-                    .small()
-                    .ghost()
+                toolbar_icon("back", IconName::ArrowLeft, "뒤로")
                     .disabled(session.is_none_or(|s| s.history.is_empty()))
                     .on_click(cx.listener(|app, _, w, cx| app.navigate_history(true, w, cx)))
                     .shortcut_tooltip("뒤로", &Back, None),
             )
             .child(
-                Button::new("forward")
-                    .icon(IconName::ArrowRight)
-                    .accessibility_label("앞으로")
-                    .small()
-                    .ghost()
+                toolbar_icon("forward", IconName::ArrowRight, "앞으로")
                     .disabled(session.is_none_or(|s| s.forward.is_empty()))
                     .on_click(cx.listener(|app, _, w, cx| app.navigate_history(false, w, cx)))
                     .shortcut_tooltip("앞으로", &Forward, None),
@@ -501,6 +546,21 @@ impl Pokarak {
 }
 
 pub(super) fn toolbar_icon(id: &'static str, icon: IconName, name: &'static str) -> Button {
+    toolbar_button(id, icon, name).w(ui_px(32.)).px_0()
+}
+
+fn toolbar_button(id: &'static str, icon: IconName, name: &'static str) -> Button {
+    Button::new(id)
+        .icon(icon)
+        .accessibility_label(name)
+        .ghost()
+        .with_size(ui_px(28.))
+        .h(ui_px(32.))
+        .px(ui_px(5.))
+        .flex_none()
+}
+
+fn content_toolbar_icon(id: &'static str, icon: IconName, name: &'static str) -> Button {
     Button::new(id)
         .icon(icon)
         .accessibility_label(name)

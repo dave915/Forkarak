@@ -34,6 +34,12 @@ Rename opens an input at the symbol. A rename that reaches another file first sh
 
 Applying a workspace edit updates the affected drafts together, including files that have no open tab. Forkarak checks the source each edit was computed against before applying the batch. The result shows its file and edit counts and offers Undo and Save All. Undo checks for intervening changes across the batch. Save All follows each file’s format-on-save setting and reports individual file conflicts. A failed save leaves the affected draft available for recovery.
 
+## Side-by-side editors
+
+Code View can open a second editor group to the right. Each group has its own tabs, reader mode, navigation history, caret, and scroll position. A line along the top of the tab strip identifies the active group, where editor commands run. Git actions appear on the rightmost visible group. Opening the same file in both groups gives both editors one worktree draft. An edit or save is visible on both sides.
+
+Split Right duplicates the selected file into the right group. File tabs, the tree, and file search also offer Open to Side. A tab can move between groups. Drag the divider to resize the groups. Each visible group needs 360 logical pixels. When the window becomes too narrow, the left group displays a split-hidden notice. Widening the window restores the right group. Closing the last right tab removes the split, and closing the last left tab promotes the right group. The worktree restores both tab sets and the divider position on return.
+
 ## Signature behavior
 
 The staging file lists support Cmd-click to toggle files and Shift-click to select a range. Explicit mark controls are keyboard accessible. Selected-file counts, clear selection and selected-only Stage/Unstage actions stay with their own staged/unstaged list. File marks are bound to the worktree and index snapshot; replacing that snapshot clears the marks. Diff line marks and the single-file preview remain independent.

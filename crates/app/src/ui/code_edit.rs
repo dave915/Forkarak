@@ -1,6 +1,9 @@
 //! Direct working-file editor. Drafts outlive reader entities
 //! and project sessions; the core operation owns the actual filesystem write.
+mod save_all;
 mod storage;
+mod workspace;
+pub(super) use save_all::SaveAllReport;
 use storage::{Alternatives, Checkpoint, DraftStorage};
 
 use super::draft_reconciliation::DraftComparison;
@@ -22,6 +25,7 @@ mod tests {
     use std::{fs, path::Path, process::Command};
 
     mod concurrency;
+    mod workspace;
 
     fn state() -> (tempfile::TempDir, CodeEdits) {
         let temp = tempfile::tempdir().unwrap();
@@ -696,6 +700,7 @@ struct Draft {
 
 #[derive(Clone)]
 struct Buffer {
+    revision: u64,
     draft: Draft,
     editing: bool,
     stale: bool,
@@ -704,9 +709,16 @@ struct Buffer {
     error: Option<String>,
 }
 
+// Buffer lifetimes as well as edits have distinct in-memory identities.
+fn next_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 impl Buffer {
     fn new(draft: Draft) -> Self {
         Self {
+            revision: next_revision(),
             draft,
             editing: false,
             stale: false,
@@ -747,7 +759,7 @@ impl Buffer {
             self.stale = !available || self.draft.expected != disk;
         } else {
             self.draft.expected = disk.to_owned();
-            self.draft.text = disk.to_owned();
+            self.changed(disk.to_owned());
             self.stale = !available;
             self.error = None;
         }
@@ -756,6 +768,7 @@ impl Buffer {
     fn saved(&mut self, submitted: &str) {
         // Keep any edits newer than the submitted snapshot. Normally the native
         // editor is read-only during a save, but queued input can still arrive.
+        self.revision = next_revision();
         self.draft.expected = submitted.to_owned();
         self.saving = false;
         self.stale = false;
@@ -764,6 +777,7 @@ impl Buffer {
 
     fn changed(&mut self, text: String) {
         if self.draft.text != text {
+            self.revision = next_revision();
             self.draft.text = text;
             self.retired = false;
             self.error = None;
@@ -784,6 +798,9 @@ pub(super) struct CodeEdits {
     unreadable_storage: bool,
     commit_after_refresh: Option<(PathBuf, u64)>,
     comparison_request: u64,
+    transactions: HashMap<PathBuf, workspace::Transaction>,
+    saving_all: HashSet<PathBuf>,
+    save_reports: HashMap<PathBuf, SaveAllReport>,
 }
 
 impl CodeEdits {
@@ -805,6 +822,9 @@ impl CodeEdits {
             unreadable_storage: false,
             commit_after_refresh: None,
             comparison_request: 0,
+            transactions: HashMap::new(),
+            saving_all: HashSet::new(),
+            save_reports: HashMap::new(),
         };
         match result {
             Ok((drafts, alternatives)) => {
@@ -976,9 +996,11 @@ impl CodeEdits {
     }
 
     pub(super) fn saving_in(&self, root: &Path) -> bool {
-        self.buffers
-            .values()
-            .any(|buffer| buffer.draft.key.root == root && buffer.saving)
+        self.saving_all.contains(root)
+            || self
+                .buffers
+                .values()
+                .any(|buffer| buffer.draft.key.root == root && buffer.saving)
     }
 
     fn buffer(&self, root: &Path, path: &Path) -> Option<&Buffer> {
@@ -1031,6 +1053,7 @@ impl CodeEdits {
         let previous = buffer.clone();
         buffer.draft.expected = fresh_disk.to_owned();
         buffer.draft.text = result;
+        buffer.revision = next_revision();
         buffer.editing = true;
         buffer.stale = false;
         buffer.error = None;
@@ -1206,10 +1229,7 @@ impl Pokarak {
         let subscription = cx.subscribe_in(
             editor,
             window,
-            move |app, editor, event: &InputEvent, window, cx| {
-                if !matches!(event, InputEvent::Change) {
-                    return;
-                }
+            move |app, editor, event: &gpui_kit::component::input::InputEditsEvent, window, cx| {
                 // A replaced editor can still have a queued Change event. It must
                 // never write its old text over a reconciled replacement buffer.
                 if !app
@@ -1227,6 +1247,15 @@ impl Pokarak {
                     return;
                 }
                 let state = editor.read(cx);
+                // Change events may be queued together (e.g. type then undo).
+                // The immutable event still identifies an intervening revision.
+                if event
+                    .edits()
+                    .last()
+                    .is_some_and(|(_, after)| after != state.text())
+                {
+                    buffer.revision = next_revision();
+                }
                 let text = state.value().to_string();
                 let typed = if app.navigation.is_some() && state.focus_handle(cx).is_focused(window)
                 {

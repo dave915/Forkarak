@@ -103,7 +103,7 @@ do {
     let writeProduction = arguments.contains("--write-production")
     let qa = try value("--qa-dir")
     let renderDir = try value("--render-dir") ?? app.appendingPathComponent("liquid-exports")
-    let known = Set(["--write-production", "--qa-dir", "--render-dir", "--readme-sheet"])
+    let known = Set(["--write-production", "--qa-dir", "--render-dir"])
     for arg in arguments where arg.hasPrefix("--") && !known.contains(arg) { throw Failure("Unknown argument: \(arg)") }
     guard writeProduction || qa != nil else { throw Failure("Read-only by default. Use --qa-dir PATH to review or --write-production to explicitly regenerate shipping fallbacks.") }
     if writeProduction {
@@ -139,10 +139,6 @@ do {
         try contactSheet(qa.appendingPathComponent("contact-light.png"), false, false)
         try contactSheet(qa.appendingPathComponent("contact-dark.png"), true, false)
         try contactSheet(qa.appendingPathComponent("icon-presets.png"), false, true)
-    }
-    if arguments.contains("--readme-sheet") {
-        guard writeProduction else { throw Failure("--readme-sheet requires --write-production") }
-        try contactSheet(root.appendingPathComponent("docs/images/icon-presets.png"), false, true)
     }
 } catch {
     fputs("\(error)\n", stderr)

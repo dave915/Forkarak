@@ -56,14 +56,14 @@ The originals in `sources/` are provenance, not the new generation input.
 ```sh
 # Explicitly regenerate shipped fixed images from checked Apple exports.
 swift scripts/generate-app-icons.swift --write-production \
-  --qa-dir /tmp/forkarak-icon-qa --readme-sheet
+  --qa-dir /tmp/forkarak-icon-qa
 # QA-only rendering changes no shipping files.
 swift scripts/generate-app-icons.swift --qa-dir /tmp/forkarak-icon-qa
 ```
 
 The helper verifies all ten ICNS representations (16..1024px) by an actual
 `iconutil` round trip. QA contact sheets use real images at 32/64/128px on light
-and dark grounds. The README sheet is generated from those exports, not a mockup.
+and dark grounds. Optional overview sheets are written only to the QA directory.
 `../Forkarak.icns` is the exact charcoal fallback; `../Forkarak-1024.png` and
 `../app-icon-1024.png` are its PNG preview.
 

@@ -1745,7 +1745,8 @@ impl Pokarak {
         self.cancellation = Some(navigator.cancellation_handle());
         self.navigation = Some(Arc::new(Mutex::new(navigator)));
         self.trust_prompt = false;
-        self.status = "심볼을 ⌘클릭하면 정의와 사용처를 찾습니다. 서버는 첫 요청 때 시작합니다.".into();
+        self.status =
+            "심볼을 ⌘클릭하면 정의와 사용처를 찾습니다. 서버는 첫 요청 때 시작합니다.".into();
         cx.notify();
     }
 
@@ -2108,12 +2109,13 @@ impl Pokarak {
                     div()
                         .key_context("ForkarakCode")
                         .size_full()
-                        .capture_any_mouse_down(
-                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        .capture_any_mouse_down(cx.listener(
+                            move |this, event: &MouseDownEvent, window, cx| {
                                 // Run before the editable Editor's native selection/LSP
                                 // handlers. A handled symbol press must not move its
                                 // cursor again after we capture the request identity.
-                                if reader_navigation::is_symbol_click(event) && !deleted
+                                if reader_navigation::is_symbol_click(event)
+                                    && !deleted
                                     && this.request_clicked_definition(
                                         &clicked_editor,
                                         event.position,
@@ -2124,8 +2126,8 @@ impl Pokarak {
                                     window.prevent_default();
                                     cx.stop_propagation();
                                 }
-                            }),
-                        )
+                            },
+                        ))
                         .child(
                             Editor::new(&editor)
                                 .readonly(!editing)

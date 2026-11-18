@@ -2,6 +2,120 @@
 use super::*;
 use gpui_kit::component::input::{Rope, RopeExt};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ResultGroup {
+    Definition,
+    Usages,
+}
+impl ResultGroup {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Definition => "정의 · 의미 분석",
+            Self::Usages => "사용처 · 의미 분석",
+        }
+    }
+}
+
+/// One clicked-source operation, published once after both semantic requests.
+pub(super) struct SymbolNavigation {
+    pub definitions: Vec<SourceLocation>,
+    pub usages: Vec<SourceLocation>,
+    pub title: String,
+    pub status: String,
+}
+
+fn same_location(a: &SourceLocation, b: &SourceLocation) -> bool {
+    a.path == b.path && a.line == b.line && a.column == b.column
+}
+
+impl SymbolNavigation {
+    pub(super) fn from_results(
+        definitions: anyhow::Result<NavigationResult>,
+        usages: anyhow::Result<NavigationResult>,
+    ) -> Self {
+        fn semantic(result: anyhow::Result<NavigationResult>) -> anyhow::Result<NavigationResult> {
+            let result = result?;
+            anyhow::ensure!(
+                result.semantic,
+                "텍스트 후보는 의미 분석 결과가 아닙니다: {}",
+                result.status
+            );
+            Ok(result)
+        }
+        fn unique(result: &anyhow::Result<NavigationResult>) -> Vec<SourceLocation> {
+            let mut hits = vec![];
+            if let Ok(result) = result {
+                for hit in &result.locations {
+                    if !hits.iter().any(|previous| same_location(previous, hit)) {
+                        hits.push(hit.clone());
+                    }
+                }
+            }
+            hits
+        }
+        let definitions = semantic(definitions);
+        let usages = semantic(usages);
+        let definition_hits = unique(&definitions);
+        let mut usage_hits = unique(&usages);
+        // LSP references include declarations. Keep the two roles distinct.
+        usage_hits.retain(|hit| !definition_hits.iter().any(|d| same_location(d, hit)));
+        let label = |name: &str, count: usize, result: &anyhow::Result<NavigationResult>| {
+            if result.is_ok() {
+                format!("{name} {count}개")
+            } else {
+                format!("{name} 확인 실패")
+            }
+        };
+        let title = format!(
+            "{} · {}",
+            label("정의", definition_hits.len(), &definitions),
+            label("사용처", usage_hits.len(), &usages)
+        );
+        let detail = |name: &str, result: &anyhow::Result<NavigationResult>| match result {
+            Ok(result) => format!("{name}: {}", result.status),
+            Err(error) => format!("{name}: {error:#}"),
+        };
+        let status = format!(
+            "{title} · {} · {}",
+            detail("정의", &definitions),
+            detail("사용처", &usages)
+        );
+        Self {
+            definitions: definition_hits,
+            usages: usage_hits,
+            title,
+            status,
+        }
+    }
+
+    pub(super) fn unique_definition(&self) -> Option<SourceLocation> {
+        (self.definitions.len() == 1).then(|| self.definitions[0].clone())
+    }
+
+    fn excerpts(self) -> Arc<[ResultExcerpt]> {
+        self.definitions
+            .into_iter()
+            .map(|location| ResultExcerpt {
+                location,
+                group: Some(ResultGroup::Definition),
+            })
+            .chain(self.usages.into_iter().map(|location| ResultExcerpt {
+                location,
+                group: Some(ResultGroup::Usages),
+            }))
+            .collect()
+    }
+}
+
+pub(super) fn is_symbol_click(event: &MouseDownEvent) -> bool {
+    event.button == MouseButton::Left
+        && event.modifiers.platform
+        && !event.modifiers.shift
+        && !event.modifiers.alt
+        && !event.modifiers.control
+        && event.click_count == 1
+}
+
 pub(super) struct NavigationTarget {
     pub position: Position,
     pub symbol_start: Position,
@@ -63,10 +177,15 @@ fn text_hit(text: &Rope, utf16_index: usize) -> Option<Position> {
         return None;
     }
     let offset = text.offset_utf16_to_offset(utf16_index);
-    if text.offset_to_offset_utf16(offset) != utf16_index || text.char_at(offset)?.is_whitespace() {
+    let ch = text.char_at(offset)?;
+    if text.offset_to_offset_utf16(offset) != utf16_index || !identifier_char(ch) {
         return None;
     }
     Some(utf16_position(text, offset))
+}
+
+fn identifier_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_' || ch == '$'
 }
 
 fn inside_text_viewport(viewport: Bounds<Pixels>, gutter: Pixels, point: Point<Pixels>) -> bool {
@@ -113,7 +232,7 @@ fn glyph_hit(editor: &EditorState, point: Point<Pixels>) -> Option<Position> {
         let mut offset = start;
         for ch in text.slice(start..end).chars() {
             let next = offset + ch.len_utf8();
-            if !ch.is_whitespace()
+            if identifier_char(ch)
                 && editor
                     .range_to_bounds(&(offset..next))
                     .is_some_and(|bounds| {
@@ -139,10 +258,10 @@ impl Pokarak {
         point: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         // A rendered handler must not navigate a different file/worktree.
         if self.active_editor().as_ref() != Some(editor) {
-            return;
+            return false;
         }
         let position = editor.update(cx, |editor, cx| {
             let position = clicked_position(editor, point, window, cx)?;
@@ -150,11 +269,34 @@ impl Pokarak {
             // Native modifier-click can leave the primary cursor elsewhere.
             // Align keyboard actions, references, implementation and history
             // with the symbol just clicked, removing secondary selections.
+            editor.focus(window, cx);
             editor.set_selected_range(offset..offset, cx);
             Some(position)
         });
         if let Some(position) = position {
-            self.request_navigation(NavigationKind::Definition, Some(position), window, cx);
+            self.request_language(language_tools::Tool::Symbol, Some(position), window, cx);
+            return true;
+        }
+        false
+    }
+
+    pub(super) fn show_symbol_navigation(
+        &mut self,
+        result: SymbolNavigation,
+        anchor: Option<Bounds<Pixels>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let definition = result.unique_definition();
+        self.status = result.status.clone();
+        self.show_result_excerpts(result.title.clone(), true, result.excerpts(), window, cx);
+        self.result_anchor = anchor;
+        if let Some(definition) = definition {
+            self.open_location(definition, window, cx);
+            // open_location dismisses ordinary popover results. A symbol click
+            // keeps both groups available after its automatic definition jump.
+            self.results_open = true;
+            self.prepare_result_rows(cx);
         }
     }
 }
@@ -166,6 +308,117 @@ mod tests {
     };
     use gpui_kit::component::input::{Position, Rope, RopeExt};
     use gpui_kit::{Bounds, point, px, size};
+
+    fn semantic(
+        locations: Vec<pokarak_core::SourceLocation>,
+    ) -> anyhow::Result<pokarak_navigation::NavigationResult> {
+        Ok(pokarak_navigation::NavigationResult {
+            locations,
+            semantic: true,
+            status: "fixture semantic response".into(),
+        })
+    }
+    fn hit(line: u32) -> pokarak_core::SourceLocation {
+        pokarak_core::SourceLocation {
+            path: "/fixture/Java.java".into(),
+            line,
+            column: 4,
+            preview: "greet()".into(),
+        }
+    }
+
+    #[test]
+    fn clicked_results_deduplicate_definitions_and_separate_usages_from_declarations() {
+        use super::{ResultGroup, SymbolNavigation};
+        let result = SymbolNavigation::from_results(
+            semantic(vec![hit(1), hit(1)]),
+            semantic(vec![hit(1), hit(3), hit(3), hit(5)]),
+        );
+        assert_eq!(result.unique_definition().unwrap().line, 1);
+        assert_eq!(
+            result.usages.iter().map(|h| h.line).collect::<Vec<_>>(),
+            [3, 5]
+        );
+        assert!(result.title.contains("정의 1개 · 사용처 2개"));
+        let rows = result.excerpts();
+        assert_eq!(rows[0].group, Some(ResultGroup::Definition));
+        assert_eq!(rows[1].group, Some(ResultGroup::Usages));
+        assert_eq!(rows[2].location.line, 5);
+        let result =
+            SymbolNavigation::from_results(semantic(vec![hit(1), hit(7)]), semantic(vec![hit(3)]));
+        assert!(result.unique_definition().is_none());
+        assert_eq!(result.definitions.len(), 2);
+    }
+
+    #[test]
+    fn a_failed_half_keeps_available_semantics_and_text_candidates_never_become_references() {
+        use super::SymbolNavigation;
+        let result = SymbolNavigation::from_results(
+            semantic(vec![hit(1)]),
+            Err(anyhow::anyhow!("references unavailable")),
+        );
+        assert!(result.unique_definition().is_some());
+        assert!(result.usages.is_empty());
+        assert!(result.title.contains("사용처 확인 실패"));
+        assert!(result.status.contains("references unavailable"));
+        let result = SymbolNavigation::from_results(
+            Err(anyhow::anyhow!("definition unavailable")),
+            semantic(vec![hit(3)]),
+        );
+        assert!(result.unique_definition().is_none());
+        assert_eq!(result.usages.len(), 1);
+        let result = SymbolNavigation::from_results(
+            semantic(vec![]),
+            Ok(pokarak_navigation::NavigationResult {
+                locations: vec![hit(3)],
+                semantic: false,
+                status: "Text candidate".into(),
+            }),
+        );
+        assert!(result.usages.is_empty());
+        assert!(
+            result
+                .status
+                .contains("텍스트 후보는 의미 분석 결과가 아닙니다")
+        );
+    }
+
+    #[test]
+    fn only_plain_native_command_left_press_invokes_symbol_navigation() {
+        use gpui_kit::{MouseButton, MouseDownEvent};
+        let mut event = MouseDownEvent {
+            button: MouseButton::Left,
+            click_count: 1,
+            ..Default::default()
+        };
+        assert!(!super::is_symbol_click(&event));
+        event.modifiers.platform = true;
+        assert!(super::is_symbol_click(&event));
+        event.modifiers.alt = true;
+        assert!(!super::is_symbol_click(&event));
+        event.modifiers.alt = false;
+        event.modifiers.shift = true;
+        assert!(!super::is_symbol_click(&event));
+        event.modifiers.shift = false;
+        event.click_count = 2;
+        assert!(!super::is_symbol_click(&event));
+        event.click_count = 1;
+        event.button = MouseButton::Right;
+        assert!(!super::is_symbol_click(&event));
+    }
+
+    #[test]
+    fn punctuation_is_not_a_clicked_identifier() {
+        let text = Rope::from("total.call($java_value); 한글");
+        for (offset, ch) in text.to_string().char_indices() {
+            let target = text_hit(&text, text.offset_to_offset_utf16(offset));
+            assert_eq!(
+                target.is_some(),
+                ch.is_alphanumeric() || ch == '_' || ch == '$',
+                "{ch}"
+            );
+        }
+    }
 
     #[test]
     fn clicked_target_overrides_old_primary_cursor() {

@@ -22,8 +22,10 @@ while True:
     span = lambda line, a, b: {'start':pos(line,a), 'end':pos(line,b)}
     if method == 'initialize':
         result = {'capabilities': {'textDocumentSync':1, 'positionEncoding':'utf-16', 'definitionProvider':True, 'referencesProvider':True, 'completionProvider':{'resolveProvider':True}, 'documentFormattingProvider':True, 'diagnosticProvider':{'interFileDependencies':False, 'workspaceDiagnostics':False}, 'documentSymbolProvider':True, 'hoverProvider':True, 'signatureHelpProvider':{'triggerCharacters':['(', ',']}}}
-    elif method in ['textDocument/definition', 'textDocument/references']:
+    elif method == 'textDocument/definition':
         result = [{'uri':uri, 'range':span(1,6,11)}]
+    elif method == 'textDocument/references':
+        result = [{'uri':uri, 'range':span(1,6,11)}, {'uri':uri, 'range':span(2,0,5)}]
     elif method == 'textDocument/completion':
         result = {'isIncomplete':False,'items':[{'label':'dirtyMethod','detail':'(count: number): string','insertTextFormat':2,'textEdit':{'range':span(2,0,5),'newText':'dirtyMethod(${1:count})$0'},'additionalTextEdits':[{'range':span(1,0,0),'newText':'// import\n'}], 'data':{'fixture':True}}]}
         result['items'].extend([

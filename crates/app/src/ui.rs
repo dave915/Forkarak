@@ -103,6 +103,8 @@ actions!(
     [
         Quit,
         OpenSettings,
+        ZoomIn,
+        ZoomOut,
         OpenWorktreeTerminal,
         OpenGitActions,
         OpenGitCommit,
@@ -140,6 +142,8 @@ pub fn bind_keys(cx: &mut App) {
     #[cfg(target_os = "macos")]
     terminal_sessions::bind_keys(cx);
     cx.on_action(git_actions::request_app_quit);
+    cx.on_action(|_: &ZoomIn, cx| settings::zoom_active_window(1, cx));
+    cx.on_action(|_: &ZoomOut, cx| settings::zoom_active_window(-1, cx));
     cx.set_menus([
         Menu::new("Forkarak").items([
             MenuItem::action("설정…", OpenSettings),
@@ -200,6 +204,9 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("앞으로", Forward),
         ]),
         Menu::new("보기").items([
+            MenuItem::action("화면 확대", ZoomIn),
+            MenuItem::action("화면 축소", ZoomOut),
+            MenuItem::separator(),
             MenuItem::action("사이드바 표시 / 숨기기", ToggleSidebar),
             MenuItem::action("파일 목록 표시 / 숨기기 (코드 보기)", ToggleFiles),
         ]),
@@ -207,6 +214,10 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("cmd-=", ZoomIn, None),
+        KeyBinding::new("cmd-shift-=", ZoomIn, None),
+        KeyBinding::new("cmd-+", ZoomIn, None),
+        KeyBinding::new("cmd--", ZoomOut, None),
         KeyBinding::new("cmd-shift-k", OpenGitCommit, None),
         KeyBinding::new("cmd-enter", git_commit::SubmitCommit, Some("CommitDialog")),
         KeyBinding::new("cmd-shift-g", OpenGitWorkflow, None),

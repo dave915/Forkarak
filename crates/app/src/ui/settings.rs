@@ -51,7 +51,7 @@ impl Setting {
             Self::Zoom => {
                 display.ui_zoom_percent = display
                     .ui_zoom_percent
-                    .saturating_add_signed(direction * 10)
+                    .saturating_add_signed(direction * 5)
                     .clamp(
                         *DisplaySettings::ZOOM_RANGE.start(),
                         *DisplaySettings::ZOOM_RANGE.end(),
@@ -389,8 +389,32 @@ fn field_row(
     row
 }
 
+/// Settings and Git dialogs are siblings of the workspace in the window's
+/// dispatch tree. Route Zoom to its owning workspace whichever view has focus.
+pub(super) fn zoom_active_window(direction: i16, cx: &mut App) {
+    let Some(window) = cx
+        .active_window()
+        .and_then(|w| w.downcast::<gpui_kit::base::Root>())
+    else {
+        return;
+    };
+    // The current key or menu event is still borrowing this window.
+    cx.defer(move |cx| {
+        let _ = window.update(cx, |root, _, cx| {
+            if let Ok(workspace) = root.view().clone().downcast::<Pokarak>() {
+                workspace.update(cx, |app, cx| {
+                    app.set_display(Setting::Zoom.step(app.prefs.display, direction), cx);
+                });
+            }
+        });
+    });
+}
+
 impl Pokarak {
     fn set_display(&mut self, display: DisplaySettings, cx: &mut Context<Self>) {
+        if self.prefs.display == display {
+            return;
+        }
         self.prefs.display = display;
         self.prefs.save();
         theme::apply_display(display, cx);
@@ -1069,6 +1093,26 @@ mod tests {
     use crate::prefs::Preferences;
     use serde_json::json;
     use std::path::Path;
+    #[test]
+    fn zoom_steps_five_percent_and_clamps_at_display_limits() {
+        use super::{DisplaySettings, Setting};
+        for (start, direction, expected) in
+            [(100, 1, 105), (100, -1, 95), (140, 1, 140), (80, -1, 80)]
+        {
+            let display = DisplaySettings {
+                ui_zoom_percent: start,
+                ..DisplaySettings::DEFAULT
+            };
+            assert_eq!(
+                Setting::Zoom.step(display, direction),
+                DisplaySettings {
+                    ui_zoom_percent: expected,
+                    ..display
+                }
+            );
+        }
+    }
+
     #[test]
     fn shell_arguments_cannot_escape_worktree_or_prompt() {
         assert_eq!(shell_quote("a'b $(touch x)"), "'a'\\''b $(touch x)'");

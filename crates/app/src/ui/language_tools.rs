@@ -30,6 +30,7 @@ pub(super) enum Tool {
     Hover,
     Format { save_after: bool, commit: bool },
     Navigate(NavigationKind),
+    Symbol,
 }
 impl Tool {
     fn title(&self) -> &'static str {
@@ -43,6 +44,7 @@ impl Tool {
             Self::Navigate(NavigationKind::Definition) => "정의",
             Self::Navigate(NavigationKind::References) => "사용처",
             Self::Navigate(NavigationKind::Implementation) => "구현체",
+            Self::Symbol => "정의 · 사용처",
         }
     }
 }
@@ -54,6 +56,10 @@ enum Reply {
     Hover(Option<HoverResult>),
     Format(Vec<TextEdit>),
     Navigation(NavigationResult, HashMap<PathBuf, FileRevision>),
+    Symbol(
+        reader_navigation::SymbolNavigation,
+        HashMap<PathBuf, FileRevision>,
+    ),
 }
 struct Panel {
     identity: Identity,
@@ -247,7 +253,11 @@ impl Pokarak {
                         .language_tools
                         .snapshots
                         .get(&observed)
-                        .is_some_and(|s| s.text() != editor.read(cx).value().as_ref());
+                        .is_some_and(|s| s.text() != editor.read(cx).value().as_ref())
+                        || a.language_tools
+                            .result_sources
+                            .get(&observed.root.join(&observed.path))
+                            .is_some_and(|s| s.text() != editor.read(cx).value().as_ref());
                     if changed {
                         if let Some(snapshot) = a.language_tools.snapshots.remove(&observed) {
                             snapshot.invalidate();
@@ -258,6 +268,9 @@ impl Pokarak {
                         a.language_tools.panel = None;
                         if a.result_semantic && a.results_root.as_ref() == Some(&observed.root) {
                             a.results_open = false;
+                            for source in a.language_tools.result_sources.values() {
+                                source.invalidate();
+                            }
                             a.language_tools.result_sources.clear();
                         }
                         a.clear_language_markers(cx);
@@ -365,6 +378,77 @@ impl Pokarak {
     }
     pub(super) fn semantic_result_sources(&self) -> HashMap<PathBuf, DocumentSnapshot> {
         self.language_tools.result_sources.clone()
+    }
+    pub(super) fn semantic_result_sources_current(&self, cx: &App) -> bool {
+        let Some(root) = self
+            .current
+            .as_ref()
+            .filter(|root| self.results_root.as_ref() == Some(root))
+        else {
+            return false;
+        };
+        if !self.language_trusted() || self.navigation.is_none() {
+            return false;
+        }
+        let drafts = self.code_edits.analysis_drafts(root);
+        self.language_tools.result_sources.values().all(|source| {
+            if !source.is_current() || source.root() != root {
+                return false;
+            }
+            let Ok(path) = source.path().strip_prefix(root) else {
+                return false;
+            };
+            if self
+                .result_revisions
+                .get(source.path())
+                .is_some_and(|revision| file_revision(source.path()).as_ref() != Some(revision))
+            {
+                return false;
+            }
+            if let Some(editor) = self.sessions.get(root).and_then(|s| s.documents.get(path)) {
+                return editor.read(cx).value().as_ref() == source.text();
+            }
+            drafts
+                .iter()
+                .any(|(draft_path, text)| draft_path == path && text == source.text())
+        })
+    }
+    fn retain_navigation_results(
+        &mut self,
+        root: &Path,
+        revisions: HashMap<PathBuf, FileRevision>,
+    ) -> anyhow::Result<()> {
+        // Request snapshots expire when the view changes. Result snapshots have
+        // their own lifetime, checked against every retained editor on activation.
+        // This keeps usages usable after the automatic definition jump without
+        // relaxing the request identity or displayed-source guards.
+        let sources = self
+            .language_tools
+            .snapshots
+            .values()
+            .filter(|s| s.is_current() && s.root() == root)
+            .map(|s| {
+                DocumentSnapshot::new(
+                    root.to_owned(),
+                    s.path().to_owned(),
+                    s.text().to_owned(),
+                    s.version(),
+                )
+                .map(|result| (result.path().to_owned(), result))
+            })
+            .collect::<anyhow::Result<HashMap<_, _>>>()?;
+        self.result_revisions = revisions;
+        self.result_revisions.extend(
+            sources
+                .keys()
+                .filter_map(|p| file_revision(p).map(|r| (p.clone(), r))),
+        );
+        for source in self.language_tools.result_sources.values() {
+            source.invalidate();
+        }
+        self.language_tools.result_sources = sources;
+        self.results_root = Some(root.to_owned());
+        Ok(())
     }
     pub(super) fn configure_language_servers(
         &self,
@@ -633,7 +717,7 @@ impl Pokarak {
                 .clamp(1, 32) as u32,
             insert_spaces: self.prefs.option_bool(project, "editor.use_spaces", true),
         };
-        if matches!(tool, Tool::Navigate(_)) {
+        if matches!(tool, Tool::Navigate(_) | Tool::Symbol) {
             self.navigation_request += 1;
         }
         let release: Vec<_> = self
@@ -648,7 +732,7 @@ impl Pokarak {
         let navigation_token = self.navigation_request;
         self.language_tools.pending = Some(tool.clone());
         self.language_tools.retry = Some(tool.clone());
-        self.navigating = matches!(tool, Tool::Navigate(_));
+        self.navigating = matches!(tool, Tool::Navigate(_) | Tool::Symbol);
         self.status = format!("{} 요청 중…", tool.title());
         let expected = identity.clone();
         let operation = tool.clone();
@@ -728,15 +812,13 @@ impl Pokarak {
                     }
                     Ok(Reply::Navigation(result, revisions)) => {
                         a.error = None;
-                        a.result_revisions = revisions;
-                        a.results_root = Some(identity.key.root.clone());
-                        a.language_tools.result_sources = a
-                            .language_tools
-                            .snapshots
-                            .values()
-                            .filter(|s| s.is_current())
-                            .map(|s| (s.path().to_owned(), s.clone()))
-                            .collect();
+                        if let Err(error) =
+                            a.retain_navigation_results(&identity.key.root, revisions)
+                        {
+                            a.error = Some(format!("{error:#}"));
+                            cx.notify();
+                            return;
+                        }
                         a.status = result.status.clone();
                         if matches!(tool, Tool::Navigate(NavigationKind::Definition))
                             && result.semantic
@@ -748,6 +830,17 @@ impl Pokarak {
                             a.show_results(tool.title().into(), result, window, cx);
                             a.result_anchor = anchor;
                         }
+                    }
+                    Ok(Reply::Symbol(result, revisions)) => {
+                        a.error = None;
+                        if let Err(error) =
+                            a.retain_navigation_results(&identity.key.root, revisions)
+                        {
+                            a.error = Some(format!("{error:#}"));
+                            cx.notify();
+                            return;
+                        }
+                        a.show_symbol_navigation(result, anchor, window, cx);
                     }
                     Ok(value) => {
                         if let Reply::Diagnostics(items) = &value {
@@ -1057,6 +1150,37 @@ fn execute(
                 .value;
             let revisions = result_revisions(&result.locations);
             Reply::Navigation(result, revisions)
+        }
+        Tool::Symbol => {
+            let definitions = nav
+                .navigate_buffer(
+                    snapshot,
+                    position.line,
+                    position.character,
+                    NavigationKind::Definition,
+                )
+                .map(|r| r.value);
+            // Both calls use this exact snapshot, position, retained context and
+            // Navigator lock. A stale source must never start the second call.
+            anyhow::ensure!(snapshot.is_current(), "요청한 소스가 변경되었습니다");
+            let usages = nav
+                .navigate_buffer(
+                    snapshot,
+                    position.line,
+                    position.character,
+                    NavigationKind::References,
+                )
+                .map(|r| r.value);
+            anyhow::ensure!(snapshot.is_current(), "요청한 소스가 변경되었습니다");
+            let result = reader_navigation::SymbolNavigation::from_results(definitions, usages);
+            let hits: Vec<_> = result
+                .definitions
+                .iter()
+                .chain(&result.usages)
+                .cloned()
+                .collect();
+            let revisions = result_revisions(&hits);
+            Reply::Symbol(result, revisions)
         }
     })
 }

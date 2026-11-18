@@ -79,6 +79,94 @@ impl Fixture {
         }
     }
 }
+
+#[test]
+fn symbol_click_dispatch_collects_both_roles_at_the_same_clicked_dirty_position_once() {
+    let f = Fixture::new();
+    let mut nav = f.nav();
+    let position = LspPosition {
+        line: 2,
+        character: 3,
+    };
+    let Reply::Symbol(result, _) = execute(
+        &mut nav,
+        &f.snapshot,
+        &[],
+        Tool::Symbol,
+        position,
+        &FormattingOptions::default(),
+    )
+    .unwrap() else {
+        panic!("combined symbol reply");
+    };
+    assert_eq!(result.definitions.len(), 1);
+    assert_eq!(result.unique_definition().unwrap().line, 1);
+    assert_eq!(result.usages.len(), 1);
+    assert_eq!(result.usages[0].line, 2);
+    assert!(result.definitions[0].preview.contains("dirty"));
+    assert!(result.usages[0].preview.contains("dirty"));
+    nav.shutdown();
+    let messages: Vec<serde_json::Value> = fs::read_to_string(f.root.join("protocol.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let navigation: Vec<_> = messages
+        .iter()
+        .filter(|m| {
+            matches!(
+                m["method"].as_str(),
+                Some("textDocument/definition" | "textDocument/references")
+            )
+        })
+        .collect();
+    assert_eq!(navigation.len(), 2);
+    assert_eq!(navigation[0]["method"], "textDocument/definition");
+    assert_eq!(navigation[1]["method"], "textDocument/references");
+    assert_eq!(
+        navigation[0]["params"]["position"],
+        serde_json::json!({"line":2,"character":3})
+    );
+    assert_eq!(
+        navigation[0]["params"]["position"],
+        navigation[1]["params"]["position"]
+    );
+    let opens: Vec<_> = messages
+        .iter()
+        .filter(|m| m["method"] == "textDocument/didOpen")
+        .collect();
+    assert_eq!(opens.len(), 1);
+    assert_eq!(
+        opens[0]["params"]["textDocument"]["text"],
+        f.snapshot.text()
+    );
+    assert_eq!(
+        fs::read_to_string(f.root.join("entry.ts")).unwrap(),
+        "// disk source\nconst disk = 0;\ndisk"
+    );
+}
+
+#[test]
+fn stale_clicked_source_does_not_start_a_server() {
+    let f = Fixture::new();
+    let mut nav = f.nav();
+    f.snapshot.invalidate();
+    assert!(
+        execute(
+            &mut nav,
+            &f.snapshot,
+            &[],
+            Tool::Symbol,
+            LspPosition {
+                line: 2,
+                character: 3
+            },
+            &FormattingOptions::default()
+        )
+        .is_err()
+    );
+    assert!(!f.root.join("protocol.jsonl").exists());
+}
 #[test]
 fn native_command_dispatch_uses_dirty_source_for_every_tool_and_never_saves() {
     let f = Fixture::new();

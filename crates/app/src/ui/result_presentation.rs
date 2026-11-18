@@ -19,6 +19,7 @@ impl Surface {
 }
 
 pub(super) enum Row {
+    Section(reader_navigation::ResultGroup, usize),
     File(PathBuf),
     Gap,
     Line {
@@ -56,6 +57,7 @@ fn match_range(text: &str, column: u32, query: Option<&str>) -> Option<std::ops:
     (end > start).then_some(start..end)
 }
 
+#[cfg(test)]
 fn prepare_rows(
     hits: &[SourceLocation],
     revisions: &HashMap<PathBuf, FileRevision>,
@@ -171,6 +173,40 @@ fn prepare_rows_with_sources(
     rows
 }
 
+fn prepare_grouped_rows(
+    hits: &[SourceLocation],
+    groups: &[Option<reader_navigation::ResultGroup>],
+    revisions: &HashMap<PathBuf, FileRevision>,
+    query: Option<&str>,
+    context: bool,
+    sources: &HashMap<PathBuf, pokarak_navigation::DocumentSnapshot>,
+) -> Vec<Row> {
+    let mut rows = vec![];
+    let mut start = 0;
+    while start < hits.len() {
+        let group = groups[start];
+        let end = (start + 1..hits.len())
+            .find(|i| groups[*i] != group)
+            .unwrap_or(hits.len());
+        if let Some(group) = group {
+            rows.push(Row::Section(group, end - start));
+        }
+        let mut section =
+            prepare_rows_with_sources(&hits[start..end], revisions, query, context, sources);
+        for row in &mut section {
+            if let Row::Line {
+                hit: Some(index), ..
+            } = row
+            {
+                *index += start;
+            }
+        }
+        rows.extend(section);
+        start = end;
+    }
+    rows
+}
+
 fn merged_highlights(
     text: &str,
     syntax: Vec<(std::ops::Range<usize>, HighlightStyle)>,
@@ -215,15 +251,18 @@ fn merged_highlights(
 impl Pokarak {
     pub(super) fn prepare_result_rows(&mut self, cx: &mut Context<Self>) {
         let hits: Vec<_> = self.results.iter().map(|r| r.location.clone()).collect();
+        let groups: Vec<_> = self.results.iter().map(|r| r.group).collect();
         let query = self
             .result_title
             .starts_with("본문 검색:")
             .then(|| self.filter.clone());
-        self.result_rows = Arc::new(prepare_rows(
+        self.result_rows = Arc::new(prepare_grouped_rows(
             &hits,
+            &groups,
             &self.result_revisions,
             query.as_deref(),
             false,
+            &HashMap::new(),
         ));
         let Some(root) = self.current.clone() else {
             return;
@@ -238,7 +277,7 @@ impl Pokarak {
         };
         let guards: Vec<_> = sources.values().cloned().collect();
         let task = cx.background_spawn(async move {
-            prepare_rows_with_sources(&hits, &revisions, query.as_deref(), true, &sources)
+            prepare_grouped_rows(&hits, &groups, &revisions, query.as_deref(), true, &sources)
         });
         cx.spawn(async move |view, cx| {
             let rows = task.await;
@@ -247,6 +286,7 @@ impl Pokarak {
                     && app.navigation_request == request
                     && Arc::ptr_eq(&app.results, &results)
                     && guards.iter().all(|s| s.is_current())
+                    && (!app.result_semantic || app.semantic_result_sources_current(cx))
                 {
                     app.result_rows = Arc::new(rows);
                     cx.notify();
@@ -405,6 +445,14 @@ impl Pokarak {
             uniform_list("grouped-source-results", rows.len(), move |range, _, cx| {
                 range
                     .map(|index| match &rows[index] {
+                        Row::Section(group, count) => div()
+                            .h(ui_px(24.))
+                            .px_2()
+                            .bg(palette.rgb(PANEL))
+                            .text_size(ui_text(11.))
+                            .font_weight(FontWeight::BOLD)
+                            .child(format!("{} · {}개", group.label(), count))
+                            .into_any_element(),
                         Row::File(path) => div()
                             .h(ui_px(24.))
                             .px_2()
@@ -537,6 +585,71 @@ impl Pokarak {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn definitions_and_usages_in_the_same_file_keep_distinct_sections_and_global_hit_indices() {
+        use super::reader_navigation::ResultGroup;
+        let path = std::path::PathBuf::from("/fixture/Java.java");
+        let hits = vec![
+            super::SourceLocation {
+                path: path.clone(),
+                line: 1,
+                column: 4,
+                preview: "greet".into(),
+            },
+            super::SourceLocation {
+                path: path.clone(),
+                line: 3,
+                column: 4,
+                preview: "greet".into(),
+            },
+            super::SourceLocation {
+                path,
+                line: 3,
+                column: 15,
+                preview: "greet".into(),
+            },
+        ];
+        let groups = [
+            Some(ResultGroup::Definition),
+            Some(ResultGroup::Usages),
+            Some(ResultGroup::Usages),
+        ];
+        let rows = super::prepare_grouped_rows(
+            &hits,
+            &groups,
+            &Default::default(),
+            None,
+            false,
+            &Default::default(),
+        );
+        assert!(matches!(
+            rows[0],
+            super::Row::Section(ResultGroup::Definition, 1)
+        ));
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r, super::Row::Section(ResultGroup::Usages, 2)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r, super::Row::File(_)))
+                .count(),
+            2
+        );
+        let indices: Vec<_> = rows
+            .iter()
+            .filter_map(|r| {
+                if let super::Row::Line { hit, .. } = r {
+                    *hit
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(indices, [0, 1, 2]);
+    }
     #[test]
     fn semantic_excerpts_use_retained_source_and_never_fall_back_to_disk_for_it() {
         let fixture = tempfile::tempdir().unwrap();

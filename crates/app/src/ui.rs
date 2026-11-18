@@ -82,6 +82,7 @@ type FileRevision = (u64, SystemTime);
 
 struct ResultExcerpt {
     location: SourceLocation,
+    group: Option<reader_navigation::ResultGroup>,
 }
 
 fn file_revision(path: &Path) -> Option<FileRevision> {
@@ -1744,7 +1745,7 @@ impl Pokarak {
         self.cancellation = Some(navigator.cancellation_handle());
         self.navigation = Some(Arc::new(Mutex::new(navigator)));
         self.trust_prompt = false;
-        self.status = "탐색할 심볼을 ⌘클릭하세요. 서버는 첫 요청 때 시작합니다.".into();
+        self.status = "심볼을 ⌘클릭하면 정의와 사용처를 찾습니다. 서버는 첫 요청 때 시작합니다.".into();
         cx.notify();
     }
 
@@ -1765,6 +1766,26 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let semantic = result.semantic;
+        let excerpts = result
+            .locations
+            .into_iter()
+            .map(|location| ResultExcerpt {
+                location,
+                group: None,
+            })
+            .collect();
+        self.show_result_excerpts(title, semantic, excerpts, window, cx);
+    }
+
+    fn show_result_excerpts(
+        &mut self,
+        title: String,
+        semantic: bool,
+        excerpts: Arc<[ResultExcerpt]>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.result_anchor = self.active_editor().and_then(|e| {
             let editor = e.read(cx);
             editor.range_to_bounds(&(editor.cursor()..editor.cursor()))
@@ -1775,13 +1796,9 @@ impl Pokarak {
             "navigation.results_placement",
             "popover",
         ));
-        self.results = result
-            .locations
-            .into_iter()
-            .map(|location| ResultExcerpt { location })
-            .collect();
+        self.results = excerpts;
         self.result_title = title.clone();
-        self.result_semantic = result.semantic;
+        self.result_semantic = semantic;
         self.prepare_result_rows(cx);
         if self.result_surface == result_presentation::Surface::Files
             && let Some(root) = &self.current
@@ -1789,7 +1806,6 @@ impl Pokarak {
         {
             session.saved.hide_files = false;
         }
-        self.result_semantic = result.semantic;
         self.result_title = title;
         self.results_open = true;
         self.analysis_feedback.output_open = false;
@@ -1810,6 +1826,13 @@ impl Pokarak {
             .as_ref()
             .is_some_and(|root| self.current.as_ref() != Some(root))
         {
+            return;
+        }
+        if self.result_semantic && !self.semantic_result_sources_current(cx) {
+            self.results_open = false;
+            self.error =
+                Some("탐색 결과의 소스가 변경되었습니다. 심볼 탐색을 다시 실행하세요.".into());
+            cx.notify();
             return;
         }
         if self.result_surface == result_presentation::Surface::Popover {
@@ -2085,16 +2108,21 @@ impl Pokarak {
                     div()
                         .key_context("ForkarakCode")
                         .size_full()
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(move |this, event: &MouseUpEvent, window, cx| {
-                                if event.modifiers.platform && !deleted {
-                                    this.request_clicked_definition(
+                        .capture_any_mouse_down(
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                // Run before the editable Editor's native selection/LSP
+                                // handlers. A handled symbol press must not move its
+                                // cursor again after we capture the request identity.
+                                if reader_navigation::is_symbol_click(event) && !deleted
+                                    && this.request_clicked_definition(
                                         &clicked_editor,
                                         event.position,
                                         window,
                                         cx,
-                                    );
+                                    )
+                                {
+                                    window.prevent_default();
+                                    cx.stop_propagation();
                                 }
                             }),
                         )
@@ -2439,7 +2467,7 @@ impl Render for Pokarak {
                 .when(self.current.is_some(), |row| row.child(self.git_sync_button(cx)))
                 .child(self.output_button("status-output", cx))
                 .child(div().max_w(ui_px(400.)).min_w_0().text_ellipsis().child(self.git_running_status().unwrap_or_else(|| self.status.clone())))
-                .child(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의  /  ⌥F7 사용처" }))
+                .child(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의·사용처  /  ⌘B 정의  /  ⌥F7 사용처" }))
     }
 }
 

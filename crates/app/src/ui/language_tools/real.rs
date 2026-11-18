@@ -11,6 +11,157 @@ use pokarak_navigation::{
     Position,
 };
 use std::{fs, path::PathBuf, process::Command, time::Duration};
+
+#[test]
+#[ignore = "requires FORKARAK_BUNDLED_RESOURCES; real bundled JDT, authored Eclipse fixture, no Maven/Gradle import"]
+fn real_bundled_java_symbol_click_collects_definitions_and_usages() {
+    let resources = PathBuf::from(
+        std::env::var_os("FORKARAK_BUNDLED_RESOURCES").expect("set FORKARAK_BUNDLED_RESOURCES"),
+    )
+    .canonicalize()
+    .unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("symbol fixture 한 😀");
+    fs::create_dir_all(root.join("src/demo")).unwrap();
+    let root = root.canonicalize().unwrap();
+    assert!(
+        Command::new("/usr/bin/git")
+            .args(["init", "-q", "--"])
+            .arg(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::write(root.join(".project"), r#"<projectDescription><name>symbol-click</name><projects/><buildSpec><buildCommand><name>org.eclipse.jdt.core.javabuilder</name><arguments/></buildCommand></buildSpec><natures><nature>org.eclipse.jdt.core.javanature</nature></natures></projectDescription>"#).unwrap();
+    fs::write(root.join(".classpath"), r#"<classpath><classpathentry kind="src" path="src"/><classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER"/><classpathentry kind="output" path="bin"/></classpath>"#).unwrap();
+    let greeter = "package demo;\npublic class Greeter {\n    public String greet(String name) { return name; }\n}\n";
+    let disk = "package demo;\nclass Caller { String diskOnly; }\n";
+    let draft = "package demo;\nclass Caller {\n    String first() { return new Greeter().greet(\"first\"); }\n    String second() { return new Greeter().greet(\"second\"); }\n    String textOnly = \"greet\";\n}\n";
+    fs::write(root.join("src/demo/Greeter.java"), greeter).unwrap();
+    fs::write(root.join("src/demo/Caller.java"), disk).unwrap();
+    let state = root.parent().unwrap().join("managed-state");
+    let tools = ManagedTools::new(state.clone(), Some(resources)).unwrap();
+    let java = tools
+        .status("java")
+        .unwrap()
+        .installed
+        .expect("bundled Java");
+    assert_eq!(
+        java.distribution,
+        pokarak_navigation::ToolDistribution::Bundled
+    );
+    let mut nav = Navigator::with_options(
+        root.clone(),
+        java.servers,
+        NavigatorOptions {
+            config_file: None,
+            allow_project_imports: false,
+            initialize_timeout: Duration::from_secs(90),
+            request_timeout: Duration::from_secs(45),
+            shutdown_timeout: Duration::from_secs(3),
+        },
+    );
+    let snapshot =
+        DocumentSnapshot::new(root.clone(), "src/demo/Caller.java".into(), draft.into(), 9)
+            .unwrap();
+    let position = Position {
+        line: 2,
+        character: 43,
+    }; // inside the clicked greet, not the old primary cursor
+    let Reply::Symbol(result, _) = execute(
+        &mut nav,
+        &snapshot,
+        &[],
+        Tool::Symbol,
+        position,
+        &FormattingOptions::default(),
+    )
+    .unwrap() else {
+        panic!("symbol reply")
+    };
+    eprintln!(
+        "BUNDLED JAVA SYMBOL CLICK: {}\ndefinitions={:?}\nusages={:?}",
+        result.status, result.definitions, result.usages
+    );
+    assert_eq!(
+        result.definitions.len(),
+        1,
+        "{}\n{}\n{}",
+        result.status,
+        nav.server_messages(),
+        nav.stderr()
+    );
+    let definition = result.unique_definition().unwrap();
+    assert_eq!(definition.path, root.join("src/demo/Greeter.java"));
+    assert_eq!((definition.line, definition.column), (2, 18));
+    assert_eq!(
+        result
+            .usages
+            .iter()
+            .map(|h| (&h.path, h.line))
+            .collect::<Vec<_>>(),
+        vec![
+            (&snapshot.path().to_owned(), 2),
+            (&snapshot.path().to_owned(), 3)
+        ]
+    );
+    assert!(
+        result
+            .usages
+            .iter()
+            .all(|h| h.preview.contains("Greeter().greet"))
+    );
+    assert!(!result.usages.iter().any(|h| h.line == 4));
+    // Explicit Definition and References still use their original single-tool dispatch.
+    let Reply::Navigation(explicit, _) = execute(
+        &mut nav,
+        &snapshot,
+        &[],
+        Tool::Navigate(NavigationKind::References),
+        position,
+        &FormattingOptions::default(),
+    )
+    .unwrap() else {
+        panic!("explicit references")
+    };
+    assert!(explicit.semantic);
+    assert!(
+        explicit
+            .locations
+            .iter()
+            .any(|h| h.path == definition.path && h.line == 2)
+    );
+    assert!(
+        explicit
+            .locations
+            .iter()
+            .any(|h| h.path == snapshot.path() && h.line == 3)
+    );
+    snapshot.invalidate();
+    assert!(
+        execute(
+            &mut nav,
+            &snapshot,
+            &[],
+            Tool::Symbol,
+            position,
+            &FormattingOptions::default()
+        )
+        .is_err()
+    );
+    nav.shutdown();
+    assert_eq!(
+        fs::read_to_string(root.join("src/demo/Caller.java")).unwrap(),
+        disk
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("src/demo/Greeter.java")).unwrap(),
+        greeter
+    );
+    assert!(!root.join("pom.xml").exists());
+    assert!(!root.join("build.gradle").exists());
+    assert!(!state.exists());
+}
 #[test]
 #[ignore = "requires explicitly installed managed TypeScript; does not install tools"]
 fn real_managed_typescript_completion_insertion_and_dirty_intelligence() {

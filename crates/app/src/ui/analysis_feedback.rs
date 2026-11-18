@@ -20,6 +20,10 @@ struct RetryNavigation {
 }
 
 impl AnalysisFeedback {
+    pub(super) fn has_output(&self) -> bool {
+        !self.output.is_empty()
+    }
+
     fn observe(&mut self, root: &Option<PathBuf>, error: &Option<String>) {
         if &self.root != root {
             *self = Self {

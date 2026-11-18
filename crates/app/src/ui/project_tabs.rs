@@ -175,7 +175,10 @@ impl Pokarak {
                         .tooltip(move |w, cx| {
                             gpui_kit::component::tooltip::Tooltip::new(path.clone()).build(w, cx)
                         })
-                        .suffix(self.project_close_button(&root, cx))
+                        // Inactive tabs stay quiet; they close from the project list.
+                        .when(active == Some(index), |tab| {
+                            tab.suffix(self.project_close_button(&root, cx))
+                        })
                         .on_click(cx.listener(move |app, _, w, cx| {
                             app.select_project(&root, w, cx);
                         }));

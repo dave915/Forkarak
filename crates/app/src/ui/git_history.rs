@@ -649,9 +649,83 @@ fn visible(text: &str) -> String {
         .replace('\r', "\\r")
         .replace('\t', "\\t")
 }
+/// `2026-11-10T10:00:00+09:00` → `2026-11-10 10:00 · 8일 전`.
+/// The clock time stays in the commit's own offset; unparseable input is kept.
+fn friendly_commit_date(iso: &str, now: std::time::SystemTime) -> String {
+    fn num(s: &str, range: std::ops::Range<usize>) -> Option<i64> {
+        s.get(range)?.parse().ok()
+    }
+    let parsed = (|| {
+        let (y, mo, d) = (num(iso, 0..4)?, num(iso, 5..7)?, num(iso, 8..10)?);
+        let (h, mi, sec) = (num(iso, 11..13)?, num(iso, 14..16)?, num(iso, 17..19)?);
+        let zone = iso.get(19..)?;
+        let offset = if zone == "Z" {
+            0
+        } else {
+            let sign = match zone.get(..1)? {
+                "+" => 1,
+                "-" => -1,
+                _ => return None,
+            };
+            sign * (num(zone, 1..3)? * 3600 + num(zone, 4..6)? * 60)
+        };
+        // Days from civil (Howard Hinnant), valid for the proleptic Gregorian calendar.
+        let (y2, m2) = if mo <= 2 {
+            (y - 1, mo + 9)
+        } else {
+            (y, mo - 3)
+        };
+        let era = y2.div_euclid(400);
+        let yoe = y2 - era * 400;
+        let doy = (153 * m2 + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        let days = era * 146_097 + doe - 719_468;
+        let epoch = days * 86_400 + h * 3600 + mi * 60 + sec - offset;
+        Some((
+            format!("{}-{:02}-{:02} {:02}:{:02}", y, mo, d, h, mi),
+            epoch,
+        ))
+    })();
+    let Some((clock, epoch)) = parsed else {
+        return iso.to_owned();
+    };
+    let now = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(epoch);
+    let age = now - epoch;
+    let relative = if age < 60 {
+        "방금".to_owned()
+    } else if age < 3600 {
+        format!("{}분 전", age / 60)
+    } else if age < 86_400 {
+        format!("{}시간 전", age / 3600)
+    } else {
+        format!("{}일 전", age / 86_400)
+    };
+    format!("{clock} · {relative}")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{HistoryUi, checkout_target, extend_refresh_to_anchor};
+    use super::{HistoryUi, checkout_target, extend_refresh_to_anchor, friendly_commit_date};
+
+    #[test]
+    fn commit_dates_read_as_clock_time_and_age() {
+        use std::time::{Duration, UNIX_EPOCH};
+        // 2026-11-10T01:00:00Z
+        let commit = UNIX_EPOCH + Duration::from_secs(1_794_272_400);
+        let iso = "2026-11-10T10:00:00+09:00";
+        assert_eq!(
+            friendly_commit_date(iso, commit + Duration::from_secs(8 * 86_400 + 5)),
+            "2026-11-10 10:00 · 8일 전"
+        );
+        assert_eq!(
+            friendly_commit_date(iso, commit + Duration::from_secs(90)),
+            "2026-11-10 10:00 · 1분 전"
+        );
+        assert_eq!(friendly_commit_date("not a date", commit), "not a date");
+    }
     use pokarak_core::history;
     use std::{
         path::{Path, PathBuf},

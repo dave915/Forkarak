@@ -338,6 +338,13 @@ impl Pokarak {
                         .is_some_and(|s| s.saved.collapsed_graph_sections.contains(section.key())),
                 )
             })
+            // Remote, tag and stash groups with nothing in them only add rows of "0".
+            // They reappear as soon as the loaded catalog has an entry.
+            .filter(|(section, count, _)| {
+                *count > 0
+                    || catalog.is_none()
+                    || matches!(section, Group::Worktrees | Group::Refs(RefGroup::Local))
+            })
             .collect();
         let rows = spans
             .iter()

@@ -42,6 +42,8 @@ impl Palette {
                 0x83c4a1 => 0x1b6a40,
                 0xe5a0a5 => 0xa42f41,
                 0x2b3947 | 0x2c3a48 | 0x314353 => 0xd7e6f4,
+                // Search/usage match background in result excerpts.
+                0x395674 => 0xc5dcf2,
                 0x234535 => 0xd6eedf,
                 0x492d35 => 0xf8dce1,
                 0x283744 | 0x293848 => 0xe5eef7,

@@ -1,6 +1,7 @@
 //! Filename-only selection also works for deleted files and historical tree entries.
 use crate::theme::ui_px;
 use gpui_kit::component::{ActiveTheme, button::Button};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{App, ElementId, Img, ParentElement, SharedString, Styled, div, img};
 use serde::Deserialize;
 use std::{collections::HashMap, path::Path, sync::LazyLock};
@@ -51,17 +52,30 @@ pub(super) fn icon_for_path(path: &Path, cx: &App) -> Img {
         .flex_none()
 }
 
-pub(super) fn file_button(
+/// File tab button. Preview tabs use italic text (the editor convention)
+/// instead of a symbol prefix.
+pub(super) fn file_tab_button(
     id: impl Into<ElementId>,
     path: &Path,
     label: impl Into<SharedString>,
+    preview: bool,
     cx: &App,
 ) -> Button {
     let label = label.into();
     Button::new(id)
-        .accessibility_label(label.clone())
+        .accessibility_label(if preview {
+            SharedString::from(format!("{label} · 미리보기"))
+        } else {
+            label.clone()
+        })
         .child(icon_for_path(path, cx))
-        .child(div().min_w_0().text_ellipsis().child(label))
+        .child(
+            div()
+                .min_w_0()
+                .text_ellipsis()
+                .when(preview, |text| text.italic())
+                .child(label),
+        )
 }
 
 pub(super) fn changed_file_button(

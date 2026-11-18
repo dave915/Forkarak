@@ -199,6 +199,45 @@ impl Pokarak {
         .detach();
     }
 
+    /// Branch name, ahead/behind counts and detail tooltip for the in-content
+    /// Git action group. Counts are `None` until local metadata is ready.
+    pub(in crate::ui) fn git_sync_summary(&self) -> (String, Option<usize>, Option<usize>, String) {
+        let fallback = self
+            .active_worktree()
+            .map(|tree| {
+                if tree.is_detached {
+                    "detached HEAD".to_owned()
+                } else {
+                    tree.branch.clone()
+                }
+            })
+            .unwrap_or_else(|| "브랜치 알 수 없음".into());
+        match self
+            .current
+            .as_ref()
+            .and_then(|root| self.git_ui.sync.get(root))
+        {
+            Some(SyncRead::Ready(sync)) => (
+                sync.branch.clone().unwrap_or(fallback),
+                sync.ahead,
+                sync.behind,
+                format!("Git 작업 대상\n{}", sync_detail(sync)),
+            ),
+            Some(SyncRead::Failed(error)) => (
+                fallback,
+                None,
+                None,
+                format!("동기화 메타데이터 읽기 실패\n{error}"),
+            ),
+            _ => (
+                fallback,
+                None,
+                None,
+                "로컬 Git 참조를 읽고 있습니다. 네트워크 연결은 하지 않습니다.".into(),
+            ),
+        }
+    }
+
     pub(in crate::ui) fn git_sync_button(&self, cx: &mut Context<Self>) -> Button {
         let metadata = self
             .current

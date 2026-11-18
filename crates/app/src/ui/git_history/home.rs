@@ -71,36 +71,12 @@ impl Pokarak {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Unified and split previews both use the review renderer.
         if self.history_diff_active()
             && let Some(diff) = &self.git_history.document
+            && !diff.binary
         {
-            if !self.prefs.split_diff
-                && !self.hides_diff_whitespace()
-                && let Some(editor) = &self.git_history.editor
-            {
-                let rows: Vec<_> = diff
-                    .patch
-                    .lines()
-                    .enumerate()
-                    .filter_map(|(row, line)| line.starts_with("@@ ").then_some(row))
-                    .collect();
-                let state = editor.read(cx);
-                let current = state
-                    .visible_row_range()
-                    .map(|rows| rows.start)
-                    .unwrap_or(0);
-                let height = state.line_height().unwrap_or_else(|| {
-                    theme::code_row_height(ui_px(self.prefs.display.code_font_size))
-                });
-                let x = state.scroll_offset().x;
-                if let Some(row) = diff_tools::hunk_target(&rows, current, forward) {
-                    editor.update(cx, |editor, cx| {
-                        editor.set_scroll_offset(point(x, -height * row as f32), cx)
-                    });
-                }
-            } else {
-                diff.jump_hunk(self, None, forward, cx);
-            }
+            diff.jump_hunk(self, None, forward, cx);
         }
     }
 
@@ -216,10 +192,33 @@ impl Pokarak {
                 if ui.shallow { " · Shallow" } else { "" }
             )
         };
+        let compact_git = window.viewport_size().width < ui_px(1240.);
         let graph = div()
             .size_full()
             .v_flex()
             .overflow_hidden()
+            .child(
+                div()
+                    .id("graph-header")
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .h(ui_px(38.))
+                    .px_3()
+                    .border_b_1()
+                    .border_color(palette.rgb(LINE))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .text_size(ui_text(12.))
+                            .text_color(palette.rgb(MUTED))
+                            .child(status.clone()),
+                    )
+                    .child(self.git_action_group(compact_git, cx)),
+            )
             .child(
                 Button::new("graph-working-changes")
                     .ghost()
@@ -241,17 +240,7 @@ impl Pokarak {
                                     .text_color(palette.rgb(BLUE)),
                             )
                             .child(working_title)
-                            .child(div().text_color(palette.rgb(MUTED)).child(count))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_right()
-                                    .text_ellipsis()
-                                    .text_size(ui_text(11.))
-                                    .text_color(palette.rgb(MUTED))
-                                    .child(status),
-                            ),
+                            .child(div().text_color(palette.rgb(MUTED)).child(count)),
                     )
                     .tooltip("변경 사항 검토 · 스테이징 · 커밋")
                     .on_click(cx.listener(|app, _, window, cx| {
@@ -501,11 +490,8 @@ impl Pokarak {
             .filter(|doc| !ui.code && self.prefs.split_diff && !doc.binary)
         {
             doc.split(self, cx)
-        } else if let Some(doc) = ui
-            .document
-            .as_ref()
-            .filter(|doc| !ui.code && self.hides_diff_whitespace() && !doc.binary)
-        {
+        } else if let Some(doc) = ui.document.as_ref().filter(|doc| !ui.code && !doc.binary) {
+            // Same renderer as Code view: old/new line numbers, no raw patch headers.
             doc.unified(self, None, true, cx)
         } else if let Some(editor) = &ui.editor {
             self.with_inline_blame(
@@ -592,7 +578,7 @@ impl Pokarak {
                 .child(div().flex_1().min_w_0().text_ellipsis().font_weight(FontWeight::MEDIUM).child(visible(&detail.commit.subject)))
                 .child(parents))
             .child(div().h(ui_px(26.)).flex_none().px_3().flex().items_center().text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
-                .child(format!("{}  ·  {}  ·  {}", short(&detail.commit.oid), visible(&detail.commit.author), detail.commit.date)))
+                .child(format!("{}  ·  {}  ·  {}", short(&detail.commit.oid), visible(&detail.commit.author), friendly_commit_date(&detail.commit.date, std::time::SystemTime::now()))))
             .child(div().flex_1().min_h_0().child(h_resizable(SharedString::from(format!("history-file-panes:{resize_root:?}:{}", self.prefs.display.ui_zoom_percent)))
                 .on_resize(move |state,_,cx| {
                     if let Some(width) = state.read(cx).sizes().first().copied() {

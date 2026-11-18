@@ -96,6 +96,12 @@ pub struct SavedView {
     pub code: bool,
     pub all_files: bool,
     pub hide_sidebar: bool,
+    /// Git sidebar visibility in Code view. `None` (views saved before this
+    /// field existed) shares `hide_sidebar` with Git view, as it always did.
+    /// New worktrees start with `Some(false)`: the file tree's worktree
+    /// picker covers switching, and the code gets the width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_sidebar: Option<bool>,
     pub hide_files: bool,
     pub collapsed_folders: HashSet<PathBuf>,
     pub graph_detail_collapsed: bool,

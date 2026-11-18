@@ -7,12 +7,25 @@ pub(super) enum Pane {
 }
 
 impl Pane {
-    fn toggle(self, saved: &mut SavedView) {
+    fn toggle(self, saved: &mut SavedView, graph: bool) {
+        if let (Self::Sidebar, false, Some(visible)) = (self, graph, saved.code_sidebar) {
+            saved.code_sidebar = Some(!visible);
+            return;
+        }
         let hidden = match self {
             Self::Sidebar => &mut saved.hide_sidebar,
             Self::Files => &mut saved.hide_files,
         };
         *hidden = !*hidden;
+    }
+}
+
+/// The sidebar the user chose for this mode, before small-window collapsing.
+fn prefers_sidebar(saved: &SavedView, graph: bool) -> bool {
+    if graph {
+        !saved.hide_sidebar
+    } else {
+        saved.code_sidebar.unwrap_or(!saved.hide_sidebar)
     }
 }
 
@@ -27,7 +40,7 @@ impl PaneLayout {
     fn new(graph: bool, saved: &SavedView) -> Self {
         Self {
             graph,
-            sidebar: !saved.hide_sidebar,
+            sidebar: prefers_sidebar(saved, graph),
             files: !graph && !saved.hide_files,
         }
     }
@@ -64,6 +77,12 @@ impl PaneLayout {
 }
 
 impl Pokarak {
+    /// Whether the Git worktree/ref sidebar is on screen right now.
+    pub(super) fn sidebar_shown(&self, window: &Window) -> bool {
+        self.session()
+            .is_some_and(|s| self.effective_pane_layout(window, &s.saved).sidebar)
+    }
+
     fn effective_pane_layout(&self, window: &Window, saved: &SavedView) -> PaneLayout {
         let mut layout = PaneLayout::new(self.git_history.active, saved);
         if theme::logical_px(window.viewport_size().width) < 1100.
@@ -77,7 +96,7 @@ impl Pokarak {
                 .session()
                 .and_then(|s| s.compact_sidebar)
                 .unwrap_or(false)
-                && !saved.hide_sidebar;
+                && prefers_sidebar(saved, self.git_history.active);
         }
         layout
     }
@@ -105,9 +124,13 @@ impl Pokarak {
             )
         {
             session.compact_sidebar = Some(!session.compact_sidebar.unwrap_or(false));
-            session.saved.hide_sidebar = false;
+            if !self.git_history.active && session.saved.code_sidebar.is_some() {
+                session.saved.code_sidebar = Some(true);
+            } else {
+                session.saved.hide_sidebar = false;
+            }
         } else {
-            pane.toggle(&mut session.saved);
+            pane.toggle(&mut session.saved, self.git_history.active);
         }
         // The hidden tree may own keyboard focus. Keep toolbar/menu shortcuts
         // reachable without reopening a file or changing its reading position.
@@ -118,7 +141,8 @@ impl Pokarak {
 
     pub(super) fn pane_toggles(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let saved = self.session().map(|session| &session.saved);
-        let sidebar = saved.is_none_or(|saved| !saved.hide_sidebar)
+        let graph = self.git_history.active;
+        let sidebar = saved.is_none_or(|saved| prefers_sidebar(saved, graph))
             && self
                 .session()
                 .is_none_or(|s| !s.compact_window || s.compact_sidebar.unwrap_or(false));
@@ -268,6 +292,34 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn code_sidebar_is_separate_only_for_new_views() {
+        // Legacy view: Code and Git keep sharing one sidebar choice.
+        let mut legacy = SavedView::default();
+        Pane::Sidebar.toggle(&mut legacy, false);
+        assert!(legacy.hide_sidebar && legacy.code_sidebar.is_none());
+        assert!(!PaneLayout::new(true, &legacy).sidebar);
+        assert!(!PaneLayout::new(false, &legacy).sidebar);
+
+        // New view: Code starts without the Git sidebar; Git keeps it.
+        let mut fresh = SavedView {
+            code_sidebar: Some(false),
+            ..Default::default()
+        };
+        assert!(PaneLayout::new(true, &fresh).sidebar);
+        assert!(!PaneLayout::new(false, &fresh).sidebar);
+        Pane::Sidebar.toggle(&mut fresh, false);
+        assert_eq!(fresh.code_sidebar, Some(true));
+        assert!(!fresh.hide_sidebar);
+        Pane::Sidebar.toggle(&mut fresh, true);
+        assert!(fresh.hide_sidebar);
+        assert!(PaneLayout::new(false, &fresh).sidebar);
+
+        // Older session files have no field and stay legacy.
+        let parsed: SavedView = serde_json::from_str(r#"{"hide_sidebar":true}"#).unwrap();
+        assert_eq!(parsed.code_sidebar, None);
+    }
+
+    #[test]
     fn resize_slots_follow_visible_panes_and_never_save_the_editor_width() {
         for graph in [false, true] {
             for hide_sidebar in [false, true] {
@@ -359,14 +411,14 @@ mod tests {
         }))
         .unwrap();
         let before = serde_json::to_value(&saved).unwrap();
-        Pane::Sidebar.toggle(&mut saved);
-        Pane::Files.toggle(&mut saved);
+        Pane::Sidebar.toggle(&mut saved, false);
+        Pane::Files.toggle(&mut saved, false);
         PaneLayout::new(false, &saved).remember_widths(&mut saved, &[940.]);
         let mut restored: SavedView =
             serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
         assert!(restored.hide_sidebar && restored.hide_files);
-        Pane::Files.toggle(&mut restored);
-        Pane::Sidebar.toggle(&mut restored);
+        Pane::Files.toggle(&mut restored, false);
+        Pane::Sidebar.toggle(&mut restored, false);
         assert_eq!(serde_json::to_value(&restored).unwrap(), before);
     }
 }

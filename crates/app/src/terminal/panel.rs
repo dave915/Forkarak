@@ -423,6 +423,10 @@ impl Render for TerminalDock {
                     .id("terminal-grid")
                     .key_context("PokarakTerminal")
                     .track_focus(&self.focus)
+                    // Keep the prompt off the window edge. Cell hit-testing uses the
+                    // canvas bounds and clamps clicks in this gutter to column 0.
+                    .pl(ui_px(10.))
+                    .pt(ui_px(4.))
                     .flex_1()
                     .min_h_0()
                     .min_w_0()

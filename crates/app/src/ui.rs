@@ -307,6 +307,8 @@ impl Session {
 
 pub struct Pokarak {
     command_bar_density: HashMap<&'static str, reader_toolbar::Density>,
+    /// Reader bars wide enough to label the view-mode buttons.
+    command_bar_labels: HashSet<&'static str>,
     inline_blame: Option<Entity<file_inspector::InlineBlame>>,
     reviewed_files: reviewed_files::ReviewedFiles,
     auto_refresh: auto_refresh::AutoRefresh,
@@ -674,6 +676,7 @@ impl Pokarak {
             workflow: git_workflow::WorkflowUi::default(),
             git_history: git_history::HistoryUi::default(),
             command_bar_density: HashMap::new(),
+            command_bar_labels: HashSet::new(),
             focus: cx.focus_handle(),
             legacy_split_diff: prefs.split_diff,
             prefs,
@@ -2120,7 +2123,7 @@ impl Pokarak {
                     .flex()
                     .items_center()
                     .child(
-                        file_icons::file_button(
+                        file_icons::file_tab_button(
                             ("tab", i),
                             tab,
                             format!(
@@ -2131,17 +2134,14 @@ impl Pokarak {
                                     .is_some_and(|root| self.code_edits.dirty(root, tab))
                                 {
                                     "● "
-                                } else if self
-                                    .current
-                                    .as_ref()
-                                    .is_some_and(|root| self.is_preview_tab(root, tab))
-                                {
-                                    "◇ "
                                 } else {
                                     ""
                                 },
                                 workspace_ux::tab_label(tab, &session.saved.tabs)
                             ),
+                            self.current
+                                .as_ref()
+                                .is_some_and(|root| self.is_preview_tab(root, tab)),
                             cx,
                         )
                         .ghost()
@@ -2168,16 +2168,20 @@ impl Pokarak {
                     ),
             );
         }
+        let compact_git = window.viewport_size().width < ui_px(1280.);
         let tabs = div()
             .flex()
             .items_center()
             .flex_none()
+            .gap_2()
+            .pr_2()
             .border_b_1()
             .border_color(palette.rgb(LINE))
-            .child(tabs)
+            .child(tabs.flex_1())
             .when_some(session.result_tab.as_ref(), |bar, tab| {
                 bar.child(self.result_tab_button(tab, cx))
-            });
+            })
+            .child(self.git_action_group(compact_git, cx));
         let reader = div().size_full().v_flex().overflow_hidden().child(tabs);
         if self.result_tab_active() {
             return reader.child(self.render_results(cx)).into_any_element();
@@ -2310,7 +2314,6 @@ impl Pokarak {
                 })
                 .into_any_element()
         };
-        let _ = window;
         reader
             .child(head)
             .when(code, |d| d.children(self.code_previous_panel(path, cx)))
@@ -2632,7 +2635,8 @@ impl Render for Pokarak {
             .child(div().h(ui_px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(palette.rgb(LINE)).bg(palette.rgb(SIDE)).text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
                 .child(context)
                 .when(self.current.is_some(), |row| row.child(self.git_sync_button(cx)))
-                .child(self.output_button("status-output", cx))
+                // An empty Output panel has nothing to show; keep the bar quiet.
+                .when(self.analysis_feedback.has_output(), |row| row.child(self.output_button("status-output", cx)))
                 .child(div().max_w(ui_px(400.)).min_w_0().text_ellipsis().child(keycaps::explanation(&self.git_running_status().unwrap_or_else(|| self.status.clone()), &self.prefs, self.current_project.as_deref(), palette)))
                 .when(!narrow || self.current.is_none(), |row| row.child(keycaps::explanation(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의·사용처  /  ⌘B 정의  /  ⌥F7 사용처" }, &self.prefs, self.current_project.as_deref(), palette))))
     }

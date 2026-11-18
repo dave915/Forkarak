@@ -310,6 +310,76 @@ impl Pokarak {
         cx.notify();
     }
 
+    /// The worktree this file tree reads, as a switcher. It keeps worktree
+    /// switching in view when Code view hides the Git sidebar.
+    fn files_worktree_picker(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let tree = self.active_worktree()?;
+        let palette = Palette::new(cx);
+        let name = tree
+            .path
+            .file_name()
+            .unwrap_or(tree.path.as_os_str())
+            .to_string_lossy()
+            .into_owned();
+        let branch = if tree.is_detached {
+            "detached HEAD".to_owned()
+        } else {
+            tree.branch.clone()
+        };
+        let label = format!("{branch} · {name}");
+        let others = self.inventory.len().saturating_sub(1);
+        Some(
+            div()
+                .flex_none()
+                .px_2()
+                .pt_2()
+                .child(
+                    theme::action_button("files-worktree-picker", self.opening_path.is_some())
+                        .small()
+                        .w_full()
+                        .accessibility_label(format!("워크트리 {label} · 다른 워크트리 선택"))
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Icon::new(IconName::FolderGit2)
+                                        .size(ui_px(14.))
+                                        .text_color(palette.rgb(BLUE)),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_left()
+                                        .text_ellipsis()
+                                        .child(label),
+                                )
+                                .when(others > 0, |row| {
+                                    row.child(
+                                        div()
+                                            .flex_none()
+                                            .text_size(ui_text(11.))
+                                            .text_color(palette.rgb(MUTED))
+                                            .child(format!("+{others}")),
+                                    )
+                                })
+                                .child(Icon::new(IconName::ChevronDown).size(ui_px(13.))),
+                        )
+                        .on_click(cx.listener(|app, _, w, cx| app.open_worktree_picker(w, cx)))
+                        .shortcut_tooltip(
+                            format!("워크트리 선택 · {}", tree.path.display()),
+                            &ChooseWorktree,
+                            None,
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn render_files(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         if self.results_open
             && self.result_surface == result_presentation::Surface::Files
@@ -340,6 +410,9 @@ impl Pokarak {
             .v_flex()
             .bg(palette.rgb(SIDE))
             .overflow_hidden()
+            .when(!self.sidebar_shown(window), |pane| {
+                pane.children(self.files_worktree_picker(cx))
+            })
             .child(
                 div()
                     .h(ui_px(34.))
@@ -391,13 +464,19 @@ impl Pokarak {
                 skipped_paths_notice("copy-skipped-files", &snapshot.skipped_paths)
             }))
             .when(!all, |d| d.child(self.review_filter_controls(cx)))
-            .child(
-                div()
-                    .px_2()
-                    .pb_1()
-                    .text_size(ui_text(11.))
-                    .text_color(palette.rgb(MUTED))
-                    .child(self.review_counts()),
+            // "검토 0/0" carries no information when nothing changed.
+            .when(
+                self.snapshot().is_some_and(|s| !s.changes.is_empty()),
+                |d| {
+                    d.child(
+                        div()
+                            .px_2()
+                            .pb_1()
+                            .text_size(ui_text(11.))
+                            .text_color(palette.rgb(MUTED))
+                            .child(self.review_counts()),
+                    )
+                },
             )
             .child(
                 div()

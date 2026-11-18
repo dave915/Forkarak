@@ -11,6 +11,9 @@ pub(super) enum Density {
     Compact,
     Full,
 }
+/// Logical width from which the code/unified/split buttons show words.
+const VIEW_LABEL_WIDTH: f32 = 900.;
+
 impl Density {
     fn for_width(width: f32) -> Self {
         if width >= 700. {
@@ -514,18 +517,30 @@ impl Pokarak {
             .border_b_1()
             .border_color(Palette::new(cx).rgb(LINE))
             .on_prepaint(move |bounds, _, cx| {
-                let density = Density::for_width(theme::logical_px(bounds.size.width));
+                let width = theme::logical_px(bounds.size.width);
+                let density = Density::for_width(width);
+                let labels = width >= VIEW_LABEL_WIDTH;
                 let _ = measured.update(cx, |app, cx| {
                     if app.command_bar_density.get(key) != Some(&density) {
                         app.command_bar_density.insert(key, density);
                         cx.notify();
                     }
+                    if app.command_bar_labels.contains(key) != labels {
+                        if labels {
+                            app.command_bar_labels.insert(key);
+                        } else {
+                            app.command_bar_labels.remove(key);
+                        }
+                        cx.notify();
+                    }
                 });
             });
-        for (id, icon, label, command, selected, disabled) in [
+        let labelled = density == Density::Full && self.command_bar_labels.contains(key);
+        for (id, icon, label, short, command, selected, disabled) in [
             (
                 "reader-code",
                 IconName::CodeXml,
+                "코드",
                 "코드",
                 Command::Code,
                 view.code,
@@ -535,6 +550,7 @@ impl Pokarak {
                 "reader-diff",
                 IconName::Diff,
                 "변경 · 통합",
+                "통합",
                 Command::Diff,
                 !view.code && !self.prefs.split_diff,
                 view.diff.is_none(),
@@ -543,6 +559,7 @@ impl Pokarak {
                 "reader-split",
                 IconName::Columns2,
                 "변경 · 좌우",
+                "좌우",
                 Command::Split,
                 !view.code && self.prefs.split_diff,
                 view.diff.is_none_or(|d| d.binary),
@@ -552,8 +569,21 @@ impl Pokarak {
                 continue;
             }
             let identity = self.reader_identity();
-            bar = bar.child(
+            let button = if labelled {
+                // The most used and least guessable icons get words when there is room.
+                Button::new(id)
+                    .icon(icon)
+                    .label(short)
+                    .accessibility_label(label)
+                    .ghost()
+                    .small()
+                    .h(ui_px(26.))
+                    .flex_none()
+            } else {
                 toolbar::toolbar_icon(id, icon, label)
+            };
+            bar = bar.child(
+                button
                     .tooltip(label)
                     .selected(selected)
                     .disabled(disabled || identity.is_none())

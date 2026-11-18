@@ -208,6 +208,28 @@ impl DiffAnalysis {
                 }
             }
         }
+        // The `--- a/` / `+++ b/` file headers repeat the path already shown in the
+        // file controls. Hide them for display only, as the split view does; the raw
+        // patch and line coordinates are untouched.
+        let file_headers: Vec<_> = lines
+            .iter()
+            .take(2)
+            .enumerate()
+            .filter_map(|(i, line)| {
+                (line.kind == DiffKind::Header
+                    && (line.text.starts_with("--- ") || line.text.starts_with("+++ ")))
+                .then_some(i)
+            })
+            .collect();
+        if keep
+            .iter()
+            .enumerate()
+            .any(|(i, &kept)| kept && !file_headers.contains(&i))
+        {
+            for i in file_headers {
+                keep[i] = false;
+            }
+        }
         let visible: Vec<_> = keep
             .iter()
             .enumerate()
@@ -536,6 +558,30 @@ mod tests {
         assert_eq!(filtered.hunks, vec![0]);
         assert_eq!(document.patch, "unchanged original patch");
         assert_eq!(document.lines.len(), 8);
+    }
+
+    #[test]
+    fn file_path_headers_are_hidden_but_coordinates_kept() {
+        let lines = vec![
+            line(DiffKind::Header, "--- a/docs/entry.txt", None, None),
+            line(DiffKind::Header, "+++ b/docs/entry.txt", None, None),
+            line(DiffKind::Header, "@@ -0,0 +1 @@", None, None),
+            line(DiffKind::Addition, "History entry", None, Some(1)),
+        ];
+        let view = DiffAnalysis::new(&lines).view(&lines, false);
+        assert_eq!(view.visible.as_ref(), &[2, 3]);
+        assert_eq!(view.hunks, vec![0]);
+        let only_headers = [
+            line(DiffKind::Header, "--- a/x", None, None),
+            line(DiffKind::Header, "+++ b/x", None, None),
+        ];
+        assert_eq!(
+            DiffAnalysis::new(&only_headers)
+                .view(&only_headers, false)
+                .visible
+                .as_ref(),
+            &[0, 1]
+        );
     }
 
     #[test]

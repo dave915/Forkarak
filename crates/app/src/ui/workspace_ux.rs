@@ -49,6 +49,7 @@ fn review_preferences(
     let mut saved = remembered.unwrap_or_default();
     if !known {
         saved.diff_hide_whitespace = default_hide;
+        saved.code_sidebar = Some(false);
     }
     let split = remembered_split.unwrap_or(if known { legacy_split } else { default_split });
     (saved, split)

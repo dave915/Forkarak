@@ -624,6 +624,11 @@ impl Pokarak {
         let tool = panel.tool.clone();
         div()
             .id("language-panel")
+            // Keep completion/documentation lists first in the bubble phase,
+            // while excluding the editor beneath a floating language panel.
+            // Also consume unused deltas over short lists and the panel header.
+            .occlude()
+            .on_scroll(|_, _, cx| cx.stop_propagation())
             .key_context("ForkarakLanguage")
             .when_some(self.language_tools.focus.as_ref(), |d, f| d.track_focus(f))
             .capture_key_down(cx.listener(Self::language_key))

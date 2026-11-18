@@ -295,6 +295,11 @@ impl Pokarak {
                     .child(
                         div()
                             .id("anchored-navigation-results")
+                            // Occlude the editor's hitbox, including its capture-phase
+                            // scroll handling. Bubble only after the inner list scrolls,
+                            // consuming wheel input over the header and list boundaries.
+                            .occlude()
+                            .on_scroll(|_, _, cx| cx.stop_propagation())
                             .w(ui_px(650.).min(window.viewport_size().width - ui_px(32.)))
                             .h(ui_px(360.).min(window.viewport_size().height - ui_px(90.)))
                             .border_1()

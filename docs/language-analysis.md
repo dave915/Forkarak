@@ -1,12 +1,18 @@
 # Language analysis and managed tools
 
-이 문서는 Forkarak **1.0.3**의 언어 지원과 관리 도구를 설명합니다. [설치와 소스 빌드](distribution.md)도 참고하세요.
+이 문서는 현재 개발 버전의 언어 지원과 관리 도구를 설명합니다. [설치와 소스 빌드](distribution.md)도 참고하세요.
 
 ## Start in the app
 
 File viewing, syntax highlighting and text search work immediately, without installation, indexing or language-server startup. **코드 지원…** provides completion, diagnostics, file symbols, function help, hover/type information and code navigation when the selected server supports them. 작업 화면 선택과 코드 지원은 별개입니다. 작업 파일의 [바로 편집](../README.md#편집과-탐색)은 언어 분석 허용을 뜻하지 않습니다.
 
-Open **Settings → 언어 분석·포맷 → 설치·업데이트 관리…** to reach **언어 지원 관리**. The manager distinguishes bundled tools, first-use downloads and unsupported/prerequisite-limited entries. Use **설치**, **업데이트 다운로드**, **취소** or **다시 시도** explicitly; version, source, checksum and license/notice details remain inspectable. Failed or cancelled updates retain the previous active installation. A pending code action can be resumed with **원래 요청 계속** only after the original file, source and trust are rechecked.
+설정의 **언어 분석·포맷 → 언어 서버 선택·설치…**에서 사용할 언어를 켜고 서버를 설치하세요. 공개 버전 1.0.3에서는 같은 버튼이 **설치·업데이트 관리…**로 표시됩니다. 도구가 준비되면 대상 워크트리에서 분석을 허용하세요. 기본 서버는 관리 화면에서 구성되며, 직접 실행 경로와 인수를 지정할 때만 **사용자 지정 서버·포맷터…**를 펼치면 됩니다. The manager distinguishes bundled tools, first-use downloads and unsupported/prerequisite-limited entries. Use **설치**, **업데이트 다운로드**, **취소** or **다시 시도** explicitly; version, source, checksum and license/notice details remain inspectable. Failed or cancelled updates retain the previous active installation. A pending code action can be resumed with **원래 요청 계속** only after the original file, source and trust are rechecked.
+
+분석을 켠 코드 편집기에서는 다음 동작을 사용할 수 있습니다.
+
+- **자동완성**은 입력 위치에 후보와 설명을 표시합니다. **⌃Space**로 직접 열고 ↑·↓로 선택한 뒤 Return으로 초안에 적용합니다. 설정에서 **입력 중 자동완성**을 끌 수 있습니다.
+- **⌘I**로 함수 시그니처와 현재 인자를, **⌥F1**으로 커서에 있는 심볼의 타입과 설명을 확인합니다. **입력 중 함수 도움말**을 켜면 여는 괄호와 쉼표에서도 도움말이 열립니다.
+- **F12**는 정의가 하나면 해당 코드로 이동합니다. **⌥⇧F12**는 사용처를 파일별 코드 문맥과 함께 편집기 탭에 표시합니다. 결과 상단이나 탐색 설정에서 기존 팝오버·파일 영역·하단 배치도 선택할 수 있습니다.
 
 - Default macOS packages include **Eclipse JDT LS 1.63.0 + Temurin 25.0.5+8** for Java. No Homebrew or user-installed Java is needed to run this server.
 - **Kotlin** uses the official JetBrains 271.2085.0 first-use download, with its runtime and managed Maven. Kotlin is partially proprietary; the repository's Apache license does not establish a redistribution grant for the complete binary. It is not bundled or replaced with a paid unified server.

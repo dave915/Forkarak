@@ -2281,13 +2281,29 @@ impl Render for Pokarak {
             .or(self.current.as_ref())
             .map(|p| {
                 let path = p.to_string_lossy();
-                if self.opening_path.is_none() && !self.git_history.active {
-                    format!("{path}  ·  {}", self.applied_comparison_label())
+                if self.opening_path.is_none() {
+                    let comparison = if self.git_history.active {
+                        self.visible_comparison_label()
+                    } else {
+                        self.applied_comparison_label()
+                    };
+                    format!("{path}  ·  {comparison}")
                 } else {
                     path.to_string()
                 }
             })
             .unwrap_or_else(|| "로컬 Git 프로젝트".into());
+        let context_tooltip = context.clone();
+        let context = div()
+            .id("workspace-status-context")
+            .flex_1()
+            .min_w_0()
+            .text_ellipsis()
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(context_tooltip.clone())
+                    .build(window, cx)
+            })
+            .child(context);
         #[cfg(target_os = "macos")]
         let body = self.with_terminal_dock(body, window);
         let body = self.with_execution_manager(body, window, cx);
@@ -2349,7 +2365,6 @@ impl Render for Pokarak {
             .children(self.render_git_activity(cx))
             .children(self.render_repository_result(cx))
             .children(self.render_workflow_status(cx))
-            .children(self.workspace_context(cx))
             .children(self.update_banner(cx))
             .children(self.code_drafts_banner(cx))
             .children(self.reviewed_files_notice(cx))
@@ -2370,7 +2385,7 @@ impl Render for Pokarak {
             .children(self.result_popover(window, cx))
             .children(self.language_popover(window, cx))
             .child(div().h(ui_px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(palette.rgb(LINE)).bg(palette.rgb(SIDE)).text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
-                .child(div().flex_1().min_w_0().text_ellipsis().child(context))
+                .child(context)
                 .when(self.current.is_some(), |row| row.child(self.git_sync_button(cx)))
                 .child(self.output_button("status-output", cx))
                 .child(div().max_w(ui_px(400.)).min_w_0().text_ellipsis().child(self.git_running_status().unwrap_or_else(|| self.status.clone())))

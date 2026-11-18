@@ -270,6 +270,7 @@ impl Pokarak {
                         div()
                             .id("editor-previous-code")
                             .occlude()
+                            .on_scroll(|_, _, cx| cx.stop_propagation())
                             .w(ui_px(580.))
                             .max_h(ui_px(220.))
                             .overflow_y_scroll()

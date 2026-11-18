@@ -130,6 +130,9 @@ impl Pokarak {
             ("워크트리 선택…  ⌘⇧J", "worktree"),
             ("브랜치 전체 변경 비교…", "compare"),
             ("HEAD로 돌아가기", "head"),
+            ("그래프 브랜치 필터…", "graph-filter"),
+            ("커밋 검색…  ⌘F", "graph-search"),
+            (self.graph_detail_label(), "graph-detail"),
             ("브랜치 만들기…", "create"),
             ("체크아웃…", "checkout"),
             ("Merge…", "merge"),
@@ -144,7 +147,9 @@ impl Pokarak {
         ] {
             menu = menu.menu_with_disabled(
                 label,
-                (busy && command != "log") || (command == "head" && !branch),
+                (busy && !matches!(command, "log" | "graph-detail"))
+                    || (command.starts_with("graph-") && !self.git_history.active)
+                    || (command == "head" && !branch),
                 Box::new(RunToolbar {
                     root: self.current.clone(),
                     generation: self.request,
@@ -168,6 +173,14 @@ impl Pokarak {
             return;
         }
         match action.command.as_str() {
+            "graph-filter" if self.git_history.active => self.open_branch_filter(w, cx),
+            "graph-search" if self.git_history.active => self.open_graph_search(w, cx),
+            "graph-detail" if self.git_history.active => {
+                let collapsed = self
+                    .session()
+                    .is_some_and(|s| s.saved.graph_detail_collapsed);
+                self.set_graph_detail_collapsed(!collapsed, cx);
+            }
             "worktree" => self.open_worktree_picker(w, cx),
             "compare" => self.open_branch_review(w, cx),
             "head" => {
@@ -194,6 +207,17 @@ impl Pokarak {
         }
     }
 
+    fn graph_detail_label(&self) -> &'static str {
+        if self
+            .session()
+            .is_some_and(|s| s.saved.graph_detail_collapsed)
+        {
+            "그래프 상세 펼치기"
+        } else {
+            "그래프 상세 접기"
+        }
+    }
+
     fn git_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.loading || self.git_is_busy();
         let branch = self
@@ -205,6 +229,8 @@ impl Pokarak {
         let palette = Palette::new(cx);
         let log_weak = weak.clone();
         let log_root = root.clone();
+        let graph = self.git_history.active;
+        let detail_label = self.graph_detail_label();
         div()
             .id("git-toolbar")
             .flex_none()
@@ -319,7 +345,28 @@ impl Pokarak {
             .child(
                 toolbar_icon("git-actions", IconName::Ellipsis, "Git 작업 더 보기")
                     .tooltip("Git 작업 더 보기")
-                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                    .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+                        for (label, command) in [
+                            ("그래프 브랜치 필터…", "graph-filter"),
+                            ("커밋 검색…  ⌘F", "graph-search"),
+                            (detail_label, "graph-detail"),
+                        ] {
+                            let target = log_weak.clone();
+                            let action = RunToolbar {
+                                root: log_root.clone(),
+                                generation,
+                                command: command.into(),
+                            };
+                            menu = menu.item(
+                                PopupMenuItem::new(label)
+                                    .disabled(!graph || (busy && command != "graph-detail"))
+                                    .on_click(move |_, w, cx| {
+                                        let _ = target.update(cx, |app, cx| {
+                                            app.run_toolbar_command(&action, w, cx);
+                                        });
+                                    }),
+                            );
+                        }
                         let actions = log_weak.clone();
                         let actions_root = log_root.clone();
                         let logs = log_weak.clone();

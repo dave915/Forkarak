@@ -178,7 +178,6 @@ impl Pokarak {
     ) -> AnyElement {
         let palette = Palette::new(cx);
         let ui = &self.git_history;
-        let busy = history_disabled(self);
         let weak = cx.entity().downgrade();
         let table = self.commit_table(window, cx);
         let saved = self.session().map(|session| &session.saved);
@@ -221,52 +220,6 @@ impl Pokarak {
             .v_flex()
             .overflow_hidden()
             .child(
-                div()
-                    .id("graph-controls")
-                    .overflow_x_scroll()
-                    .h(ui_px(38.))
-                    .flex_none()
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(palette.rgb(LINE))
-                    .child(self.branch_filter_control(cx))
-                    .child(
-                        div()
-                            .text_size(ui_text(11.))
-                            .text_color(palette.rgb(MUTED))
-                            .child(status),
-                    )
-                    .child(div().flex_1())
-                    .child(self.graph_search_control(cx))
-                    .child(
-                        history_button(
-                            &weak,
-                            "toggle-graph-detail",
-                            if collapsed {
-                                "상세 펼치기"
-                            } else {
-                                "상세 접기"
-                            },
-                            false,
-                            move |app, _, cx| app.set_graph_detail_collapsed(!collapsed, cx),
-                        )
-                        .ghost(),
-                    )
-                    .child(
-                        history_button(
-                            &weak,
-                            "history-reload",
-                            "새로고침",
-                            busy,
-                            |app, window, cx| app.refresh(window, cx),
-                        )
-                        .ghost(),
-                    ),
-            )
-            .child(
                 Button::new("graph-working-changes")
                     .ghost()
                     .small()
@@ -274,7 +227,7 @@ impl Pokarak {
                     .w_full()
                     .selected(self.inline_commit_active())
                     .disabled(self.loading || self.git_is_busy())
-                    .accessibility_label(format!("{working_title} {count}"))
+                    .accessibility_label(format!("{working_title} {count} · {status}"))
                     .child(
                         div()
                             .w_full()
@@ -287,7 +240,17 @@ impl Pokarak {
                                     .text_color(palette.rgb(BLUE)),
                             )
                             .child(working_title)
-                            .child(div().text_color(palette.rgb(MUTED)).child(count)),
+                            .child(div().text_color(palette.rgb(MUTED)).child(count))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_right()
+                                    .text_ellipsis()
+                                    .text_size(ui_text(11.))
+                                    .text_color(palette.rgb(MUTED))
+                                    .child(status),
+                            ),
                     )
                     .tooltip("변경 사항 검토 · 스테이징 · 커밋")
                     .on_click(cx.listener(|app, _, window, cx| {
@@ -394,7 +357,11 @@ impl Pokarak {
         .into_any_element()
     }
 
-    pub(super) fn set_graph_detail_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn set_graph_detail_collapsed(
+        &mut self,
+        collapsed: bool,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(session) = self.current.as_ref().and_then(|r| self.sessions.get_mut(r)) {
             session.saved.graph_detail_collapsed = collapsed;
         }

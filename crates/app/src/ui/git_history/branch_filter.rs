@@ -39,6 +39,8 @@ impl Pokarak {
             .disabled(self.git_history.nav.catalog.is_none() || self.loading || self.git_is_busy())
             .child(
                 div()
+                    .w_full()
+                    .text_left()
                     .flex()
                     .min_w_0()
                     .items_center()
@@ -50,7 +52,11 @@ impl Pokarak {
             .on_click(cx.listener(|app, _, w, cx| app.open_branch_filter(w, cx)))
     }
 
-    fn open_branch_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn open_branch_filter(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(root), Some(catalog)) =
             (self.current.clone(), self.git_history.nav.catalog.clone())
         else {

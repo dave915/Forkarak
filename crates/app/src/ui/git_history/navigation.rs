@@ -125,7 +125,6 @@ impl Pokarak {
             .small()
             .ghost()
             .icon(IconName::Search)
-            .label("검색")
             .accessibility_label("커밋 검색")
             .tooltip_with_action("커밋 검색", &SearchGitGraph, Some("GitGraph"))
             .disabled(self.git_history.nav.catalog.is_none() || self.loading || self.git_is_busy())
@@ -544,6 +543,19 @@ impl Pokarak {
             .v_flex()
             .bg(palette.rgb(SIDE))
             .pt_1()
+            .when(self.git_history.active, |sidebar| {
+                sidebar.child(
+                    div()
+                        .flex_none()
+                        .h(ui_px(30.))
+                        .px_1()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(self.branch_filter_control(cx).flex_1())
+                        .child(self.graph_search_control(cx)),
+                )
+            })
             .child(list.flex_1().min_h_0())
             .into_any_element()
     }

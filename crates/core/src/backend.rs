@@ -7,9 +7,9 @@ use std::{
 };
 
 use crate::{
-    ChangedFile, CompareMode, DiffDocument, DiffKind, FileStatus, Snapshot, SourceLocation,
+    ChangedFile, CompareMode, DiffDocument, DiffKind, FileStatus, Snapshot, SourceLocation, eol,
     filesystem::{self, Node, feed},
-    git::{self, Entry, Index, Tree},
+    git::{self, Index, Tree},
     search_exclusions::SearchExclusions,
     text,
 };
@@ -19,6 +19,7 @@ struct Capture {
     head_tree: Tree,
     index: Index,
     current: Tree,
+    normalized: BTreeSet<PathBuf>,
     files: Vec<PathBuf>,
     fingerprint: String,
 }
@@ -54,6 +55,7 @@ impl Capture {
             .cloned()
             .collect::<BTreeSet<_>>();
         let mut current = Tree::new();
+        let mut crlf = BTreeMap::new();
         let mut files = Vec::new();
         let mut fingerprint = Sha256::new();
         feed(&mut fingerprint, root.as_os_str().as_bytes());
@@ -64,7 +66,7 @@ impl Capture {
             let submodule = indexed.filter(|e| e.mode == "160000");
             // Submodules are opaque; never recurse into a separately owned repo.
             let state = if let Some(entry) = submodule {
-                Some(entry.clone())
+                Some((entry.clone(), None))
             } else {
                 filesystem::inspect(root, &path, sha256, filemode)?
             };
@@ -76,7 +78,10 @@ impl Capture {
                     feed(&mut fingerprint, entry.oid.as_bytes());
                 }
             }
-            if let Some(mut entry) = state {
+            if let Some((mut entry, stats)) = state {
+                if let Some(stats) = stats {
+                    crlf.insert(path.clone(), stats);
+                }
                 if !filemode
                     && entry.mode == "100644"
                     && let Some(original) = indexed
@@ -95,11 +100,25 @@ impl Capture {
                 feed(&mut fingerprint, b"missing");
             }
         }
+        let normalized = eol::normalized_paths(root, &crlf)?;
+        for path in &normalized {
+            let entry = current.get_mut(path).expect("inspected regular file");
+            entry.oid = filesystem::normalized_oid(
+                root,
+                path,
+                sha256,
+                crlf[path].normalized_len(),
+                &entry.oid,
+            )?;
+            feed(&mut fingerprint, path.as_os_str().as_bytes());
+            feed(&mut fingerprint, entry.oid.as_bytes());
+        }
         Ok(Self {
             head,
             head_tree,
             index,
             current,
+            normalized,
             files,
             fingerprint: format!("{:x}", fingerprint.finalize()),
         })
@@ -145,7 +164,14 @@ impl Capture {
                 ..ChangedFile::default()
             });
         }
-        detect_renames(root, baseline, &self.index, &self.current, &mut changes)?;
+        detect_renames(
+            root,
+            baseline,
+            &self.index,
+            &self.current,
+            &self.normalized,
+            &mut changes,
+        )?;
         Ok(changes)
     }
 }
@@ -219,7 +245,7 @@ fn snapshot_inner(path: &Path, compare: &CompareMode, inspect_siblings: bool) ->
         matches!(compare, CompareMode::Uncommitted),
     )?;
     for change in &mut changes {
-        let document = document(&root, change, &base_tree)?;
+        let document = document(&root, change, &base_tree, Some(&capture.normalized))?;
         change.binary = document.binary;
         change.additions = document
             .lines
@@ -312,21 +338,22 @@ pub(crate) fn diff(root: &Path, file: &ChangedFile, compare: &CompareMode) -> Re
         .transpose()?;
     let head = git::head(&root)?;
     let baseline = git::baseline(&root, compare, head.as_deref())?;
-    document(&root, &file, &git::tree(&root, baseline.as_deref())?)
+    document(&root, &file, &git::tree(&root, baseline.as_deref())?, None)
 }
 
-fn document(root: &Path, file: &ChangedFile, baseline: &Tree) -> Result<DiffDocument> {
+fn document(
+    root: &Path,
+    file: &ChangedFile,
+    baseline: &Tree,
+    normalized: Option<&BTreeSet<PathBuf>>,
+) -> Result<DiffDocument> {
     let old_path = file.old_path.as_ref().unwrap_or(&file.path);
     let old = baseline
         .get(old_path)
         .map(|entry| git::blob(root, entry))
         .transpose()?
         .unwrap_or_default();
-    let new = if let Some(entry) = gitlink(root, &file.path)? {
-        Some(git::blob(root, &entry)?)
-    } else {
-        filesystem::read(root, &file.path)?
-    };
+    let new = comparison_bytes(root, &file.path, normalized)?;
     ensure!(
         baseline.contains_key(old_path)
             || new.is_some()
@@ -343,16 +370,36 @@ fn document(root: &Path, file: &ChangedFile, baseline: &Tree) -> Result<DiffDocu
     Ok(document)
 }
 
-fn gitlink(root: &Path, path: &Path) -> Result<Option<Entry>> {
-    if !matches!(filesystem::open(root, path)?, Node::Directory) {
-        return Ok(None);
+fn comparison_bytes(
+    root: &Path,
+    path: &Path,
+    normalized: Option<&BTreeSet<PathBuf>>,
+) -> Result<Option<(Vec<u8>, bool)>> {
+    match filesystem::open(root, path)? {
+        Node::Missing => Ok(None),
+        Node::Link(target) => Ok(Some((target, false))),
+        Node::Directory => git::index(root)?
+            .get(path)
+            .and_then(|stages| stages.get(&0))
+            .filter(|entry| entry.mode == "160000")
+            .map(|entry| git::blob(root, entry))
+            .transpose(),
+        Node::File(file) => {
+            let (mut bytes, truncated) = filesystem::preview(file)?;
+            // A truncated side has no patch; keep its bounded disk preview.
+            if !truncated && bytes.contains(&b'\r') {
+                let convert = match normalized {
+                    Some(paths) => paths.contains(path),
+                    None => eol::should_normalize(root, path, &bytes)?,
+                };
+                if convert {
+                    let length = eol::normalize(&mut bytes);
+                    bytes.truncate(length);
+                }
+            }
+            Ok(Some((bytes, truncated)))
+        }
     }
-    // Only submodule directories have content in Git's index.
-    Ok(git::index(root)?
-        .get(path)
-        .and_then(|stages| stages.get(&0))
-        .filter(|e| e.mode == "160000")
-        .cloned())
 }
 
 pub(crate) fn read_file(root: &Path, path: &Path) -> Result<String> {
@@ -435,6 +482,7 @@ fn detect_renames(
     baseline: &Tree,
     index: &Index,
     current: &Tree,
+    normalized: &BTreeSet<PathBuf>,
     changes: &mut Vec<ChangedFile>,
 ) -> Result<()> {
     let deletions = changes
@@ -481,7 +529,7 @@ fn detect_renames(
         }
         for &i in &additions {
             if !matched.contains(&i)
-                && let Some(bytes) = filesystem::read(root, &changes[i].path)?
+                && let Some(bytes) = comparison_bytes(root, &changes[i].path, Some(normalized))?
                 && let Some(profile) = profile(bytes)
             {
                 new_profiles.push((i, current[&changes[i].path].mode.clone(), profile));

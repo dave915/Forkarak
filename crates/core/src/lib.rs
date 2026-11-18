@@ -3,10 +3,11 @@
 //!
 //! Paths in snapshots are relative to the canonical worktree root. Diff line
 //! numbers are one-based; search/navigation locations are zero-based UTF-16.
-//! Working files are compared as stored on disk: repository clean/textconv
-//! filters are deliberately never executed. Gitlinks are opaque index entries.
+//! Comparisons apply Git's intrinsic text EOL rules to regular working files.
+//! File reads return disk bytes. Gitlinks are opaque index entries.
 mod backend;
 pub mod comparison;
+mod eol;
 pub mod file_history;
 mod filesystem;
 mod git;

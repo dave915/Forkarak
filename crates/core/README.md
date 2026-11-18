@@ -37,9 +37,11 @@ server, fetches missing objects, or runs repository filters or hooks.
   sensitive, returns individual occurrences, and honors the requested limit
   up to 10,000 results. Empty/multiline queries return no results.
 
-Files are compared as bytes stored on disk. Clean/smudge/textconv filters and
-attribute-based transformations, including line-ending normalization, are not
-run. A checkout with transformed bytes can therefore differ from its Git blob.
+Status and working diffs apply Git's intrinsic text EOL attributes and
+`core.autocrlf`. Auto conversion respects binary contents and CRLF already in
+the index. Whole-file reads, save preconditions and refresh fingerprints retain
+the exact disk bytes. Other content transformations such as external filters,
+textconv, ident expansion and working-tree encoding are outside this comparison.
 NUL-containing and non-UTF-8 contents are binary. Symlinks show the link target
 spelling and never follow the target; search skips symlinks. Traversal outside
 the root, Git administration paths, symlink ancestors, and special files cannot

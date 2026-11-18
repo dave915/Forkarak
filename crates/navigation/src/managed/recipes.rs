@@ -183,6 +183,7 @@ fn java_version(
     artifacts: &mut Vec<ToolArtifact>,
     major: u16,
 ) -> Result<PathBuf> {
+    let c = &c.for_component("Temurin JDK");
     let source =
         format!("https://api.github.com/repos/adoptium/temurin{major}-binaries/releases/latest");
     let release = io::json(&source, scratch, c)?;
@@ -229,6 +230,7 @@ fn maven(
     c: &InstallControl,
     artifacts: &mut Vec<ToolArtifact>,
 ) -> Result<PathBuf> {
+    let c = &c.for_component("Maven");
     let base = "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/";
     let metadata = format!("{base}maven-metadata.xml");
     let text = io::text(&metadata, scratch, c)?;

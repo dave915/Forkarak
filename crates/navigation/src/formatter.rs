@@ -108,10 +108,7 @@ pub(crate) fn format(
             }
         }
         let status = process.exit_status().context("Missing formatter status")?;
-        if !matches!(
-            status.as_str(),
-            "Language server exited: exit code 0" | "Language server exited: exit status: 0"
-        ) {
+        if !matches!(status, crate::cancellation::ProcessExit::Code(0)) {
             bail!("Formatter failed ({status}): {stderr}");
         }
         output.context("Formatter returned no output")

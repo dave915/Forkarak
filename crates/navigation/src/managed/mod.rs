@@ -1,5 +1,7 @@
 //! Explicit, versioned app-owned tool installation. Construction/status never install or execute.
 mod archive;
+#[cfg(all(test, target_os = "macos"))]
+mod install_fixtures;
 mod io;
 mod recipes;
 
@@ -92,10 +94,19 @@ struct Operation {
 #[derive(Clone)]
 pub struct InstallControl {
     inner: Arc<Operation>,
+    component: &'static str,
+    #[cfg(test)]
+    curl: Option<PathBuf>,
 }
 impl InstallControl {
     fn new(package: &str) -> Self {
         Self {
+            component: RECIPES
+                .iter()
+                .find(|r| r.id == package)
+                .map_or("언어 도구", |r| r.name),
+            #[cfg(test)]
+            curl: None,
             inner: Arc::new(Operation {
                 progress: Mutex::new(InstallProgress {
                     package: package.into(),
@@ -111,6 +122,12 @@ impl InstallControl {
                 activation: Mutex::new(()),
                 committed: AtomicBool::new(false),
             }),
+        }
+    }
+    fn for_component(&self, component: &'static str) -> Self {
+        Self {
+            component,
+            ..self.clone()
         }
     }
     pub fn cancel(&self) -> Result<()> {
@@ -176,32 +193,87 @@ impl InstallControl {
         p.downloaded_bytes = bytes;
         p.total_bytes = total.filter(|n| *n >= bytes);
     }
-    fn finish(&self, result: Result<InstalledTool>) {
+    fn finish(&self, result: Result<InstalledTool>, attempt: &Path) {
         let mut p = self
             .inner
             .progress
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        match &result {
-            Ok(_) => {
+        let result = match result {
+            Ok(tool) => {
                 p.phase = InstallPhase::Complete;
                 p.message = "Installed; analysis still requires explicit activation".into();
+                Ok(tool)
+            }
+            Err(_) if self.inner.cancellation.is_cancelled() => {
+                p.phase = InstallPhase::Cancelled;
+                p.message = "설치를 취소했습니다.".into();
+                let detail = "Tool installation cancelled".to_owned();
+                p.error = Some(detail.clone());
+                Err(detail)
             }
             Err(e) => {
-                p.phase = if self.inner.cancellation.is_cancelled() {
-                    InstallPhase::Cancelled
-                } else {
-                    InstallPhase::Failed
-                };
-                p.message = format!("{e:#}");
-                p.error = Some(p.message.clone());
+                p.message = e
+                    .downcast_ref::<io::DownloadFailure>()
+                    .map_or_else(|| failure_summary(&p.phase).into(), ToString::to_string);
+                let detail = safe_diagnostic(&format!("{e:#}"));
+                p.phase = InstallPhase::Failed;
+                p.error = Some(detail.clone());
+                Err(detail)
             }
-        }
+        };
+        // Publish completion to waiters after recording the same terminal snapshot.
+        let snapshot = p.clone();
         drop(p);
-        *self.inner.result.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(result.map_err(|e| format!("{e:#}")));
+        let _ = atomic_json(attempt, &snapshot);
+        *self.inner.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
         self.inner.done.notify_all();
     }
+}
+
+fn failure_summary(phase: &InstallPhase) -> &'static str {
+    match phase {
+        InstallPhase::Resolving => "공식 배포 정보를 확인하지 못했습니다.",
+        InstallPhase::Downloading => "다운로드한 설치 파일을 처리하지 못했습니다.",
+        InstallPhase::Verifying => "설치 파일의 체크섬을 확인하지 못했습니다.",
+        InstallPhase::Extracting => "설치 파일의 압축을 풀지 못했습니다.",
+        InstallPhase::Activating => "설치한 버전을 활성화하지 못했습니다.",
+        _ => "언어 도구를 설치하지 못했습니다.",
+    }
+}
+
+// Subprocesses and provider metadata can echo whole signed URLs or credentials.
+// Keep safe diagnostic lines, including the independently recorded exit/HTTP status.
+fn safe_diagnostic(detail: &str) -> String {
+    detail
+        .lines()
+        .map(|line| {
+            let lower = line.to_ascii_lowercase();
+            if line.contains(['?', '@', '='])
+                || line.chars().any(char::is_control)
+                || [
+                    "://",
+                    "authorization",
+                    "cookie",
+                    "password",
+                    "credential:",
+                    "signature:",
+                    "secret:",
+                    "basic ",
+                    "bearer ",
+                    "token:",
+                    "api-key",
+                ]
+                .iter()
+                .any(|part| lower.contains(part))
+            {
+                "[sensitive detail omitted]"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Clone)]
@@ -357,10 +429,26 @@ impl ManagedTools {
             InstallPhase::Complete | InstallPhase::Failed | InstallPhase::Cancelled
         ) {
             progress.phase = InstallPhase::Failed;
-            progress.message =
-                "Previous installation was interrupted; active version retained. Retry explicitly."
-                    .into();
-            progress.error = Some(progress.message.clone());
+            progress.message = "이전 설치가 중단되었습니다.".into();
+            progress.error = Some("Previous installation ended without a terminal result".into());
+        } else if matches!(
+            progress.phase,
+            InstallPhase::Failed | InstallPhase::Cancelled
+        ) {
+            // Older versions duplicated raw subprocess output in both fields.
+            if progress.error.as_ref() == Some(&progress.message) {
+                progress.message = if progress.phase == InstallPhase::Cancelled {
+                    "설치를 취소했습니다.".into()
+                } else {
+                    failure_summary(&progress.phase).into()
+                };
+            }
+            progress.error = progress.error.map(|detail| {
+                safe_diagnostic(&detail.replace(
+                    "Tool installer failed (Language server exited: ",
+                    "Tool installer failed (",
+                ))
+            });
         }
         Ok(Some(progress))
     }
@@ -417,14 +505,10 @@ impl ManagedTools {
                         "Installer worker panicked; previous active version retained"
                     ))
                 });
-                control.finish(outcome);
-                let attempts = tools.root.join("attempts");
-                if attempts.is_dir() {
-                    let _ = atomic_json(
-                        &attempts.join(format!("{package}.json")),
-                        &control.snapshot(),
-                    );
-                }
+                control.finish(
+                    outcome,
+                    &tools.root.join("attempts").join(format!("{package}.json")),
+                );
             })?;
         Ok(returned)
     }
@@ -432,13 +516,13 @@ impl ManagedTools {
         self.begin_install(package)
     }
     fn install(&self, package: &str, control: &InstallControl) -> Result<InstalledTool> {
-        control.check()?;
         create_owned_root(&self.root)?;
         fs::create_dir_all(self.root.join("attempts"))?;
         atomic_json(
             &self.root.join("attempts").join(format!("{package}.json")),
             &control.snapshot(),
         )?;
+        control.check()?;
         let lock = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -832,8 +916,37 @@ mod tests {
         update.cancel().unwrap();
         assert!(update.wait().is_err());
         assert_eq!(update.snapshot().phase, InstallPhase::Cancelled);
+        let saved = tools.last_attempt("python").unwrap().unwrap();
+        assert_eq!(saved.phase, InstallPhase::Cancelled);
+        assert_ne!(saved.error.as_deref(), Some(saved.message.as_str()));
         assert_eq!(fs::read(root.join("managed-tools.json")).unwrap(), before);
         fs2::FileExt::unlock(&lock).unwrap();
+    }
+    #[test]
+    fn generic_failure_keeps_cause_and_old_attempts_remain_readable() {
+        let t = tempfile::tempdir().unwrap();
+        let tools = ManagedTools::new(t.path().canonicalize().unwrap(), None).unwrap();
+        let attempts = tools.root().join("attempts");
+        fs::create_dir(&attempts).unwrap();
+        let path = attempts.join("kotlin.json");
+        let c = InstallControl::new("kotlin");
+        c.phase(InstallPhase::Verifying, "Verifying checksum");
+        c.finish(Err(anyhow::anyhow!("Pinned checksum mismatch")), &path);
+        let mut saved = tools.last_attempt("kotlin").unwrap().unwrap();
+        assert!(saved.message.contains("체크섬"));
+        assert_eq!(saved.error.as_deref(), Some("Pinned checksum mismatch"));
+
+        saved.message = "Tool installer failed (Language server exited: exit code 22): curl failed\nhttps://user:pass@cdn.invalid/download?sig=PRIVATE".into();
+        saved.error = Some(saved.message.clone());
+        atomic_json(&path, &saved).unwrap();
+        let old = fs::read(&path).unwrap();
+        let loaded = tools.last_attempt("kotlin").unwrap().unwrap();
+        assert!(loaded.message.contains("설치"));
+        let detail = loaded.error.unwrap();
+        assert!(detail.contains("exit code 22"));
+        assert!(!detail.contains("PRIVATE"));
+        assert!(!detail.contains("Language server exited"));
+        assert_eq!(fs::read(path).unwrap(), old);
     }
     #[test]
     fn bundle_requires_internal_resources_and_preserves_distribution() {

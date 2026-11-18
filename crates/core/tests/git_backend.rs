@@ -1,7 +1,7 @@
 use pokarak_core::{
     ChangedFile, CompareMode, DiffKind, FileStatus, MAX_TEXT_BYTES, diff, read_file,
     repository_root, repository_watch_paths, search, search_with_exclusions, snapshot,
-    snapshot_current,
+    snapshot_current, snapshot_current_inventory,
 };
 use std::{
     collections::BTreeMap,
@@ -1090,6 +1090,129 @@ fn current_snapshot_skips_sibling_contents_and_preserves_branch_comparison() {
     let next = snapshot_current(&repo.root, &mode).unwrap();
     assert_ne!(first.fingerprint, next.fingerprint);
     assert_eq!(next.worktree.changed_files, 1);
+    let listing = snapshot_current_inventory(&repo.root, &mode).unwrap();
+    assert_eq!(listing.fingerprint, next.fingerprint);
+    assert_eq!(listing.worktree.changed_files, 1);
+    assert_eq!(listing.changes.len(), 2);
+    assert!(
+        !listing
+            .worktrees
+            .iter()
+            .find(|w| w.branch == "linked")
+            .unwrap()
+            .changed_files_available
+    );
+}
+
+#[test]
+fn inventory_defers_baseline_blobs_until_a_file_is_selected() {
+    let repo = Repo::new();
+    repo.seed();
+    repo.write("missing.bin", b"\0old");
+    repo.add("missing.bin");
+    repo.commit();
+    repo.git(&["mv", "--", "src/code.rs", "renamed.rs"]);
+    repo.write("renamed.rs", "first\nchanged\nthird\n");
+    repo.write("missing.bin", "now text");
+    let mode = CompareMode::Uncommitted;
+    let measured = snapshot_current(&repo.root, &mode).unwrap();
+    assert!(change(&measured, "missing.bin").binary);
+
+    // Move one authored loose blob outside the fixture's object directory.
+    // Tree/index metadata and the selected rename's baseline are still readable.
+    let id = repo.git(&["rev-parse", "--verify", "HEAD:missing.bin"]);
+    let id = id.trim_end();
+    fs::rename(
+        repo.root.join(".git/objects").join(&id[..2]).join(&id[2..]),
+        repo.temp.path().join("held-blob"),
+    )
+    .unwrap();
+
+    let listing = snapshot_current_inventory(&repo.root, &mode).unwrap();
+    assert_eq!(listing.fingerprint, measured.fingerprint);
+    assert_eq!(listing.files, measured.files);
+    assert_eq!(listing.changes.len(), 2);
+    let renamed = change(&listing, "renamed.rs");
+    assert_eq!(renamed.old_path.as_deref(), Some(Path::new("src/code.rs")));
+    assert_eq!(renamed.status, FileStatus::Renamed);
+    assert!(renamed.staged && renamed.unstaged);
+    let doc = diff(&repo.root, renamed, &mode).unwrap();
+    assert!(doc.patch.contains("-second\n+changed\n"));
+    assert!(diff(&repo.root, change(&listing, "missing.bin"), &mode).is_err());
+    assert!(snapshot_current(&repo.root, &mode).is_err());
+}
+
+#[test]
+fn batched_statistics_match_selected_previews_across_blob_boundaries() {
+    let repo = Repo::new();
+    repo.write("a-empty", "");
+    repo.write("b-original-binary", b"\xff\n");
+    repo.write("c-big", vec![b'x'; MAX_TEXT_BYTES + 1]);
+    repo.write("d-mixed", b"one\rtwo\nthree\r");
+    repo.write("e-lines", "\n".repeat(50_001));
+    repo.write("f-last", "no newline");
+    repo.add(".");
+    repo.commit();
+    for name in [
+        "a-empty",
+        "b-original-binary",
+        "c-big",
+        "d-mixed",
+        "e-lines",
+        "f-last",
+    ] {
+        repo.write(name, "replacement\nlast line");
+    }
+    let snap = repo.snap();
+    assert_eq!(snap.changes.len(), 6);
+    for row in &snap.changes {
+        let preview = diff(&repo.root, row, &snap.compare).unwrap();
+        assert_eq!(row.binary, preview.binary, "{:?}", row.path);
+        let count = |kind| {
+            preview
+                .lines
+                .iter()
+                .filter(|line| line.kind == kind)
+                .count()
+        };
+        assert_eq!(
+            (row.additions, row.deletions),
+            (count(DiffKind::Addition), count(DiffKind::Deletion)),
+            "{:?}",
+            row.path
+        );
+    }
+    assert!(change(&snap, "b-original-binary").binary);
+    let last = change(&snap, "f-last");
+    assert_eq!((last.additions, last.deletions), (2, 1));
+}
+
+#[test]
+fn gitlink_statistics_and_lazy_preview_use_opaque_commit_ids() {
+    let repo = Repo::new();
+    repo.seed();
+    let old = "1".repeat(40);
+    let new = "2".repeat(40);
+    fs::create_dir(repo.root.join("module")).unwrap();
+    let set_gitlink = |oid| {
+        repo.git(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{oid},module"),
+            "--",
+        ]);
+    };
+    set_gitlink(&old);
+    repo.commit();
+    set_gitlink(&new);
+    let snap = repo.snap();
+    let file = change(&snap, "module");
+    assert_eq!((file.additions, file.deletions, file.binary), (1, 1, false));
+    let listing = snapshot_current_inventory(&repo.root, &snap.compare).unwrap();
+    let doc = diff(&repo.root, change(&listing, "module"), &snap.compare).unwrap();
+    assert_eq!(doc.old_text, format!("Subproject commit {old}\n"));
+    assert_eq!(doc.new_text, format!("Subproject commit {new}\n"));
 }
 
 #[test]

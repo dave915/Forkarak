@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    ChangedFile, CompareMode, DiffDocument, DiffKind, FileStatus, Snapshot, SourceLocation,
+    ChangedFile, CompareMode, DiffDocument, FileStatus, Snapshot, SourceLocation,
     filesystem::{self, Node, feed},
     git::{self, Entry, Index, Tree},
     search_exclusions::SearchExclusions,
@@ -196,14 +196,25 @@ pub(crate) fn commit_working_changes(root: &Path) -> Result<Vec<ChangedFile>> {
 }
 
 pub(crate) fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
-    snapshot_inner(path, compare, true)
+    snapshot_inner(path, compare, SnapshotScope::AllWorktrees)
 }
 
 pub(crate) fn snapshot_current(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
-    snapshot_inner(path, compare, false)
+    snapshot_inner(path, compare, SnapshotScope::Current)
 }
 
-fn snapshot_inner(path: &Path, compare: &CompareMode, inspect_siblings: bool) -> Result<Snapshot> {
+pub(crate) fn snapshot_current_inventory(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
+    snapshot_inner(path, compare, SnapshotScope::CurrentInventory)
+}
+
+#[derive(PartialEq)]
+enum SnapshotScope {
+    AllWorktrees,
+    Current,
+    CurrentInventory,
+}
+
+fn snapshot_inner(path: &Path, compare: &CompareMode, scope: SnapshotScope) -> Result<Snapshot> {
     let root = git::repository_root(path)?;
     let head = git::head(&root)?;
     let baseline = git::baseline(&root, compare, head.as_deref())?;
@@ -218,19 +229,15 @@ fn snapshot_inner(path: &Path, compare: &CompareMode, inspect_siblings: bool) ->
         &base_tree,
         matches!(compare, CompareMode::Uncommitted),
     )?;
-    for change in &mut changes {
-        let document = document(&root, change, &base_tree)?;
-        change.binary = document.binary;
-        change.additions = document
-            .lines
-            .iter()
-            .filter(|line| line.kind == DiffKind::Addition)
-            .count();
-        change.deletions = document
-            .lines
-            .iter()
-            .filter(|line| line.kind == DiffKind::Deletion)
-            .count();
+    if scope != SnapshotScope::CurrentInventory {
+        let mut batch = git::BlobBatch::new(&root);
+        for change in &mut changes {
+            let (old, new) =
+                comparison_bytes(&root, change, &base_tree, Some(&capture.index), |entry| {
+                    batch.read(entry)
+                })?;
+            text::set_statistics(change, old, new);
+        }
     }
     let mut worktrees = git::worktrees(&root)?;
     let mut fingerprint = Sha256::new();
@@ -248,7 +255,10 @@ fn snapshot_inner(path: &Path, compare: &CompareMode, inspect_siblings: bool) ->
                 capture.changes(&root, &capture.head_tree, true)?.len()
             };
             worktree.changed_files_available = true;
-        } else if inspect_siblings && !worktree.is_prunable && worktree.branch != "(bare)" {
+        } else if scope == SnapshotScope::AllWorktrees
+            && !worktree.is_prunable
+            && worktree.branch != "(bare)"
+        {
             let inspected = (|| -> Result<(usize, String)> {
                 let other = Capture::read(&worktree.path, &Tree::new())?;
                 let count = other.changes(&worktree.path, &other.head_tree, true)?.len();
@@ -312,47 +322,59 @@ pub(crate) fn diff(root: &Path, file: &ChangedFile, compare: &CompareMode) -> Re
         .transpose()?;
     let head = git::head(&root)?;
     let baseline = git::baseline(&root, compare, head.as_deref())?;
-    document(&root, &file, &git::tree(&root, baseline.as_deref())?)
-}
-
-fn document(root: &Path, file: &ChangedFile, baseline: &Tree) -> Result<DiffDocument> {
-    let old_path = file.old_path.as_ref().unwrap_or(&file.path);
-    let old = baseline
-        .get(old_path)
-        .map(|entry| git::blob(root, entry))
-        .transpose()?
-        .unwrap_or_default();
-    let new = if let Some(entry) = gitlink(root, &file.path)? {
-        Some(git::blob(root, &entry)?)
-    } else {
-        filesystem::read(root, &file.path)?
-    };
-    ensure!(
-        baseline.contains_key(old_path)
-            || new.is_some()
-            || git::index(root)?.contains_key(&file.path),
-        "{} is absent from the comparison and working tree, or is beneath a symlink; refresh and select an accessible file",
-        file.path.display()
-    );
+    let baseline = git::tree(&root, baseline.as_deref())?;
+    let (old, new) = comparison_bytes(&root, &file, &baseline, None, |entry| {
+        git::blob(&root, entry)
+    })?;
     let mut document = DiffDocument {
         path: file.path.clone(),
         old_path: file.old_path.clone(),
         ..DiffDocument::default()
     };
-    text::render(&mut document, old, new.unwrap_or_default());
+    text::render(&mut document, old, new);
     Ok(document)
 }
 
-fn gitlink(root: &Path, path: &Path) -> Result<Option<Entry>> {
-    if !matches!(filesystem::open(root, path)?, Node::Directory) {
-        return Ok(None);
-    }
-    // Only submodule directories have content in Git's index.
-    Ok(git::index(root)?
-        .get(path)
-        .and_then(|stages| stages.get(&0))
-        .filter(|e| e.mode == "160000")
-        .cloned())
+type PreviewBytes = (Vec<u8>, bool);
+
+fn comparison_bytes(
+    root: &Path,
+    file: &ChangedFile,
+    baseline: &Tree,
+    index: Option<&Index>,
+    mut read_blob: impl FnMut(&Entry) -> Result<PreviewBytes>,
+) -> Result<(PreviewBytes, PreviewBytes)> {
+    let old = baseline
+        .get(file.old_path.as_ref().unwrap_or(&file.path))
+        .map(&mut read_blob)
+        .transpose()?;
+    let new = match filesystem::open(root, &file.path)? {
+        Node::Missing if old.is_some() => None,
+        node @ (Node::Missing | Node::Directory) => {
+            let loaded;
+            let index = match index {
+                Some(index) => index,
+                None => {
+                    loaded = git::index(root)?;
+                    &loaded
+                }
+            };
+            let stages = index.get(&file.path);
+            ensure!(
+                old.is_some() || stages.is_some(),
+                "{} is absent from the comparison and working tree, or is beneath a symlink; refresh and select an accessible file",
+                file.path.display()
+            );
+            // Only submodule directories have preview content in the index.
+            stages
+                .and_then(|s| s.get(&0))
+                .filter(|e| matches!(node, Node::Directory) && e.mode == "160000")
+                .map(read_blob)
+                .transpose()?
+        }
+        node => filesystem::read_node(node)?,
+    };
+    Ok((old.unwrap_or_default(), new.unwrap_or_default()))
 }
 
 pub(crate) fn read_file(root: &Path, path: &Path) -> Result<String> {
@@ -468,7 +490,11 @@ fn detect_renames(
     }
     // Similarity detection has a fixed budget, independent of repository size.
     // Large/ambiguous sets remain explicit adds/deletes instead of guessing.
-    if deletions.len() <= 16 && additions.len() <= 16 {
+    if deletions.len() <= 16
+        && additions.len() <= 16
+        && deletions.iter().any(|i| !matched.contains(i))
+        && additions.iter().any(|i| !matched.contains(i))
+    {
         let mut old_profiles = Vec::new();
         let mut new_profiles = Vec::new();
         for &i in &deletions {

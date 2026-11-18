@@ -227,7 +227,7 @@ impl Pokarak {
             // have completed part of its work. Always inspect the original root.
             // A cancelled command's handle cannot perform inspection. These
             // independent reads always run, including partial failures.
-            let snapshot = pokarak_core::snapshot_current(&job_root, &mode);
+            let snapshot = pokarak_core::snapshot_current_inventory(&job_root, &mode);
             let unchanged = !had_analysis || source::unchanged(before, source::stamp(&job_root));
             (result, snapshot, unchanged)
         });

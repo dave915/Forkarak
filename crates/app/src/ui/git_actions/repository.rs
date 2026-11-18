@@ -132,8 +132,10 @@ impl Pokarak {
                     progress,
                 )
             };
-            let inspection =
-                pokarak_core::snapshot_current(&setup.destination, &CompareMode::Uncommitted);
+            let inspection = pokarak_core::snapshot_current_inventory(
+                &setup.destination,
+                &CompareMode::Uncommitted,
+            );
             let exists = setup.destination.exists();
             (result, inspection, exists)
         });

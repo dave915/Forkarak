@@ -46,7 +46,7 @@ impl Pokarak {
     ) {
         let read_root = root.clone();
         self.workflow_read(root.clone(),move |_| {
-            let snapshot = pokarak_core::snapshot_current(&read_root,&CompareMode::Uncommitted)?;
+            let snapshot = pokarak_core::snapshot_current_inventory(&read_root,&CompareMode::Uncommitted)?;
             let files: Vec<_> = snapshot.changes.into_iter().filter(|f| f.status == FileStatus::Untracked).collect();
             anyhow::Ok((files,read_rules(&read_root)?))
         },move |_,(files,expected),w,cx| {

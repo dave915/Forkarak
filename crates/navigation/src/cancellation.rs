@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use std::{
     io,
-    process::{Child, Command},
+    process::{Child, Command, ExitStatus},
     sync::{
         Arc, Mutex, Weak,
         atomic::{AtomicBool, Ordering},
@@ -91,8 +91,37 @@ struct ProcessState {
     child: Option<Child>,
     // Must become false BEFORE any wait/try_wait that can reap the child.
     signal_allowed: bool,
-    exit_status: Option<String>,
+    exit_status: Option<ProcessExit>,
     signal_error: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ProcessExit {
+    Code(i32),
+    #[cfg(unix)]
+    Signal(i32),
+    OwnershipLost,
+}
+
+impl From<ExitStatus> for ProcessExit {
+    fn from(status: ExitStatus) -> Self {
+        #[cfg(unix)]
+        if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
+            return Self::Signal(signal);
+        }
+        Self::Code(status.code().expect("exited child has an exit code"))
+    }
+}
+
+impl std::fmt::Display for ProcessExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Code(code) => write!(f, "exit code {code}"),
+            #[cfg(unix)]
+            Self::Signal(signal) => write!(f, "signal {signal}"),
+            Self::OwnershipLost => f.write_str("process ownership was lost; refusing PID signals"),
+        }
+    }
 }
 
 pub(crate) struct OwnedProcess(Mutex<ProcessState>);
@@ -126,15 +155,15 @@ impl OwnedProcess {
         ))
     }
 
-    pub fn exit_status(&self) -> Option<String> {
+    pub fn exit_status(&self) -> Option<ProcessExit> {
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(status) = &state.exit_status {
-            return Some(status.clone());
+        if let Some(status) = state.exit_status {
+            return Some(status);
         }
         let child = state.child.as_mut()?;
         match observe_exit(child) {
             Ok(status) => {
-                state.exit_status = status.clone();
+                state.exit_status = status;
                 status
             }
             Err(error) if error.raw_os_error() == Some(no_child_error()) => {
@@ -142,10 +171,8 @@ impl OwnedProcess {
                 // longer be established, so do not signal it or its old group.
                 state.signal_allowed = false;
                 state.child.take();
-                let message =
-                    "Language server process ownership was lost; refusing PID signals".to_owned();
-                state.exit_status = Some(message.clone());
-                Some(message)
+                state.exit_status = Some(ProcessExit::OwnershipLost);
+                state.exit_status
             }
             Err(_) => None,
         }
@@ -173,7 +200,7 @@ impl OwnedProcess {
             }
         };
         state.signal_allowed = false;
-        state.exit_status = observed.clone();
+        state.exit_status = observed;
         let child = state.child.as_mut().unwrap();
         let result = (|| {
             #[cfg(unix)]
@@ -219,10 +246,7 @@ impl OwnedProcess {
             state.child.take()
         };
         if let Some(mut child) = child {
-            let status = child
-                .wait()
-                .ok()
-                .map(|status| format!("Language server exited: {status}"));
+            let status = child.wait().ok().map(ProcessExit::from);
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             if status.is_some() {
                 state.exit_status = status;
@@ -259,7 +283,7 @@ fn no_child_error() -> i32 {
 /// Observe without reaping: retaining the leader prevents its PID/PGID from
 /// being recycled between status(), cancellation, and ordinary shutdown.
 #[cfg(unix)]
-fn observe_exit(child: &mut Child) -> io::Result<Option<String>> {
+fn observe_exit(child: &mut Child) -> io::Result<Option<ProcessExit>> {
     // SAFETY: siginfo_t is an output-only C POD; waitid initializes its fields.
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let result = loop {
@@ -283,20 +307,17 @@ fn observe_exit(child: &mut Child) -> io::Result<Option<String>> {
         return Ok(None);
     }
     let status = unsafe { info.si_status() };
-    let cause = if info.si_code == libc::CLD_EXITED {
-        "exit code"
+    Ok(Some(if info.si_code == libc::CLD_EXITED {
+        ProcessExit::Code(status)
     } else {
-        "signal"
-    };
-    Ok(Some(format!("Language server exited: {cause} {status}")))
+        ProcessExit::Signal(status)
+    }))
 }
 
 #[cfg(not(unix))]
-fn observe_exit(child: &mut Child) -> io::Result<Option<String>> {
+fn observe_exit(child: &mut Child) -> io::Result<Option<ProcessExit>> {
     // On Windows Child owns a kernel process handle, rather than a reusable PID.
-    child
-        .try_wait()
-        .map(|status| status.map(|status| format!("Language server exited: {status}")))
+    child.try_wait().map(|status| status.map(ProcessExit::from))
 }
 
 #[cfg(all(test, unix))]

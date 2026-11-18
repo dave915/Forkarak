@@ -81,9 +81,9 @@ pub(super) fn run(
             }
             if let Some((file, headers)) = monitor {
                 let count = fs::metadata(file).map(|m| m.len()).unwrap_or(0);
-                let total = fs::read_to_string(headers)
+                let total = fs::read(headers)
                     .ok()
-                    .and_then(|s| content_length(&s));
+                    .and_then(|s| final_response(&s).length);
                 control.bytes(count, total);
                 if count > 2 * 1024 * 1024 * 1024 {
                     bail!("Download exceeds 2 GiB limit");
@@ -110,11 +110,12 @@ pub(super) fn run(
         let status = process
             .exit_status()
             .context("Missing subprocess exit status")?;
-        if !matches!(
-            status.as_str(),
-            "Language server exited: exit code 0" | "Language server exited: exit status: 0"
-        ) {
-            bail!("Tool installer failed ({status}): {stderr}");
+        if !matches!(status, crate::cancellation::ProcessExit::Code(0)) {
+            let name = program
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("installer");
+            bail!("{name} failed ({status})\n{}", stderr.trim());
         }
         Ok(stdout)
     })();
@@ -131,31 +132,70 @@ pub(super) fn run(
     }
     result
 }
-fn content_length(headers: &str) -> Option<u64> {
-    // Only the final complete HTTP response, never a redirect's Content-Length.
-    let normalized = headers.replace("\r\n", "\n");
-    let blocks: Vec<_> = normalized
-        .split("\n\n")
-        .filter(|b| b.starts_with("HTTP/"))
-        .collect();
-    let final_block = blocks.last()?;
-    let status = final_block.lines().next()?.split_whitespace().nth(1)?;
-    if status != "200" {
-        return None;
-    }
-    if final_block
-        .lines()
-        .any(|l| l.to_ascii_lowercase().starts_with("transfer-encoding:"))
-    {
-        return None;
-    }
-    final_block.lines().find_map(|l| {
-        let (name, value) = l.split_once(':')?;
-        name.eq_ignore_ascii_case("content-length")
-            .then(|| value.trim().parse().ok())
-            .flatten()
-    })
+#[derive(Default)]
+struct HttpResponse {
+    status: Option<u16>,
+    length: Option<u64>,
 }
+
+fn final_response(headers: &[u8]) -> HttpResponse {
+    let normalized = String::from_utf8_lossy(headers).replace("\r\n", "\n");
+    // Curl writes a status line for each response (proxy, informational, redirect,
+    // origin). Even a truncated last block supersedes the previous response.
+    let start = normalized.rfind("\nHTTP/").map_or(0, |i| i + 1);
+    let block = &normalized[start..];
+    let mut lines = block.lines();
+    let status = lines
+        .next()
+        .and_then(|l| l.strip_prefix("HTTP/"))
+        .and_then(|l| l.split_ascii_whitespace().nth(1))
+        .filter(|s| s.len() == 3)
+        .and_then(|s| s.parse().ok())
+        .filter(|code| (100..=599).contains(code));
+    let mut length = None;
+    if status == Some(200) && block.contains("\n\n") {
+        for line in lines.take_while(|l| !l.is_empty()) {
+            if let Some((key, value)) = line.split_once(':') {
+                if key.eq_ignore_ascii_case("transfer-encoding") {
+                    length = None;
+                    break;
+                }
+                if key.eq_ignore_ascii_case("content-length") {
+                    length = value.trim().parse().ok();
+                }
+            }
+        }
+    }
+    HttpResponse { status, length }
+}
+
+#[derive(Debug)]
+pub(super) struct DownloadFailure {
+    component: &'static str,
+    stage: &'static str,
+    host: String,
+    status: Option<u16>,
+}
+
+impl std::fmt::Display for DownloadFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let outcome = if self.status == Some(403) {
+            "다운로드 요청 거부"
+        } else {
+            "다운로드 실패"
+        };
+        write!(
+            f,
+            "{} {} {outcome} · {}",
+            self.component, self.stage, self.host
+        )?;
+        if let Some(status) = self.status {
+            write!(f, " · HTTP {status}")?;
+        }
+        Ok(())
+    }
+}
+
 fn valid_url(value: &str) -> Result<()> {
     let url = url::Url::parse(value)?;
     if url.scheme() != "https"
@@ -167,24 +207,32 @@ fn valid_url(value: &str) -> Result<()> {
     }
     Ok(())
 }
-pub(super) fn download(
+fn download(
     url: &str,
+    stage: &'static str,
     path: &Path,
     scratch: &Path,
     control: &InstallControl,
 ) -> Result<()> {
     valid_url(url)?;
-    download_curl(url, path, scratch, control, "=https")
+    download_curl(url, stage, path, scratch, control, "=https")
 }
 fn download_curl(
     url: &str,
+    stage: &'static str,
     path: &Path,
     scratch: &Path,
     control: &InstallControl,
     initial_protocol: &str,
 ) -> Result<()> {
-    control.phase(InstallPhase::Downloading, format!("Downloading {url}"));
-    let headers = path.with_extension("headers");
+    let parsed = url::Url::parse(url)?;
+    let host = parsed.host_str().context("Download URL has no host")?;
+    control.phase(
+        InstallPhase::Downloading,
+        format!("{} {stage} 다운로드 중 · {host}", control.component),
+    );
+    // Redirect headers may contain signed locations. Keep them only for this transfer.
+    let headers = tempfile::NamedTempFile::new_in(scratch)?;
     let args = [
         "--disable",
         "--fail",
@@ -208,36 +256,57 @@ fn download_curl(
         "--user-agent",
         "Forkarak-managed-tools/1",
         "--dump-header",
-        headers.to_str().context("Non-UTF8 scratch")?,
+        headers.path().to_str().context("Non-UTF8 scratch")?,
         "--output",
         path.to_str().context("Non-UTF8 scratch")?,
         "--url",
         url,
     ]
     .map(str::to_owned);
+    let curl = Path::new("/usr/bin/curl");
+    #[cfg(test)]
+    let curl = control.curl.as_deref().unwrap_or(curl);
     let result = run(
-        Path::new("/usr/bin/curl"),
+        curl,
         &args,
         scratch,
         &[],
         control,
-        Some((path, &headers)),
+        Some((path, headers.path())),
     );
-    if result.is_err() {
+    let response = fs::read(headers.path())
+        .map(|data| final_response(&data))
+        .unwrap_or_default();
+    let result = result.and_then(|_| {
+        if response.status.is_some_and(|status| status >= 400) {
+            bail!("curl completed with an unsuccessful HTTP response");
+        }
+        Ok(())
+    });
+    if let Err(error) = result {
         let _ = fs::remove_file(path);
+        control.check()?;
+        return Err(error.context(DownloadFailure {
+            component: control.component,
+            stage,
+            host: host.to_owned(),
+            status: response.status,
+        }));
     }
-    result?;
-    control.bytes(
-        fs::metadata(path)?.len(),
-        fs::read_to_string(headers)
-            .ok()
-            .and_then(|s| content_length(&s)),
-    );
+    control.bytes(fs::metadata(path)?.len(), response.length);
     Ok(())
 }
 pub(super) fn text(url: &str, scratch: &Path, control: &InstallControl) -> Result<String> {
+    download_text(url, "메타데이터", scratch, control)
+}
+fn download_text(
+    url: &str,
+    stage: &'static str,
+    scratch: &Path,
+    control: &InstallControl,
+) -> Result<String> {
     let temp = tempfile::NamedTempFile::new_in(scratch)?;
-    download(url, temp.path(), scratch, control)?;
+    download(url, stage, temp.path(), scratch, control)?;
     if fs::metadata(temp.path())?.len() > 8 * 1024 * 1024 {
         bail!("Official metadata exceeds limit");
     }
@@ -312,7 +381,13 @@ pub(super) fn artifact(
         fs::remove_file(&target)?;
     }
     let file = tempfile::NamedTempFile::new_in(&cache)?;
-    download(&artifact.source_url, file.path(), scratch, control)?;
+    download(
+        &artifact.source_url,
+        "압축 파일",
+        file.path(),
+        scratch,
+        control,
+    )?;
     verify(file.path(), &artifact.checksum, control)?;
     file.persist(&target).map_err(|e| e.error)?;
     Ok(target)
@@ -323,7 +398,7 @@ pub(super) fn checksum(
     scratch: &Path,
     control: &InstallControl,
 ) -> Result<String> {
-    let value = text(url, scratch, control)?;
+    let value = download_text(url, "체크섬", scratch, control)?;
     let digest = value
         .split_whitespace()
         .next()
@@ -348,21 +423,16 @@ mod tests {
         }
     }
     #[test]
-    fn uses_only_final_response_total() {
-        assert_eq!(
-            content_length(
-                "HTTP/1.1 302 Found\r\nContent-Length: 10\r\n\r\nHTTP/2 200\r\ncontent-length: 99\r\n\r\n"
-            ),
-            Some(99)
-        );
-        assert_eq!(
-            content_length("HTTP/2 302\r\ncontent-length: 10\r\n\r\n"),
-            None
-        );
-        assert_eq!(
-            content_length("HTTP/2 200\ncontent-length: 50\ntransfer-encoding: chunked\n\n"),
-            None
-        );
+    fn uses_only_final_response_status_and_total() {
+        let response = final_response(b"HTTP/1.1 302 Found\r\nContent-Length: 10\r\n\r\nHTTP/2 200\r\ncontent-length: 99\r\n\r\n");
+        assert_eq!((response.status, response.length), (Some(200), Some(99)));
+        let response =
+            final_response(b"HTTP/2 200\ncontent-length: 50\ntransfer-encoding: chunked\n\n");
+        assert_eq!(response.length, None);
+        let response = final_response(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/2 307\r\nlocation: https://cdn.invalid/?secret\r\n\r\nHTTP/3 403\r\nx-info: \xff\r\n\r\n");
+        assert_eq!((response.status, response.length), (Some(403), None));
+        let partial = final_response(b"HTTP/1.1 301 Moved\r\n\r\nHTTP/2 429\r\n");
+        assert_eq!((partial.status, partial.length), (Some(429), None));
     }
     #[test]
     fn actual_curl_refuses_redirect_downgrades() {
@@ -386,6 +456,7 @@ mod tests {
         // downloader keeps the exact production HTTPS-only redirect policy.
         let result = download_curl(
             &format!("http://127.0.0.1:{port}/redirect"),
+            "메타데이터",
             &t.path().join("download"),
             t.path(),
             &InstallControl::new("test"),
@@ -397,6 +468,39 @@ mod tests {
             second.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
+    }
+    #[test]
+    fn actual_curl_403_reports_the_host_and_retains_only_safe_details() {
+        use std::{io::Write, net::TcpListener};
+        let t = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/metadata?query=PRIVATE",
+            listener.local_addr().unwrap()
+        );
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.read(&mut [0; 4096]).unwrap();
+            stream.write_all(b"HTTP/1.1 403 Forbidden\r\nX-Private: PRIVATE\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let c = InstallControl::new("kotlin");
+        let file = t.path().join("body");
+        let error = download_curl(&url, "메타데이터", &file, t.path(), &c, "=http").unwrap_err();
+        server.join().unwrap();
+        assert!(!c.snapshot().message.contains("PRIVATE"));
+        let attempt = t.path().join("attempt.json");
+        c.finish(Err(error), &attempt);
+        let progress = c.snapshot();
+        assert_eq!(progress.phase, InstallPhase::Failed);
+        assert!(progress.message.contains("127.0.0.1 · HTTP 403"));
+        assert!(
+            progress
+                .error
+                .unwrap()
+                .contains("curl failed (exit code 22)")
+        );
+        assert!(!fs::read_to_string(attempt).unwrap().contains("PRIVATE"));
+        assert!(!file.exists());
     }
     #[test]
     fn cancellation_terminates_an_actual_curl_download() {
@@ -432,6 +536,7 @@ mod tests {
         let worker = thread::spawn(move || {
             download_curl(
                 &format!("http://127.0.0.1:{port}/slow"),
+                "압축 파일",
                 &scratch.join("download"),
                 &scratch,
                 &worker_control,

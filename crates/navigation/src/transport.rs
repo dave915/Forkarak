@@ -216,7 +216,9 @@ impl Transport {
     }
 
     pub fn exit_status(&self) -> Option<String> {
-        self.process.exit_status()
+        self.process
+            .exit_status()
+            .map(|status| format!("Language server exited: {status}"))
     }
 
     pub fn stderr(&self) -> String {

@@ -1,6 +1,7 @@
 //! Explicit, trust-gated native language tools over the exact retained source.
 //! Observing/viewing code never starts a process. All server calls run off-thread.
 mod model;
+pub(super) mod on_type;
 #[cfg(test)]
 mod real;
 #[cfg(test)]
@@ -75,6 +76,8 @@ pub(super) struct LanguageTools {
     snapshots: HashMap<FileKey, DocumentSnapshot>,
     observers: HashMap<FileKey, (EntityId, Subscription)>,
     next_version: i64,
+    on_type_task: Option<Task<()>>,
+    input_languages: HashSet<String>,
     view: u64,
     request: u64,
     documentation_request: u64,
@@ -192,6 +195,7 @@ impl Pokarak {
         Some((key, editor))
     }
     pub(super) fn invalidate_language_view(&mut self, cx: &mut Context<Self>) {
+        self.language_tools.on_type_task = None;
         self.language_tools.view = self.language_tools.view.wrapping_add(1);
         self.language_tools.request = self.language_tools.request.wrapping_add(1);
         self.language_tools.documentation_request =
@@ -500,7 +504,18 @@ impl Pokarak {
         all.retain(|config| self.managed_language_enabled(&config.language));
         Ok(all)
     }
-    pub(super) fn remember_language_configuration(&mut self, signature: serde_json::Value) {
+    pub(super) fn remember_language_configuration(
+        &mut self,
+        signature: serde_json::Value,
+        configs: &[pokarak_navigation::ServerConfig],
+    ) {
+        // Probe once when analysis is explicitly activated. Missing programs
+        // must not be searched for or repeatedly launched by editor keystrokes.
+        self.language_tools.input_languages = configs
+            .iter()
+            .filter(|config| pokarak_navigation::discover_program(&config.program).is_some())
+            .map(|config| config.language.clone())
+            .collect();
         self.language_tools.server_configuration = Some(signature);
     }
     pub(super) fn configure_language_formatters(
@@ -602,6 +617,7 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.language_tools.on_type_task = None;
         // Another explicit action replaces a waiting gesture. Approval takes
         // the pending request before returning through this ordinary dispatcher.
         self.language_tools.trust_symbol = None;
@@ -702,6 +718,20 @@ impl Pokarak {
         if self.navigation.is_none() {
             self.enable_analysis(cx);
         }
+        self.run_language_request(tool, requested, false, window, cx);
+    }
+
+    fn run_language_request(
+        &mut self,
+        tool: Tool,
+        requested: Option<Position>,
+        automatic: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((key, editor)) = self.language_target(cx) else {
+            return;
+        };
         let Some(navigator) = self.navigation.clone() else {
             return;
         };
@@ -723,20 +753,23 @@ impl Pokarak {
         {
             Ok(v) => v,
             Err(e) => {
-                self.error = Some(e);
-                cx.notify();
+                if !automatic {
+                    self.error = Some(e);
+                    cx.notify();
+                }
                 return;
             }
         };
         let identity = match self.language_identity(cx) {
             Ok(v) => v,
             Err(e) => {
-                self.error = Some(e);
-                cx.notify();
+                if !automatic {
+                    self.error = Some(e);
+                    cx.notify();
+                }
                 return;
             }
         };
-        let editor = self.active_editor().unwrap();
         let Some(target) = reader_navigation::navigation_target(
             editor.read(cx).text(),
             identity.cursor,
@@ -752,6 +785,7 @@ impl Pokarak {
         let anchor = editor
             .read(cx)
             .range_to_bounds(&(identity.cursor..identity.cursor));
+        let project = self.current_project.as_deref();
         let options = FormattingOptions {
             tab_size: self
                 .prefs
@@ -773,9 +807,11 @@ impl Pokarak {
         let token = self.language_tools.request;
         let navigation_token = self.navigation_request;
         self.language_tools.pending = Some(tool.clone());
-        self.language_tools.retry = Some(tool.clone());
         self.navigating = matches!(tool, Tool::Navigate(_) | Tool::Symbol);
-        self.status = format!("{} 요청 중…", tool.title());
+        if !automatic {
+            self.language_tools.retry = Some(tool.clone());
+            self.status = format!("{} 요청 중…", tool.title());
+        }
         let expected = identity.clone();
         let operation = tool.clone();
         let task = cx.background_spawn(async move {
@@ -783,7 +819,7 @@ impl Pokarak {
                 let mut nav = navigator
                     .lock()
                     .map_err(|_| anyhow::anyhow!("분석 서버 상태를 읽을 수 없습니다"))?;
-                let result = (|| {
+                let mut result = (|| {
                     for path in release {
                         nav.release_buffer(&path)?;
                     }
@@ -796,7 +832,18 @@ impl Pokarak {
                         &options,
                     )
                 })();
-                let output = format!("{}\n{}", nav.server_messages(), nav.stderr());
+                let output = if automatic {
+                    if let Ok(Reply::Complete(items)) = &mut result {
+                        on_type::rank_input_candidates(
+                            items,
+                            expected.snapshot.text(),
+                            expected.cursor,
+                        );
+                    }
+                    String::new()
+                } else {
+                    format!("{}\n{}", nav.server_messages(), nav.stderr())
+                };
                 anyhow::Ok((result, output))
             })();
             match result {
@@ -815,13 +862,26 @@ impl Pokarak {
                 if a.navigation_request != navigation_token
                     || !a.accepts_language(&identity, true, cx)
                 {
-                    a.status =
-                        "선택 또는 소스가 변경되어 오래된 분석 결과를 적용하지 않았습니다.".into();
+                    if !automatic {
+                        a.status =
+                            "선택 또는 소스가 변경되어 오래된 분석 결과를 적용하지 않았습니다."
+                                .into();
+                    }
                     cx.notify();
                     return;
                 }
-                a.observe_feedback();
-                a.analysis_feedback.append(&output);
+                if automatic {
+                    if !a.can_show_input_assistance(&identity.key, &editor, &tool, window, cx)
+                        || matches!(&result, Err(_) | Ok(Reply::Signature(None)))
+                        || matches!(&result, Ok(Reply::Complete(items)) if items.items.is_empty())
+                    {
+                        cx.notify();
+                        return;
+                    }
+                } else {
+                    a.observe_feedback();
+                    a.analysis_feedback.append(&output);
+                }
                 match result {
                     Ok(Reply::Format(edits)) => {
                         let result = TextEdit::apply_all(identity.snapshot.text(), &edits)
@@ -888,8 +948,10 @@ impl Pokarak {
                         if let Reply::Diagnostics(items) = &value {
                             a.install_language_diagnostics(items, cx);
                         }
-                        a.error = None;
-                        a.status = format!("{} 완료 · 현재 표시 소스 기준", tool.title());
+                        if !automatic {
+                            a.error = None;
+                            a.status = format!("{} 완료 · 현재 표시 소스 기준", tool.title());
+                        }
                         a.language_tools.panel = Some(Panel {
                             identity,
                             tool: tool.clone(),

@@ -1591,7 +1591,7 @@ impl Pokarak {
                                 .scroll_to_item_strict(diff_row, ScrollStrategy::Top);
                         }
                         let code = session.saved.code;
-                        this.bind_code_editor(&root, &path, &editor, cx);
+                        this.bind_code_editor(&root, &path, &editor, window, cx);
                         if !preserve_focus || content_changed {
                             this.configure_code_tools(&root, &path, &editor, window, cx);
                         }
@@ -1743,6 +1743,7 @@ impl Pokarak {
             }
         };
         let signature = serde_json::json!([configs, formatters]);
+        self.remember_language_configuration(signature, &configs);
         let mut navigator = Navigator::with_options(
             root,
             configs,
@@ -1757,7 +1758,6 @@ impl Pokarak {
             cx.notify();
             return;
         }
-        self.remember_language_configuration(signature);
         self.cancellation = Some(navigator.cancellation_handle());
         self.navigation = Some(Arc::new(Mutex::new(navigator)));
         self.trust_prompt = false;

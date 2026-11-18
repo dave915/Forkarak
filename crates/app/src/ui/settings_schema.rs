@@ -179,6 +179,20 @@ pub(super) const FIELDS: &[Field] = &[
     ),
     field!(
         Language,
+        "language.completion_on_input",
+        "입력 중 자동완성",
+        "언어 분석을 켠 편집기에서 입력하면 후보를 표시합니다. 수동 호출은 ⌃Space입니다.",
+        Kind::Bool
+    ),
+    field!(
+        Language,
+        "language.auto_signature_help",
+        "입력 중 함수 도움말",
+        "여는 괄호와 쉼표를 입력하면 함수 인자를 표시합니다.",
+        Kind::Bool
+    ),
+    field!(
+        Language,
         "language.diagnostics",
         "오류 표시",
         "분석을 켠 경우 진단을 표시합니다.",
@@ -423,7 +437,8 @@ pub(super) fn default_value(key: &str) -> Value {
         | "extensions.settings" => json!({}),
         "search.exclude" | "spring.jdk" | "spring.gradle" | "spring.maven" | "spring.profiles"
         | "ai.path" => json!(""),
-        "editor.word_wrap"
+        "language.auto_signature_help"
+        | "editor.word_wrap"
         | "editor.format_on_save"
         | "review.split_diff"
         | "review.hide_whitespace"

@@ -1187,6 +1187,7 @@ impl Pokarak {
         root: &Path,
         path: &Path,
         editor: &Entity<EditorState>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(key) = FileKey::new(root, path) else {
@@ -1202,38 +1203,55 @@ impl Pokarak {
             return;
         }
         let changed_key = key.clone();
-        let subscription = cx.subscribe(editor, move |app, editor, event: &InputEvent, cx| {
-            if !matches!(event, InputEvent::Change) {
-                return;
-            }
-            // A replaced editor can still have a queued Change event. It must
-            // never write its old text over a reconciled replacement buffer.
-            if !app
-                .code_edits
-                .bindings
-                .get(&changed_key)
-                .is_some_and(|(id, _)| *id == editor.entity_id())
-            {
-                return;
-            }
-            let Some(buffer) = app.code_edits.buffers.get_mut(&changed_key) else {
-                return;
-            };
-            if !buffer.editing {
-                return;
-            }
-            buffer.changed(editor.read(cx).value().to_string());
-            let status = buffer.status();
-            if app.current.as_ref() == Some(&changed_key.root)
-                && app.selected().as_ref() == Some(&changed_key.path)
-            {
-                app.status = status.into();
-            }
-            app.pin_preview(&changed_key.root, &changed_key.path);
-            app.refresh_inline_tools(&changed_key.root, &changed_key.path, &editor, cx);
-            app.checkpoint_code_drafts(cx);
-            cx.notify();
-        });
+        let subscription = cx.subscribe_in(
+            editor,
+            window,
+            move |app, editor, event: &InputEvent, window, cx| {
+                if !matches!(event, InputEvent::Change) {
+                    return;
+                }
+                // A replaced editor can still have a queued Change event. It must
+                // never write its old text over a reconciled replacement buffer.
+                if !app
+                    .code_edits
+                    .bindings
+                    .get(&changed_key)
+                    .is_some_and(|(id, _)| *id == editor.entity_id())
+                {
+                    return;
+                }
+                let Some(buffer) = app.code_edits.buffers.get_mut(&changed_key) else {
+                    return;
+                };
+                if !buffer.editing {
+                    return;
+                }
+                let state = editor.read(cx);
+                let text = state.value().to_string();
+                let typed = if app.navigation.is_some() && state.focus_handle(cx).is_focused(window)
+                {
+                    language_tools::on_type::inserted_character(
+                        &buffer.draft.text,
+                        &text,
+                        state.cursor(),
+                    )
+                } else {
+                    None
+                };
+                buffer.changed(text);
+                let status = buffer.status();
+                if app.current.as_ref() == Some(&changed_key.root)
+                    && app.selected().as_ref() == Some(&changed_key.path)
+                {
+                    app.status = status.into();
+                    app.schedule_input_assistance(&changed_key, &editor, typed, window, cx);
+                }
+                app.pin_preview(&changed_key.root, &changed_key.path);
+                app.refresh_inline_tools(&changed_key.root, &changed_key.path, &editor, cx);
+                app.checkpoint_code_drafts(cx);
+                cx.notify();
+            },
+        );
         self.code_edits
             .bindings
             .insert(key, (editor.entity_id(), subscription));
@@ -1498,7 +1516,7 @@ impl Pokarak {
             .get_mut(&comparison.root)
             .ok_or("워크트리가 닫혔습니다.")?;
         session.documents.insert(selected.clone(), editor.clone());
-        self.bind_code_editor(&comparison.root, &selected, &editor, cx);
+        self.bind_code_editor(&comparison.root, &selected, &editor, window, cx);
         self.configure_code_tools(&comparison.root, &selected, &editor, window, cx);
         self.file_request += 1;
         self.status = "조정 결과를 초안에 반영했습니다. ⌘S로 파일을 저장하세요.".into();

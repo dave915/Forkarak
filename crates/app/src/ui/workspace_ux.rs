@@ -282,7 +282,9 @@ impl Pokarak {
     }
 
     pub(super) fn workspace_context(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.git_history.active && !self.inline_commit_active() {
+        // Graph keeps context in its existing sidebar, detail and footer surfaces.
+        // Do not add a second full-width row, including during inline staging.
+        if self.git_history.active || !self.inline_commit_active() {
             return None;
         }
         let root = self.current.as_ref()?;

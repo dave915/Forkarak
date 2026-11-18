@@ -98,6 +98,26 @@ impl HistoryUi {
         };
     }
 
+    fn install_refresh_page(&mut self, page: HistoryPage) -> bool {
+        let unchanged = self.entries.len() == page.entries.len()
+            && self.entries.iter().zip(&page.entries).all(|(a, b)| {
+                a.graph == b.graph
+                    && a.commit.oid == b.commit.oid
+                    && a.commit.parents == b.commit.parents
+                    && a.commit.author == b.commit.author
+                    && a.commit.date == b.commit.date
+                    && a.commit.subject == b.commit.subject
+                    && a.commit.refs == b.commit.refs
+            });
+        if !unchanged {
+            self.entries = Arc::new(page.entries);
+        }
+        self.cursor = page.next;
+        self.limit_reached = page.limit_reached;
+        self.shallow = page.shallow;
+        !unchanged
+    }
+
     fn accepts_read(&self, request: u64, root: &Path) -> bool {
         self.active && self.request == request && self.root.as_deref() == Some(root)
     }
@@ -141,6 +161,23 @@ fn extend_refresh_to_anchor(
 }
 
 impl Pokarak {
+    pub(super) fn sync_refreshed_git_history(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.auto_refresh.preserves_focus(self.request)
+            && !self.git_history.active
+            && self.git_history.root == self.current
+        {
+            // The same-worktree sidebar stays mounted during its replacement read.
+            self.git_history.request += 1;
+            self.load_code_sidebar(cx);
+        } else {
+            self.sync_git_history(window, cx);
+        }
+    }
+
     /// Reload refs/rows in place. Immutable selected commit readers, split diff
     /// entities and both file/editor scroll handles remain untouched.
     pub(in crate::ui) fn refresh_git_history_preserving(
@@ -182,11 +219,13 @@ impl Pokarak {
                 if missing.is_some() {
                     app.save_graph_branch(None, cx);
                 }
-                app.git_history.entries = Arc::default();
                 app.git_history.nav.catalog = Some(Arc::new(catalog));
                 app.git_history.in_neighborhood = false;
                 app.git_history.next_page = NextPage::Idle;
-                app.append_history_page(page, cx);
+                let changed = app.git_history.install_refresh_page(page);
+                if changed {
+                    app.refresh_graph_hover(cx);
+                }
                 let row = anchor
                     .as_ref()
                     .and_then(|oid| {
@@ -250,7 +289,7 @@ impl Pokarak {
                 match result {
                     Ok(data) => {
                         ready(app, data, window, cx);
-                        if !app.git_history.read_pending() {
+                        if !app.git_history.read_pending() && !app.inline_commit_read_pending() {
                             app.auto_refresh.installed(navigation_generation);
                         }
                     }
@@ -647,6 +686,31 @@ mod tests {
             .unwrap()
             .trim_end_matches('\n')
             .to_owned()
+    }
+
+    #[test]
+    fn unchanged_graph_refresh_keeps_rows_but_installs_real_reference_updates() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        fixture_git(root, &["init", "-b", "main"]);
+        std::fs::write(root.join("source.rs"), "authored fixture\n").unwrap();
+        fixture_git(root, &["add", "--", "source.rs"]);
+        fixture_git(root, &["commit", "-m", "base"]);
+        let mut ui = HistoryUi::default();
+        assert!(ui.install_refresh_page(history::first_page(root, 100).unwrap()));
+        let accepted = ui.entries.clone();
+        assert!(!ui.install_refresh_page(history::first_page(root, 100).unwrap()));
+        assert!(std::sync::Arc::ptr_eq(&accepted, &ui.entries));
+        fixture_git(root, &["branch", "new-reference"]);
+        assert!(ui.install_refresh_page(history::first_page(root, 100).unwrap()));
+        assert!(!std::sync::Arc::ptr_eq(&accepted, &ui.entries));
+        assert!(
+            ui.entries[0]
+                .commit
+                .refs
+                .iter()
+                .any(|name| name.contains("new-reference"))
+        );
     }
 
     #[test]

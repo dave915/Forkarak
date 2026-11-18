@@ -94,6 +94,9 @@ fn fingerprint(doc: &DiffDocument) -> Option<String> {
         hash.update((bytes.len() as u64).to_le_bytes());
         hash.update(bytes);
     }
+    if let Some(mode) = doc.file_mode_header() {
+        hash.update(mode.as_bytes());
+    }
     Some(format!("{:x}", hash.finalize()))
 }
 

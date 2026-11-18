@@ -2105,10 +2105,13 @@ impl Pokarak {
             },
             cx,
         );
-        let content = if diff.map(|d| d.binary).unwrap_or(false) && !dirty {
+        let content = if let Some(binary) = diff.filter(|d| d.binary && !dirty) {
             div()
                 .p_6()
                 .text_color(palette.rgb(MUTED))
+                .v_flex()
+                .gap_2()
+                .children(binary.file_mode_header().map(str::to_owned))
                 .child("바이너리 파일입니다. 텍스트 비교를 제공하지 않습니다.")
                 .into_any_element()
         } else if code {

@@ -203,7 +203,9 @@ impl DiffAnalysis {
             if !(0..lines.len()).any(|i| {
                 keep[i] && matches!(lines[i].kind, DiffKind::Addition | DiffKind::Deletion)
             }) {
-                keep.fill(false);
+                for (keep, line) in keep.iter_mut().zip(lines) {
+                    *keep = line.is_file_mode_change();
+                }
             }
         }
         let visible: Vec<_> = keep
@@ -534,6 +536,18 @@ mod tests {
         assert_eq!(filtered.hunks, vec![0]);
         assert_eq!(document.patch, "unchanged original patch");
         assert_eq!(document.lines.len(), 8);
+    }
+
+    #[test]
+    fn file_mode_change_stays_visible_with_whitespace_hidden() {
+        let lines = [line(
+            DiffKind::Header,
+            "File mode: 100644 → 100755",
+            None,
+            None,
+        )];
+        let analysis = DiffAnalysis::new(&lines);
+        assert_eq!(&*analysis.view(&lines, true).visible, &[0]);
     }
 
     #[test]

@@ -23,33 +23,38 @@ impl Pokarak {
         self.language_target(cx).is_some()
     }
     pub(super) fn prepare_language_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.language_tools.panel.as_mut()
+            && panel.is_caret_popup()
+        {
+            if let Reply::Signature(Some(help)) = &panel.value {
+                panel.cursor = help.active_signature.unwrap_or(0) as usize;
+            } else if matches!(panel.value, Reply::Complete(_)) {
+                self.language_tools
+                    .scroll
+                    .scroll_to_item(panel.cursor, ScrollStrategy::Top);
+            }
+            if self.popup_editor(window, cx).is_none() {
+                self.language_tools.panel = None;
+            }
+            return;
+        }
         self.language_tools
             .focus
             .get_or_insert_with(|| cx.focus_handle());
         if self.language_tools.input.is_none() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("이름으로 검색…"));
-            let subscription = cx.subscribe_in(
-                &input,
-                window,
-                |a, input, event: &InputEvent, window, cx| {
+            let subscription =
+                cx.subscribe_in(&input, window, |a, _, event: &InputEvent, _, cx| {
                     if !matches!(event, InputEvent::Change) {
                         return;
                     }
-                    let query = input.read(cx).value().to_lowercase();
-                    if let Some(panel) = a.language_tools.panel.as_mut() {
-                        panel.cursor = match &panel.value {
-                            Reply::Complete(items) => items
-                                .items
-                                .iter()
-                                .position(|i| i.label.to_lowercase().contains(query.as_str()))
-                                .unwrap_or(0),
-                            _ => 0,
-                        };
+                    if let Some(panel) = a.language_tools.panel.as_mut()
+                        && matches!(panel.value, Reply::Symbols(_))
+                    {
+                        panel.cursor = 0;
                     }
-                    a.resolve_candidate(window, cx);
                     cx.notify();
-                },
-            );
+                });
             self.language_tools.input = Some(input);
             self.language_tools.input_subscription = Some(subscription);
         }
@@ -60,19 +65,10 @@ impl Pokarak {
             .language_tools
             .panel
             .as_ref()
-            .is_some_and(|p| matches!(p.value, Reply::Symbols(_) | Reply::Complete(_)))
+            .is_some_and(|p| matches!(p.value, Reply::Symbols(_)))
         {
             if let Some(input) = &self.language_tools.input {
                 input.read(cx).focus_handle(cx).focus(window, cx);
-            }
-        } else if self
-            .language_tools
-            .panel
-            .as_ref()
-            .is_some_and(|p| matches!(p.value, Reply::Signature(_) | Reply::Hover(_)))
-        {
-            if let Some(editor) = self.active_editor() {
-                editor.read(cx).focus_handle(cx).focus(window, cx);
             }
         } else if let Some(focus) = &self.language_tools.focus {
             focus.focus(window, cx);
@@ -97,21 +93,13 @@ impl Pokarak {
             .as_ref()
             .map(|i| i.read(cx).value().to_lowercase())
             .unwrap_or_default();
-        let rows = match &panel.value {
-            Reply::Complete(v) => v
-                .items
-                .iter()
-                .enumerate()
-                .filter(|(_, i)| i.label.to_lowercase().contains(&query))
-                .map(|(i, _)| i)
-                .collect::<Vec<_>>(),
-            Reply::Symbols(v) => (0..symbol_rows(v, &query, &panel.collapsed).len()).collect(),
-            Reply::Diagnostics(v) => (0..v.len()).collect(),
-            _ => vec![],
+        let count = match &panel.value {
+            Reply::Symbols(v) => symbol_rows(v, &query, &panel.collapsed).len(),
+            Reply::Diagnostics(v) => v.len(),
+            _ => 0,
         };
         if key == "enter" {
             match &panel.value {
-                Reply::Complete(_) => self.apply_completion(window, cx),
                 Reply::Symbols(v) => {
                     if let Some(row) = symbol_rows(v, &query, &panel.collapsed).get(panel.cursor) {
                         self.jump_language(row.position, window, cx);
@@ -126,22 +114,21 @@ impl Pokarak {
             }
             return;
         }
-        if rows.is_empty() {
+        if count == 0 {
             return;
         }
-        let old = rows.iter().position(|i| *i == panel.cursor).unwrap_or(0);
+        let old = panel.cursor;
         let next = if key == "up" {
             old.saturating_sub(1)
         } else {
-            (old + 1).min(rows.len() - 1)
+            (old + 1).min(count - 1)
         };
         if let Some(panel) = &mut self.language_tools.panel {
-            panel.cursor = rows[next];
+            panel.cursor = next;
         }
         self.language_tools
             .scroll
             .scroll_to_item(next, ScrollStrategy::Nearest);
-        self.resolve_candidate(window, cx);
         cx.notify();
     }
     fn symbols_sidebar(&self) -> bool {
@@ -184,7 +171,7 @@ impl Pokarak {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let panel = self.language_tools.panel.as_ref()?;
-        if self.symbols_sidebar() || matches!(panel.value, Reply::Symbols(_)) {
+        if panel.is_caret_popup() || matches!(panel.value, Reply::Symbols(_)) {
             return None;
         }
         Some(
@@ -198,11 +185,18 @@ impl Pokarak {
         )
     }
     pub(in crate::ui) fn language_popover(
-        &self,
+        &mut self,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let panel = self.language_tools.panel.as_ref()?;
+        if panel.is_caret_popup() {
+            if self.popup_editor(window, cx).is_none() {
+                self.language_tools.panel = None;
+                return None;
+            }
+            return Some(self.caret_popup(cx));
+        }
         if !matches!(panel.value, Reply::Symbols(_)) || self.symbols_sidebar() {
             return None;
         }
@@ -235,145 +229,6 @@ impl Pokarak {
             .unwrap_or_default();
         let owner = cx.entity();
         let body = match &panel.value {
-            Reply::Complete(result) => {
-                let rows = Arc::new(
-                    result
-                        .items
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, item)| item.label.to_lowercase().contains(&query))
-                        .map(|(i, _)| i)
-                        .collect::<Vec<_>>(),
-                );
-                let count = rows.len();
-                let details = result
-                    .items
-                    .get(panel.cursor)
-                    .map(|item| {
-                        format!(
-                            "{}\n{}\n{}",
-                            item.label,
-                            item.detail.as_deref().unwrap_or(""),
-                            item.documentation
-                                .as_ref()
-                                .map(|m| m.value.as_str())
-                                .unwrap_or("")
-                        )
-                    })
-                    .unwrap_or_default();
-                let detail_note = panel.details.clone().unwrap_or_default();
-                let incomplete = result.is_incomplete;
-                div()
-                    .h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
-                        div()
-                            .w(relative(0.45))
-                            .h_full()
-                            .v_flex()
-                            .when_some(self.language_tools.input.as_ref(), |d, i| {
-                                d.child(Input::new(i).small())
-                            })
-                            .when(count == 0, |d| {
-                                d.child("완성 후보가 없습니다. 커서 위치에서 다시 요청하세요.")
-                            })
-                            .child(
-                                uniform_list("language-completions", count, move |range, _, cx| {
-                                    owner.update(cx, |a, cx| {
-                                        range
-                                            .filter_map(|row| {
-                                                let index = *rows.get(row)?;
-                                                let p = a.language_tools.panel.as_ref()?;
-                                                let Reply::Complete(v) = &p.value else {
-                                                    return None;
-                                                };
-                                                let item = v.items.get(index)?;
-                                                Some(
-                                                    Button::new(("completion-item", index))
-                                                        .label(item.label.clone())
-                                                        .tooltip(
-                                                            item.detail.clone().unwrap_or_else(
-                                                                || item.label.clone(),
-                                                            ),
-                                                        )
-                                                        .small()
-                                                        .ghost()
-                                                        .w_full()
-                                                        .selected(index == p.cursor)
-                                                        .on_click(cx.listener(
-                                                            move |a, _, w, cx| {
-                                                                if let Some(p) =
-                                                                    a.language_tools.panel.as_mut()
-                                                                {
-                                                                    p.cursor = index;
-                                                                    p.details = None;
-                                                                }
-                                                                a.resolve_candidate(w, cx);
-                                                                cx.notify();
-                                                            },
-                                                        ))
-                                                        .into_any_element(),
-                                                )
-                                            })
-                                            .collect()
-                                    })
-                                })
-                                .flex_1()
-                                .min_h_0()
-                                .track_scroll(&self.language_tools.scroll),
-                            )
-                            .when(incomplete, |d| {
-                                d.child(
-                                    div()
-                                        .text_size(ui_text(11.))
-                                        .child("일부 후보 · 입력 후 다시 요청"),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .min_h_0()
-                            .v_flex()
-                            .child(
-                                div()
-                                    .id("completion-documentation")
-                                    .flex_1()
-                                    .min_h_0()
-                                    .overflow_y_scroll()
-                                    .p_3()
-                                    .v_flex()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .font_family("JetBrains Mono")
-                                            .text_size(ui_text(12.))
-                                            .child(details),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(ui_text(11.))
-                                            .text_color(palette.rgb(MUTED))
-                                            .child(detail_note),
-                                    ),
-                            )
-                            .child(
-                                div().flex_none().px_3().py_1().child(
-                                    Button::new("apply-completion")
-                                        .label("선택한 완성 적용  ↵")
-                                        .small()
-                                        .disabled(count == 0)
-                                        .on_click(
-                                            cx.listener(|a, _, w, cx| a.apply_completion(w, cx)),
-                                        ),
-                                ),
-                            ),
-                    )
-                    .into_any_element()
-            }
             Reply::Diagnostics(items) => {
                 let count = items.len();
                 div()
@@ -551,80 +406,12 @@ impl Pokarak {
                     )
                     .into_any_element()
             }
-            Reply::Signature(help) => {
-                let mut body = div()
-                    .id("signature-documentation")
-                    .overflow_y_scroll()
-                    .flex_1()
-                    .min_h_0()
-                    .p_3()
-                    .v_flex()
-                    .gap_2();
-                if let Some(help) = help {
-                    if let Some(sig) = help
-                        .signatures
-                        .get(help.active_signature.unwrap_or(0) as usize)
-                    {
-                        body = body
-                            .child(div().font_family("JetBrains Mono").child(sig.label.clone()));
-                        let parameter = sig
-                            .active_parameter
-                            .or(help.active_parameter)
-                            .and_then(|i| sig.parameters.get(i as usize).map(|p| (i, p)));
-                        if let Some((i, p)) = parameter {
-                            body = body.child(div().text_color(palette.rgb(BLUE)).child(format!(
-                                "활성 매개변수 {}: {}",
-                                i + 1,
-                                parameter_text(&sig.label, &p.label).unwrap_or_default()
-                            )));
-                            if let Some(doc) = &p.documentation {
-                                body = body.child(doc.value.clone());
-                            }
-                        }
-                        if let Some(doc) = &sig.documentation {
-                            body = body.child(doc.value.clone());
-                        }
-                        body = body.child(div().text_size(ui_text(11.)).child(format!(
-                            "오버로드 {} / {} · 커서에서 다시 요청해 갱신",
-                            help.active_signature.unwrap_or(0) + 1,
-                            help.signatures.len()
-                        )));
-                    } else {
-                        body = body.child("이 커서 위치에서 함수 시그니처가 없습니다.");
-                    }
-                } else {
-                    body = body.child("이 커서 위치에서 함수 시그니처가 없습니다.");
-                }
-                body.into_any_element()
-            }
-            Reply::Hover(hover) => div()
-                .id("hover-documentation")
-                .overflow_y_scroll()
-                .flex_1()
-                .min_h_0()
-                .p_3()
-                .v_flex()
-                .gap_2()
-                .children(
-                    hover
-                        .as_ref()
-                        .map(|h| {
-                            h.contents
-                                .iter()
-                                .map(|m| div().child(m.value.clone()))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_else(|| {
-                            vec![div().child("이 위치에서 타입·문서 정보가 없습니다.")]
-                        }),
-                )
-                .into_any_element(),
             _ => div().into_any_element(),
         };
         let tool = panel.tool.clone();
         div()
             .id("language-panel")
-            // Keep completion/documentation lists first in the bubble phase,
+            // Keep lists first in the bubble phase,
             // while excluding the editor beneath a floating language panel.
             // Also consume unused deltas over short lists and the panel header.
             .occlude()

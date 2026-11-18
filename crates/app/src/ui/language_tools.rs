@@ -2,6 +2,7 @@
 //! Observing/viewing code never starts a process. All server calls run off-thread.
 mod model;
 pub(super) mod on_type;
+mod popup;
 #[cfg(test)]
 mod real;
 #[cfg(test)]
@@ -68,7 +69,6 @@ struct Panel {
     value: Reply,
     cursor: usize,
     collapsed: HashSet<usize>,
-    details: Option<String>,
 }
 
 #[derive(Default)]
@@ -110,6 +110,7 @@ pub(super) fn actions(
     root: Stateful<Div>,
     cx: &mut Context<Pokarak>,
 ) -> Stateful<Div> {
+    let root = popup::actions(app, root, cx);
     root.when(app.language_target(cx).is_some(), |root| {
         root.on_action(
             cx.listener(|a, _: &Complete, w, cx| a.request_language(Tool::Complete, None, w, cx)),
@@ -958,7 +959,6 @@ impl Pokarak {
                             value,
                             cursor: 0,
                             collapsed: HashSet::new(),
-                            details: None,
                         });
                         a.prepare_language_panel(window, cx);
                         if matches!(tool, Tool::Complete) {
@@ -1045,7 +1045,7 @@ impl Pokarak {
         self.language_tools.markers = Some((editor, collection));
     }
     fn dismiss_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.language_tools.panel = None;
+        self.language_tools.dismiss_panel();
         if let Some(e) = self.active_editor() {
             e.read(cx).focus_handle(cx).focus(window, cx);
         }
@@ -1072,56 +1072,39 @@ impl Pokarak {
         self.language_tools.documentation_request =
             self.language_tools.documentation_request.wrapping_add(1);
         let token = self.language_tools.documentation_request;
-        let request = identity.clone();
+        let snapshot = identity.snapshot.clone();
         let task = cx.background_spawn(async move {
-            let mut nav = nav.lock().map_err(|_| anyhow::anyhow!("분석 상태 오류"))?;
-            let resolved = nav
-                .resolve_completion_buffer(&request.snapshot, &item)
-                .map(|r| r.value);
-            let position = utf16(
-                &gpui_kit::component::input::Rope::from(request.snapshot.text()),
-                request.cursor,
-            );
-            let hover = nav
-                .hover_buffer(&request.snapshot, position.line, position.character)
-                .map(|r| r.value);
-            anyhow::Ok((resolved, hover))
+            let mut nav = nav.lock().ok()?;
+            popup::resolved_candidate(&mut nav, &snapshot, item)
         });
         cx.spawn_in(window, async move |app, cx| {
-            let result = task.await;
+            let Some(resolved) = task.await else {
+                return;
+            };
             let _ = app.update_in(cx, |a, _, cx| {
                 if a.language_tools.documentation_request != token
                     || !a.accepts_language(&identity, true, cx)
                 {
                     return;
                 }
-                let Some(panel) = a.language_tools.panel.as_mut().filter(|p| {
-                    p.cursor == index
-                        && p.identity.snapshot.version() == identity.snapshot.version()
-                }) else {
+                let Some(panel) = a
+                    .language_tools
+                    .panel
+                    .as_mut()
+                    .filter(|p| p.cursor == index && p.identity.matches(&identity, true))
+                else {
                     return;
                 };
                 let Reply::Complete(items) = &mut panel.value else {
                     return;
                 };
-                if let Ok((resolved, hover)) = result {
-                    let mut details = vec![];
-                    match resolved {
-                        Ok(item) => {
-                            items.items[index] = item;
-                        }
-                        Err(e) => details.push(format!("후보 문서: {e:#}")),
-                    };
-                    match hover {
-                        Ok(Some(hover)) => {
-                            details.push("커서의 타입 · 문서".into());
-                            details.extend(hover.contents.into_iter().map(|m| m.value))
-                        }
-                        Ok(None) => {}
-                        Err(e) => details.push(format!("커서 타입 정보: {e:#}")),
-                    };
-                    panel.details = Some(details.join("\n\n"));
+                let Some(original) = items.items.get_mut(index) else {
+                    return;
+                };
+                if resolved.label != original.label {
+                    return;
                 }
+                *original = resolved;
                 cx.notify();
             });
         })

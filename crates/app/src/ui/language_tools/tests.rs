@@ -598,3 +598,100 @@ fn custom_language_families_replace_lower_exact_defaults_but_keep_same_layer_exa
     super::model::overlay_configs(&mut all, vec![config("kt", "kotlin-custom")]);
     assert!(all.iter().any(|c| c.language == "kotlin"));
 }
+
+#[test]
+fn dismissing_a_caret_popup_invalidates_completion_and_preserves_other_pending_commands() {
+    use super::{LanguageTools, Panel};
+    let fixture = Fixture::new();
+    let visible = || Panel {
+        identity: fixture.identity(),
+        tool: Tool::Signature,
+        value: Reply::Signature(None),
+        cursor: 0,
+        collapsed: HashSet::new(),
+    };
+    for pending in [None, Some(Tool::Complete), Some(Tool::Signature)] {
+        let mut tools = LanguageTools {
+            panel: Some(visible()),
+            pending,
+            request: 11,
+            documentation_request: 17,
+            ..Default::default()
+        };
+        tools.dismiss_panel();
+        assert!(tools.panel.is_none() && tools.pending.is_none());
+        assert_ne!(tools.request, 11);
+        assert_ne!(tools.documentation_request, 17);
+    }
+    let mut tools = LanguageTools {
+        panel: Some(visible()),
+        pending: Some(Tool::Diagnostics),
+        request: 11,
+        ..Default::default()
+    };
+    tools.dismiss_panel();
+    assert_eq!(tools.request, 11);
+    assert!(matches!(tools.pending, Some(Tool::Diagnostics)));
+}
+
+#[test]
+fn candidate_documentation_uses_only_completion_resolve_and_keeps_the_original_when_unsupported() {
+    for supported in [true, false] {
+        let f = Fixture::new();
+        let server = include_str!("test_peer.py")
+            .replace(
+                "'resolveProvider':True",
+                if supported {
+                    "'resolveProvider':True"
+                } else {
+                    "'resolveProvider':False"
+                },
+            )
+            .replace(
+                "'label':'dirtyMethod',",
+                "'label':'dirtyMethod','documentation':'Initial candidate documentation',",
+            );
+        fs::write(f.root.join("peer.py"), server).unwrap();
+        let mut nav = f.nav();
+        let Reply::Complete(result) = execute(
+            &mut nav,
+            &f.snapshot,
+            &[],
+            Tool::Complete,
+            LspPosition {
+                line: 2,
+                character: 5,
+            },
+            &FormattingOptions::default(),
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let item = &result.items[0];
+        let resolved = super::popup::resolved_candidate(&mut nav, &f.snapshot, item.clone());
+        assert_eq!(resolved.is_some(), supported);
+        let displayed = resolved.as_ref().unwrap_or(item);
+        assert_eq!(
+            displayed.documentation.as_ref().unwrap().value,
+            if supported {
+                "Fixture **documentation**"
+            } else {
+                "Initial candidate documentation"
+            }
+        );
+        nav.shutdown();
+        let messages = fs::read_to_string(f.root.join("protocol.jsonl")).unwrap();
+        let methods: Vec<_> = messages
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["method"].clone())
+            .collect();
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|m| *m == "completionItem/resolve")
+                .count(),
+            usize::from(supported)
+        );
+        assert!(!methods.iter().any(|m| m == "textDocument/hover"));
+    }
+}

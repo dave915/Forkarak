@@ -103,6 +103,20 @@ fn requests(prefs: &Preferences, project: Option<&Path>) -> Vec<Request> {
     bind!("find_file", "cmd-p", FindFile, None);
     bind!("find_text", "cmd-shift-f", FindText, None);
     bind!("find_text", "cmd-shift-f", FindText, Some("Input"));
+    if let Some(key) = settings::navigation_alias("find_definition", overrides) {
+        result.push(Request {
+            keys: key.into(),
+            action: Box::new(FindDefinition),
+            context: Some("ForkarakCode"),
+        });
+    }
+    if let Some(key) = settings::navigation_alias("find_references", overrides) {
+        result.push(Request {
+            keys: key.into(),
+            action: Box::new(FindReferences),
+            context: Some("ForkarakCode"),
+        });
+    }
     bind!("find_definition", "cmd-b", FindDefinition, None);
     bind!("find_references", "alt-f7", FindReferences, None);
     bind!("next_worktree", "cmd-alt-down", NextWorktree, None);
@@ -212,6 +226,37 @@ mod tests {
             .iter()
             .map(|binding| binding.action().name())
             .collect()
+    }
+
+    #[test]
+    fn function_keys_are_reader_only_and_yield_to_user_bindings() {
+        let mut prefs = Preferences::default();
+        let defaults = requests(&prefs, None);
+        for (key, action) in [
+            ("f12", FindDefinition.name()),
+            ("alt-shift-f12", FindReferences.name()),
+        ] {
+            let registration = defaults.iter().find(|r| r.keys == key).unwrap();
+            assert_eq!(registration.action.name(), action);
+            assert_eq!(registration.context, Some("ForkarakCode"));
+            assert!(Keystroke::parse(key).is_ok());
+        }
+        prefs.set_option(
+            None,
+            "keyboard.bindings",
+            json!({"find_file":"f12","find_references":""}),
+        );
+        let custom = requests(&prefs, None);
+        assert!(
+            custom
+                .iter()
+                .all(|r| r.keys != "f12" || r.action.name() == FindFile.name())
+        );
+        assert!(
+            custom
+                .iter()
+                .all(|r| r.action.name() != FindReferences.name())
+        );
     }
 
     #[test]

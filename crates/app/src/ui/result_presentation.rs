@@ -1,9 +1,12 @@
 //! Native anchored navigation and grouped source excerpts, shared by all placements.
+mod tab;
 use super::*;
 use std::collections::BTreeMap;
+pub(super) use tab::NavigationTab;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Surface {
+    Editor,
     Popover,
     Files,
     Bottom,
@@ -11,9 +14,27 @@ pub(super) enum Surface {
 impl Surface {
     pub(super) fn from_option(value: &str) -> Self {
         match value {
+            "editor" => Self::Editor,
             "files" => Self::Files,
             "bottom" => Self::Bottom,
             _ => Self::Popover,
+        }
+    }
+
+    // Side and bottom panels can stay visible beside a direct definition jump.
+    pub(super) fn visible_on_arrival(self, foreground: bool) -> bool {
+        foreground || matches!(self, Self::Files | Self::Bottom)
+    }
+
+    pub(super) fn for_results(prefs: &Preferences, project: Option<&Path>, semantic: bool) -> Self {
+        let placement = prefs.option_string(
+            project,
+            "navigation.results_placement",
+            if semantic { "editor" } else { "popover" },
+        );
+        match (Self::from_option(&placement), semantic) {
+            (Self::Editor, false) => Self::Popover,
+            (surface, _) => surface,
         }
     }
 }
@@ -53,7 +74,7 @@ fn match_range(text: &str, start: usize, query: Option<&str>) -> Option<std::ops
     }
     let end = text[start..]
         .char_indices()
-        .take_while(|(_, ch)| ch.is_alphanumeric() || *ch == '_')
+        .take_while(|(_, ch)| ch.is_alphanumeric() || matches!(ch, '_' | '$'))
         .last()
         .map_or(start, |(at, ch)| start + at + ch.len_utf8());
     (end > start).then_some(start..end)
@@ -292,6 +313,14 @@ impl Pokarak {
                     && (!app.result_semantic || app.semantic_result_sources_current(cx))
                 {
                     app.result_rows = Arc::new(rows);
+                    if let Some(tab) = app
+                        .sessions
+                        .get_mut(&root)
+                        .and_then(|s| s.result_tab.as_mut())
+                    {
+                        tab.cache_rows(&results, &app.result_rows);
+                    }
+                    app.scroll_to_result_cursor();
                     cx.notify();
                 }
             });
@@ -303,7 +332,17 @@ impl Pokarak {
         if self.results_root != self.current {
             return;
         }
+        let previous = self.reading_point(cx);
+        let was_editor = self.result_tab_active();
         self.result_surface = surface;
+        if surface == Surface::Editor && !was_editor {
+            self.remember_result_tab(previous);
+        } else if was_editor
+            && surface != Surface::Editor
+            && let Some(session) = self.current.as_ref().and_then(|r| self.sessions.get_mut(r))
+        {
+            session.forget_result_tab();
+        }
         if surface == Surface::Files
             && let Some(root) = &self.current
             && let Some(s) = self.sessions.get_mut(root)
@@ -368,6 +407,22 @@ impl Pokarak {
         let scope = root.clone();
         let cursor = self.result_cursor;
         let failed = self.result_title == "본문 검색 실패";
+        let in_editor = self.result_surface == Surface::Editor;
+        let font_size = if in_editor {
+            ui_px(self.prefs.display.code_font_size)
+        } else {
+            ui_text(11.)
+        };
+        let row_height = ui_px(24.).max(theme::code_row_height(font_size));
+        let widest = rows
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, row)| match row {
+                Row::File(path) => path.strip_prefix(&root).unwrap_or(path).as_os_str().len(),
+                Row::Line { text, .. } => text.len() + 8,
+                _ => 0,
+            })
+            .map(|(index, _)| index);
         let mut header = div()
             .flex_none()
             .min_h(ui_px(32.))
@@ -385,13 +440,36 @@ impl Pokarak {
                         "{} · {}{}",
                         self.result_title,
                         self.results.len(),
-                        if self.results.len() >= 300 {
+                        if !self.result_semantic && self.results.len() >= 300 {
                             " · 최대 300개 표시"
                         } else {
                             ""
                         }
                     )),
             )
+            .when(self.result_semantic, |header| {
+                header
+                    .child(
+                        Button::new("rerun-navigation")
+                            .icon(IconName::RotateCw)
+                            .ghost()
+                            .xsmall()
+                            .tooltip("원래 심볼에서 다시 탐색")
+                            .accessibility_label("다시 탐색")
+                            .disabled(self.loading || self.file_loading || self.navigating)
+                            .on_click(cx.listener(|app, _, w, cx| app.rerun_results(w, cx))),
+                    )
+                    .child(
+                        Button::new("editor-results")
+                            .label("편집기 탭")
+                            .ghost()
+                            .xsmall()
+                            .selected(self.result_surface == Surface::Editor)
+                            .on_click(cx.listener(|app, _, w, cx| {
+                                app.move_results(Surface::Editor, w, cx)
+                            })),
+                    )
+            })
             .child(
                 Button::new("pin-result-files")
                     .label("파일 영역에 고정")
@@ -425,11 +503,13 @@ impl Pokarak {
                     .icon(IconName::X)
                     .ghost()
                     .xsmall()
-                    .tooltip("결과 닫기 · 파일 목록으로 돌아가기")
+                    .tooltip("결과 닫기")
                     .on_click(cx.listener(|app, _, w, cx| {
-                        app.results_open = false;
-                        app.focus.focus(w, cx);
-                        cx.notify();
+                        if app.result_tab_active() {
+                            app.close_result_tab(w, cx);
+                        } else {
+                            app.dismiss_results(w, cx);
+                        }
                     })),
             );
         if failed {
@@ -456,7 +536,7 @@ impl Pokarak {
                 range
                     .map(|index| match &rows[index] {
                         Row::Section(group, count) => div()
-                            .h(ui_px(24.))
+                            .h(row_height)
                             .px_2()
                             .bg(palette.rgb(PANEL))
                             .text_size(ui_text(11.))
@@ -464,7 +544,7 @@ impl Pokarak {
                             .child(format!("{} · {}개", group.label(), count))
                             .into_any_element(),
                         Row::File(path) => div()
-                            .h(ui_px(24.))
+                            .h(row_height)
                             .px_2()
                             .bg(palette.rgb(PANEL))
                             .text_size(ui_text(11.))
@@ -477,7 +557,7 @@ impl Pokarak {
                             )
                             .into_any_element(),
                         Row::Gap => div()
-                            .h(ui_px(24.))
+                            .h(row_height)
                             .px_2()
                             .text_color(palette.rgb(MUTED))
                             .child("⋯")
@@ -491,13 +571,28 @@ impl Pokarak {
                             syntax_line,
                         } => {
                             let target = weak.clone();
-                            let hit_location = location.clone();
                             let expected = scope.clone();
                             let model = rows.clone();
-                            let accessible_target = weak.clone();
-                            let accessible_location = location.clone();
-                            let accessible_scope = scope.clone();
-                            let accessible_model = rows.clone();
+                            // Pointer and accessibility activation must validate the same rendered row.
+                            let open = move |window: &mut Window, cx: &mut App| {
+                                let _ = target.update(cx, |app, cx| {
+                                    if app.opening_path.is_some()
+                                        || !app.results_open
+                                        || app.current.as_ref() != Some(&expected)
+                                        || !Arc::ptr_eq(&app.result_rows, &model)
+                                    {
+                                        return;
+                                    }
+                                    if let Row::Line { location, hit, .. } = &model[index] {
+                                        if let Some(hit) = hit {
+                                            app.result_cursor = *hit;
+                                            app.remember_result_cursor();
+                                        }
+                                        app.open_location(location.clone(), window, cx);
+                                    }
+                                });
+                            };
+                            let accessible_open = open.clone();
                             let spans = merged_highlights(
                                 text,
                                 syntax.spans(*syntax_line, cx),
@@ -515,25 +610,16 @@ impl Pokarak {
                                     location.column + 1
                                 ))
                                 .on_a11y_action(accesskit::Action::Click, move |_, window, cx| {
-                                    let _ = accessible_target.update(cx, |app, cx| {
-                                        if app.current.as_ref() == Some(&accessible_scope)
-                                            && Arc::ptr_eq(&app.result_rows, &accessible_model)
-                                        {
-                                            app.open_location(
-                                                accessible_location.clone(),
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    });
+                                    accessible_open(window, cx);
                                 })
-                                .h(ui_px(24.))
+                                .h(row_height)
                                 .px_2()
                                 .flex()
                                 .items_center()
                                 .gap_2()
                                 .font_family("JetBrains Mono")
-                                .text_size(ui_text(11.))
+                                .min_w_full()
+                                .text_size(font_size)
                                 .bg(if *hit == Some(cursor) {
                                     palette.rgb(PANEL)
                                 } else {
@@ -548,22 +634,15 @@ impl Pokarak {
                                         .text_color(palette.rgb(MUTED))
                                         .child((location.line + 1).to_string()),
                                 )
-                                .child(div().min_w_0().text_ellipsis().child(styled))
-                                .on_click(move |_, w, cx| {
-                                    let _ = target.update(cx, |app, cx| {
-                                        if app.current.as_ref() == Some(&expected)
-                                            && app.results_root.as_ref() == Some(&expected)
-                                            && Arc::ptr_eq(&app.result_rows, &model)
-                                        {
-                                            app.open_location(hit_location.clone(), w, cx);
-                                        }
-                                    });
-                                })
+                                .child(div().whitespace_nowrap().flex_none().child(styled))
+                                .on_click(move |_, w, cx| open(w, cx))
                                 .into_any_element()
                         }
                     })
                     .collect::<Vec<_>>()
             })
+            .with_width_from_item(widest)
+            .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
             .track_scroll(&self.result_scroll)
             .flex_1()
             .min_h_0()
@@ -599,6 +678,48 @@ impl Pokarak {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_navigation_and_text_search_respect_independent_and_explicit_placements() {
+        use super::Preferences;
+        use std::path::Path;
+        let mut prefs = Preferences::default();
+        let project = Path::new("/fixture");
+        assert_eq!(Surface::for_results(&prefs, None, true), Surface::Editor);
+        assert_eq!(Surface::for_results(&prefs, None, false), Surface::Popover);
+        prefs.set_option(
+            None,
+            "navigation.results_placement",
+            serde_json::json!("files"),
+        );
+        for (key, placement) in [
+            ("popover", Surface::Popover),
+            ("bottom", Surface::Bottom),
+            ("files", Surface::Files),
+            ("editor", Surface::Editor),
+        ] {
+            prefs.set_option(
+                Some(project),
+                "navigation.results_placement",
+                serde_json::json!(key),
+            );
+            assert_eq!(Surface::for_results(&prefs, Some(project), true), placement);
+            assert_eq!(Surface::for_results(&prefs, None, true), Surface::Files);
+            assert_eq!(
+                Surface::for_results(&prefs, Some(project), false),
+                if placement == Surface::Editor {
+                    Surface::Popover
+                } else {
+                    placement
+                }
+            );
+            assert!(placement.visible_on_arrival(true));
+            assert_eq!(
+                placement.visible_on_arrival(false),
+                matches!(placement, Surface::Files | Surface::Bottom)
+            );
+        }
+    }
+
     #[test]
     fn definitions_and_usages_in_the_same_file_keep_distinct_sections_and_global_hit_indices() {
         use super::reader_navigation::ResultGroup;

@@ -384,6 +384,7 @@ mod tests {
             position: Some(Position::new(47, 9)),
             history: true,
             history_restore: Some(ReadingPoint {
+                result_tab: false,
                 path: "src/선택.kt".into(),
                 code: true,
                 row: 8,

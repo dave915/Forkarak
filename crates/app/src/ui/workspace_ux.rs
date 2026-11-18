@@ -132,6 +132,7 @@ impl Pokarak {
         {
             session.saved.selected = None;
             session.saved.tabs.clear();
+            session.result_tab = None;
             session.saved.positions.clear();
             session.saved.line = 0;
             session.saved.column = 0;
@@ -182,6 +183,8 @@ impl Pokarak {
     pub(super) fn close_active_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.git_history.active {
             self.close_history_file(window, cx);
+        } else if self.result_tab_active() {
+            self.close_result_tab(window, cx);
         } else if let Some(path) = self.selected() {
             self.close_file(path, window, cx);
         }

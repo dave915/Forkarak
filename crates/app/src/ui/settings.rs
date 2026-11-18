@@ -702,6 +702,28 @@ pub(super) const KEYBOARD_DEFAULTS: &[(&str, &str, &str)] = &[
     ("pin_tab", "탭 고정", "cmd-shift-enter"),
     ("format_file", "파일 포맷", "alt-shift-f"),
 ];
+/// An explicitly assigned chord wins over an optional code-reader default.
+pub(super) fn navigation_alias(
+    id: &str,
+    bindings: Option<&serde_json::Map<String, Value>>,
+) -> Option<&'static str> {
+    let key = match id {
+        "find_definition" => "f12",
+        "find_references" => "alt-shift-f12",
+        _ => return None,
+    };
+    if let Some(bindings) = bindings
+        && (bindings.contains_key(id)
+            || bindings
+                .values()
+                .filter_map(Value::as_str)
+                .any(|assigned| normalize_key(assigned) == key))
+    {
+        return None;
+    }
+    Some(key)
+}
+
 fn binding_conflicts(value: &Value) -> Vec<String> {
     let mut keys: HashMap<String, Vec<String>> = HashMap::new();
     for &(id, label, key) in KEYBOARD_DEFAULTS {
@@ -795,7 +817,8 @@ fn keyboard_settings(app: &Pokarak, state: &DialogState, cx: &App) -> Div {
         .child("등록된 기본 단축키 · 저장한 재정의는 명령 등록 시 적용됩니다.");
     for &(id, label, key) in KEYBOARD_DEFAULTS {
         let key = value.get(id).and_then(Value::as_str).unwrap_or(key);
-        if !format!("{id} {label} {key}")
+        let alias = navigation_alias(id, value.as_object());
+        if !format!("{id} {label} {key} {}", alias.unwrap_or_default())
             .to_lowercase()
             .contains(&query)
         {
@@ -812,6 +835,9 @@ fn keyboard_settings(app: &Pokarak, state: &DialogState, cx: &App) -> Div {
                 .text_size(ui_text(11.))
                 .child(div().min_w(ui_px(150.)).child(label))
                 .child(keycaps::binding(key, Palette::new(cx)))
+                .when_some(alias, |row, alias| {
+                    row.child(keycaps::binding(alias, Palette::new(cx)))
+                })
                 .child(div().text_color(Palette::new(cx).rgb(MUTED)).child(id)),
         );
     }

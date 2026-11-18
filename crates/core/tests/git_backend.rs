@@ -137,6 +137,9 @@ fn unborn_repository_root_and_inventory() {
     );
 }
 
+#[path = "git_backend/eol.rs"]
+mod eol;
+
 #[test]
 fn combines_staged_and_unstaged_against_head() {
     let repo = Repo::new();
@@ -1391,13 +1394,16 @@ fn contents(directory: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 fn backend_does_not_mutate_repository_or_execute_configured_filters() {
     let repo = Repo::new();
     repo.seed();
-    repo.write(".gitattributes", "*.rs filter=forbidden diff=forbidden\n");
+    repo.write(
+        ".gitattributes",
+        "*.rs text=auto filter=forbidden diff=forbidden\n",
+    );
     repo.git(&["config", "filter.forbidden.clean", "false"]);
     repo.git(&["config", "filter.forbidden.required", "true"]);
     repo.git(&["config", "diff.forbidden.textconv", "false"]);
     repo.git(&["config", "diff.external", "false"]);
     repo.git(&["config", "core.fsmonitor", "false"]);
-    repo.write("src/code.rs", "changed\n");
+    repo.write("src/code.rs", "changed\r\n");
     let before = contents(&repo.root);
     let index_modified = fs::metadata(repo.root.join(".git/index"))
         .unwrap()
@@ -1408,7 +1414,7 @@ fn backend_does_not_mutate_repository_or_execute_configured_filters() {
     assert_eq!(doc.new_text, "changed\n");
     assert_eq!(
         read_file(&repo.root, Path::new("src/code.rs")).unwrap(),
-        "changed\n"
+        "changed\r\n"
     );
     assert_eq!(search(&repo.root, "changed", 10).unwrap().len(), 1);
     let current = snapshot_current(&repo.root, &CompareMode::Uncommitted).unwrap();

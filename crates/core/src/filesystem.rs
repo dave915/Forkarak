@@ -13,7 +13,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use crate::{MAX_TEXT_BYTES, git::Entry};
+use crate::{MAX_TEXT_BYTES, eol, git::Entry};
 
 pub(crate) enum Node {
     Missing,
@@ -156,22 +156,26 @@ pub(crate) fn inspect(
     path: &Path,
     sha256: bool,
     filemode: bool,
-) -> Result<Option<Entry>> {
+) -> Result<Option<(Entry, Option<eol::Stats>)>> {
     match open(root, path)? {
         Node::Missing | Node::Directory => Ok(None),
         Node::Link(target) => {
             let mut hash = BlobHash::new(sha256, target.len() as u64);
             hash.update(&target);
-            Ok(Some(Entry {
-                mode: "120000".into(),
-                oid: hash.finish(),
-            }))
+            Ok(Some((
+                Entry {
+                    mode: "120000".into(),
+                    oid: hash.finish(),
+                },
+                None,
+            )))
         }
         Node::File(mut file) => {
             let metadata = file.metadata()?;
             let mut hash = BlobHash::new(sha256, metadata.len());
             let mut buffer = [0u8; 64 * 1024];
             let mut length = 0u64;
+            let mut eol = eol::Stats::default();
             loop {
                 let n = file.read(&mut buffer)?;
                 if n == 0 {
@@ -179,6 +183,10 @@ pub(crate) fn inspect(
                 }
                 length += n as u64;
                 hash.update(&buffer[..n]);
+                // Most source files fit in one buffer and contain only LF.
+                if length != n as u64 || length < metadata.len() || buffer[..n].contains(&b'\r') {
+                    eol.update(&buffer[..n]);
+                }
             }
             let after = file.metadata()?;
             ensure!(
@@ -193,26 +201,73 @@ pub(crate) fn inspect(
             } else {
                 "100644"
             };
-            Ok(Some(Entry {
-                mode: mode.into(),
-                oid: hash.finish(),
-            }))
+            Ok(Some((
+                Entry {
+                    mode: mode.into(),
+                    oid: hash.finish(),
+                },
+                eol.has_crlf().then_some(eol),
+            )))
         }
     }
+}
+
+/// Git's blob header includes the cleaned length. The first pass counted CRLF
+/// pairs, and its raw OID guards this second pass against concurrent edits.
+pub(crate) fn normalized_oid(
+    root: &Path,
+    path: &Path,
+    sha256: bool,
+    length: u64,
+    expected: &str,
+) -> Result<String> {
+    let Node::File(mut file) = open(root, path)? else {
+        bail!(
+            "{} changed while reading; refresh and retry",
+            path.display()
+        );
+    };
+    let mut raw = BlobHash::new(sha256, file.metadata()?.len());
+    let mut normalized = BlobHash::new(sha256, length);
+    let mut buffer = [0; 64 * 1024];
+    let mut carry = 0;
+    loop {
+        let n = file.read(&mut buffer[carry..])?;
+        if n == 0 {
+            normalized.update(&buffer[..carry]);
+            break;
+        }
+        let end = carry + n;
+        raw.update(&buffer[carry..end]);
+        carry = usize::from(buffer[end - 1] == b'\r');
+        let written = eol::normalize(&mut buffer[..end - carry]);
+        normalized.update(&buffer[..written]);
+        if carry != 0 {
+            buffer[0] = b'\r';
+        }
+    }
+    ensure!(
+        raw.finish() == expected,
+        "{} changed while reading; refresh and retry",
+        path.display()
+    );
+    Ok(normalized.finish())
+}
+
+pub(crate) fn preview(file: File) -> Result<(Vec<u8>, bool)> {
+    let mut bytes = Vec::new();
+    file.take(MAX_TEXT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    let truncated = bytes.len() > MAX_TEXT_BYTES;
+    bytes.truncate(MAX_TEXT_BYTES);
+    Ok((bytes, truncated))
 }
 
 pub(crate) fn read(root: &Path, path: &Path) -> Result<Option<(Vec<u8>, bool)>> {
     match open(root, path)? {
         Node::Missing | Node::Directory => Ok(None),
         Node::Link(bytes) => Ok(Some((bytes, false))),
-        Node::File(file) => {
-            let mut bytes = Vec::new();
-            file.take(MAX_TEXT_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)?;
-            let truncated = bytes.len() > MAX_TEXT_BYTES;
-            bytes.truncate(MAX_TEXT_BYTES);
-            Ok(Some((bytes, truncated)))
-        }
+        Node::File(file) => preview(file).map(Some),
     }
 }
 

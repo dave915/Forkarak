@@ -88,7 +88,7 @@ fn symbol_click_dispatch_collects_both_roles_at_the_same_clicked_dirty_position_
         line: 2,
         character: 3,
     };
-    let Reply::Symbol(result, _) = execute(
+    let Reply::Symbol(result, response) = execute(
         &mut nav,
         &f.snapshot,
         &[],
@@ -99,6 +99,22 @@ fn symbol_click_dispatch_collects_both_roles_at_the_same_clicked_dirty_position_
     .unwrap() else {
         panic!("combined symbol reply");
     };
+    // Rerun and panel moves retain the accepted dirty source and exact clicked column.
+    let query = response.query;
+    assert!(matches!(query.tool, Tool::Symbol));
+    assert_eq!(query.symbol(), Some("dirty"));
+    assert_eq!(
+        query.position,
+        gpui_kit::component::input::Position::new(2, 3)
+    );
+    assert!(query.matches_origin(&f.root, std::path::Path::new("entry.ts"), f.snapshot.text()));
+    assert!(!query.matches_origin(&f.root, std::path::Path::new("other.ts"), f.snapshot.text()));
+    assert!(!query.matches_origin(
+        &f.root.join("sibling"),
+        std::path::Path::new("entry.ts"),
+        f.snapshot.text()
+    ));
+    assert!(!query.matches_origin(&f.root, std::path::Path::new("entry.ts"), "changed draft"));
     assert_eq!(result.definitions.len(), 1);
     assert_eq!(result.unique_definition().unwrap().line, 1);
     assert_eq!(result.usages.len(), 1);

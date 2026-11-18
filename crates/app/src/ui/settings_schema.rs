@@ -223,8 +223,9 @@ pub(super) const FIELDS: &[Field] = &[
         Navigation,
         "navigation.results_placement",
         "탐색 결과 표시",
-        "팝오버 결과는 파일 영역에 고정할 수 있습니다.",
+        "정의와 사용처를 표시할 위치입니다.",
         Kind::Choice(&[
+            ("editor", "편집기 탭"),
             ("popover", "팝오버"),
             ("files", "파일 영역"),
             ("bottom", "하단")
@@ -417,7 +418,7 @@ pub(super) const FIELDS: &[Field] = &[
 pub(super) fn default_value(key: &str) -> Value {
     match key {
         "workspace.default_view" => json!("git"),
-        "navigation.results_placement" => json!("popover"),
+        "navigation.results_placement" => json!("editor"),
         "navigation.blame_mode" => json!("line"),
         "navigation.symbols_placement" => json!("sidebar"),
         "terminal.shell" => json!("/bin/zsh"),

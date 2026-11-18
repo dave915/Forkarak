@@ -240,6 +240,7 @@ pub fn bind_keys(cx: &mut App) {
 
 #[derive(Clone)]
 struct ReadingPoint {
+    result_tab: bool,
     path: PathBuf,
     code: bool,
     row: usize,
@@ -256,6 +257,7 @@ struct Session {
     terminal_visible: bool,
     snapshot: Option<Snapshot>,
     saved: SavedView,
+    result_tab: Option<result_presentation::NavigationTab>,
     documents: HashMap<PathBuf, Entity<EditorState>>,
     diffs: HashMap<PathBuf, ReviewDiff>,
     split_positions: HashMap<PathBuf, (usize, f32)>,
@@ -277,6 +279,7 @@ impl Session {
             terminal_visible: false,
             snapshot: None,
             saved,
+            result_tab: None,
             documents: HashMap::new(),
             diffs: HashMap::new(),
             split_positions: HashMap::new(),
@@ -337,6 +340,9 @@ pub struct Pokarak {
     result_revisions: HashMap<PathBuf, FileRevision>,
     pending_location_revision: Option<FileRevision>,
     result_title: String,
+    result_query: Option<reader_navigation::Query>,
+    rerun_after_read: Option<(u64, reader_navigation::Query)>,
+    rerun_placement: Option<(u64, result_presentation::Surface)>,
     result_semantic: bool,
     results_open: bool,
     result_skipped_paths: Vec<PathBuf>,
@@ -453,7 +459,10 @@ impl Pokarak {
                 .scroll_to_item(self.file_cursor, ScrollStrategy::Nearest);
             cx.stop_propagation();
             cx.notify();
-        } else if self.results_focus.is_focused(window) {
+        } else if self.results_open
+            && self.results_focus.is_focused(window)
+            && !event.keystroke.modifiers.modified()
+        {
             match key {
                 "down" if !self.results.is_empty() => {
                     self.result_cursor = (self.result_cursor + 1).min(self.results.len() - 1)
@@ -465,15 +474,12 @@ impl Pokarak {
                     }
                 }
                 "escape" => {
-                    self.results_open = false;
-                    self.navigation_request += 1;
-                    self.focus.focus(window, cx);
+                    self.dismiss_results(window, cx);
                 }
                 _ => return,
             }
-            let row = self.result_rows.iter().position(|row| matches!(row, result_presentation::Row::Line { hit: Some(index), .. } if *index == self.result_cursor)).unwrap_or(0);
-            self.result_scroll
-                .scroll_to_item(row, ScrollStrategy::Nearest);
+            self.remember_result_cursor();
+            self.scroll_to_result_cursor();
             cx.stop_propagation();
             cx.notify();
         }
@@ -575,8 +581,7 @@ impl Pokarak {
         self.external_change = false;
         self.loading = false;
         self.file_loading = false;
-        self.results_open = false;
-        self.results = Arc::default();
+        self.clear_result_surface();
         self.error = None;
         self.status = "프로젝트를 열어 시작하세요".into();
         self.filter.clear();
@@ -695,6 +700,9 @@ impl Pokarak {
             result_revisions: HashMap::new(),
             pending_location_revision: None,
             result_title: String::new(),
+            result_query: None,
+            rerun_after_read: None,
+            rerun_placement: None,
             result_semantic: false,
             results_open: false,
             result_skipped_paths: Vec::new(),
@@ -798,6 +806,9 @@ impl Pokarak {
         self.session().and_then(|s| s.saved.selected.clone())
     }
     fn active_editor(&self) -> Option<Entity<EditorState>> {
+        if self.result_tab_active() {
+            return None;
+        }
         self.session().and_then(|s| {
             s.saved
                 .selected
@@ -820,6 +831,7 @@ impl Pokarak {
             .map(|doc| doc.read(cx).scroll_offset())
             .unwrap_or_else(|| point(px(session.saved.scroll_x), px(session.saved.scroll_y)));
         Some(ReadingPoint {
+            result_tab: self.result_tab_active(),
             scroll_x: scroll.x.into(),
             scroll_y: scroll.y.into(),
             path,
@@ -944,7 +956,7 @@ impl Pokarak {
         self.pending_history = None;
         self.error = None;
         self.status = "워크트리 목록을 읽는 중…".into();
-        self.results_open = false;
+        self.clear_result_surface();
         let task = cx.background_spawn(async move {
             let root = pokarak_core::repository_root(&path)?;
             let trees = pokarak_core::worktree_inventory(&root)?;
@@ -1236,7 +1248,15 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let preserve_focus = self.auto_refresh.preserves_focus(self.request)
+        let previous = history.then(|| self.reading_point(cx)).flatten();
+        if self.result_tab_active()
+            && (history || position.is_some() || self.pending_history.is_some())
+        {
+            self.results_open = false;
+        }
+        self.rerun_after_read = None;
+        let preserve_focus = (self.auto_refresh.preserves_focus(self.request)
+            || self.result_tab_active())
             && !self.git_history.active
             && !history
             && position.is_none()
@@ -1276,21 +1296,16 @@ impl Pokarak {
         self.pending_cli_file = None;
         let history_restore = self.pending_history.take();
         let target_revision = self.pending_location_revision.take();
-        let previous = if history {
-            self.reading_point(cx)
-        } else {
-            None
-        };
+        let semantic_target = target_revision.is_some() && self.result_semantic;
+        let target_snapshot = semantic_target
+            .then(|| self.semantic_result_source(&root.join(&path)))
+            .flatten();
         self.prepare_preview_tab(&root, &path, history, cx);
         let Some(session) = self.sessions.get_mut(&root) else {
             return;
         };
         if let Some(point) = previous {
-            session.history.push(point);
-            if session.history.len() > 100 {
-                session.history.remove(0);
-            }
-            session.forward.clear();
+            session.push_history(point);
         }
         let restore = session
             .saved
@@ -1363,6 +1378,7 @@ impl Pokarak {
             snapshot: load_request,
             file: token,
         };
+        let navigation_request = self.navigation_request;
         let live = retained.is_some()
             || !matches!(file.as_ref().map(|f| &f.status), Some(FileStatus::Deleted));
         let task = cx.background_spawn(async move {
@@ -1427,7 +1443,8 @@ impl Pokarak {
                     this.request,
                     this.file_request,
                     this.git_history.active,
-                ) || this.active_worktree_has_git_job()
+                ) || (target_revision.is_some() && navigation_request != this.navigation_request)
+                    || this.active_worktree_has_git_job()
                 {
                     if let Some(session) = this.sessions.get_mut(&root) {
                         session.restoring = false;
@@ -1443,13 +1460,42 @@ impl Pokarak {
                 // A user may have typed after this request began, including
                 // after a refresh that now finds the file missing/unreadable.
                 let result = result.or_else(|error| {
-                    if preserve_focus {
+                    if preserve_focus || target_revision.is_some() {
                         return Err(error);
                     }
                     match this.code_edits.retained_text(&root, &path) {
                         Some(text) => Ok((text, code_workspace::FileDiff::Unchanged, false, true)),
                         None => Err(error),
                     }
+                });
+                let result = result.and_then(|candidate| {
+                    if let Some(expected) = target_revision {
+                        anyhow::ensure!(
+                            file_revision(&root.join(&path)) == Some(expected),
+                            "탐색 대상 파일이 변경되었습니다. 다시 탐색하세요."
+                        );
+                    }
+                    if semantic_target {
+                        anyhow::ensure!(
+                            this.semantic_result_sources_current(cx),
+                            "탐색 결과의 소스가 변경되었습니다. 다시 탐색하세요."
+                        );
+                        let draft = this
+                            .code_edits
+                            .analysis_drafts(&root)
+                            .into_iter()
+                            .find(|(p, _)| p == &path);
+                        let displayed = draft
+                            .as_ref()
+                            .map_or(candidate.0.as_str(), |(_, text)| text.as_str());
+                        anyhow::ensure!(
+                            target_snapshot
+                                .as_ref()
+                                .map_or(draft.is_none(), |s| s.text() == displayed),
+                            "탐색 대상의 초안이 변경되었습니다. 다시 탐색하세요."
+                        );
+                    }
+                    Ok(candidate)
                 });
                 match result {
                     Ok((text, diff, available, text_file)) => {
@@ -1607,6 +1653,12 @@ impl Pokarak {
                         } else {
                             "파일 열람 중".into()
                         };
+                        if let Some((request, query)) = this.rerun_after_read.take()
+                            && request == token
+                            && navigation_request == this.navigation_request
+                        {
+                            this.run_result_query(query, window, cx);
+                        }
                         let weak = cx.entity().downgrade();
                         let restore_root = root.clone();
                         window.on_next_frame(move |window, _| {
@@ -1629,7 +1681,7 @@ impl Pokarak {
                             this.external_change = true;
                         }
                         if let Some(s) = this.sessions.get_mut(&root) {
-                            s.file_read_failed(&path, preserve_focus);
+                            s.file_read_failed(&path, preserve_focus || target_revision.is_some());
                         }
                         this.error = Some(format!("{error:#}"));
                         this.status = "파일을 읽을 수 없습니다".into();
@@ -1661,6 +1713,10 @@ impl Pokarak {
                 } else {
                     session.history.push(point);
                 }
+            }
+            if target.result_tab {
+                self.activate_result_tab(false, window, cx);
+                return;
             }
             session.saved.code = target.code;
             session.saved.diff_row = target.row;
@@ -1792,14 +1848,15 @@ impl Pokarak {
                 group: None,
             })
             .collect();
-        self.show_result_excerpts(title, semantic, excerpts, window, cx);
+        self.show_result_excerpts(title, semantic, excerpts, true, window, cx);
     }
 
     fn show_result_excerpts(
         &mut self,
         title: String,
         semantic: bool,
-        excerpts: Arc<[ResultExcerpt]>,
+        mut excerpts: Vec<ResultExcerpt>,
+        foreground: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1808,27 +1865,58 @@ impl Pokarak {
             editor.range_to_bounds(&(editor.cursor()..editor.cursor()))
         });
         self.results_root = self.current.clone();
-        self.result_surface = result_presentation::Surface::from_option(&self.prefs.option_string(
-            self.current_project.as_deref(),
-            "navigation.results_placement",
-            "popover",
-        ));
+        let previous = self.reading_point(cx);
+        self.result_surface = self
+            .rerun_placement
+            .take()
+            .filter(|(request, _)| semantic && *request == self.navigation_request)
+            .map(|(_, surface)| surface)
+            .unwrap_or_else(|| {
+                result_presentation::Surface::for_results(
+                    &self.prefs,
+                    self.current_project.as_deref(),
+                    semantic,
+                )
+            });
+        if !semantic {
+            self.result_query = None;
+        }
         self.result_skipped_paths.clear();
-        self.results = excerpts;
-        self.result_title = title.clone();
+        if semantic {
+            // Up/Down and Enter follow the same file/line order as the rendered rows.
+            excerpts.sort_by(|a, b| {
+                a.group
+                    .cmp(&b.group)
+                    .then_with(|| a.location.path.cmp(&b.location.path))
+                    .then_with(|| a.location.line.cmp(&b.location.line))
+                    .then_with(|| a.location.column.cmp(&b.location.column))
+            });
+        }
+        self.results = excerpts.into();
+        self.result_title = title;
         self.result_semantic = semantic;
-        self.prepare_result_rows(cx);
+        if foreground {
+            self.prepare_result_rows(cx);
+        } else {
+            // Cmd-click opens its single definition first. A background tab builds
+            // excerpts on selection, or the adjacent panel builds them after the jump.
+            self.result_rows = Arc::new(Vec::new());
+        }
         if self.result_surface == result_presentation::Surface::Files
             && let Some(root) = &self.current
             && let Some(session) = self.sessions.get_mut(root)
         {
             session.saved.hide_files = false;
         }
-        self.result_title = title;
-        self.results_open = true;
+        self.results_open = self.result_surface.visible_on_arrival(foreground);
         self.analysis_feedback.output_open = false;
         self.result_cursor = 0;
-        self.results_focus.focus(window, cx);
+        if self.result_surface == result_presentation::Surface::Editor || !self.results_open {
+            self.remember_result_tab(previous.filter(|_| foreground));
+        }
+        if foreground {
+            self.results_focus.focus(window, cx);
+        }
         self.result_scroll.scroll_to_item(0, ScrollStrategy::Top);
         cx.notify();
     }
@@ -1839,22 +1927,25 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self
-            .results_root
-            .as_ref()
-            .is_some_and(|root| self.current.as_ref() != Some(root))
+        if self.current.is_none()
+            || self.results_root != self.current
+            || self.opening_path.is_some()
+            || self.git_history.active
         {
             return;
         }
+        self.capture_code_buffers(cx);
         if self.result_semantic && !self.semantic_result_sources_current(cx) {
-            self.results_open = false;
             self.error =
                 Some("탐색 결과의 소스가 변경되었습니다. 심볼 탐색을 다시 실행하세요.".into());
             cx.notify();
             return;
         }
-        if self.result_surface == result_presentation::Surface::Popover {
-            self.results_open = false;
+        if self.result_semantic && !self.result_revisions.contains_key(&location.path) {
+            self.error =
+                Some("탐색 대상 파일을 확인할 수 없습니다. 심볼 탐색을 다시 실행하세요.".into());
+            cx.notify();
+            return;
         }
         if let Some(expected) = self.result_revisions.get(&location.path).copied() {
             if file_revision(&location.path) != Some(expected) {
@@ -1870,6 +1961,9 @@ impl Pokarak {
         let Some(root) = &self.current else {
             return;
         };
+        if self.result_surface == result_presentation::Surface::Popover {
+            self.results_open = false;
+        }
         let path = location
             .path
             .strip_prefix(root)
@@ -1944,6 +2038,7 @@ impl Pokarak {
                     Err(error) => {
                         this.error = Some(format!("본문 검색 실패 · {error:#}"));
                         this.status = "본문 검색 실패 · 검색창에서 Enter로 다시 시도".into();
+                        this.result_query = None;
                         this.result_title = "본문 검색 실패".into();
                         this.result_skipped_paths.clear();
                         this.result_semantic = false;
@@ -1998,42 +2093,13 @@ impl Pokarak {
         let Some(session) = self.session() else {
             return self.render_welcome(cx);
         };
-        let Some(path) = &session.saved.selected else {
-            return div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(palette.rgb(MUTED))
-                .child("파일을 선택하면 변경사항과 코드를 볼 수 있습니다.")
-                .into_any_element();
-        };
-        let code = session.saved.code;
-        let diff = session.diffs.get(path);
-        let editor = session.documents.get(path).cloned();
-        let deleted = session
-            .snapshot
-            .as_ref()
-            .and_then(|s| s.changes.iter().find(|f| &f.path == path))
-            .map(|f| f.status == FileStatus::Deleted)
-            .unwrap_or(false);
-        let dirty = self
-            .current
-            .as_ref()
-            .is_some_and(|root| self.code_edits.dirty(root, path));
-        let editing = self
-            .current
-            .as_ref()
-            .is_some_and(|root| self.code_edits.can_edit(root, path));
         let mut tabs = div()
             .id("file-tabs")
             .flex()
             .items_center()
             .h(ui_px(34.))
-            .flex_none()
-            .overflow_x_scroll()
-            .border_b_1()
-            .border_color(palette.rgb(LINE));
+            .min_w_0()
+            .overflow_x_scroll();
         for (i, tab) in session.saved.tabs.iter().enumerate() {
             let target = tab.clone();
             let close = tab.clone();
@@ -2069,7 +2135,10 @@ impl Pokarak {
                         )
                         .ghost()
                         .small()
-                        .selected(tab == path)
+                        .selected(
+                            !self.result_tab_active()
+                                && Some(tab) == session.saved.selected.as_ref(),
+                        )
                         .tooltip(tab.to_string_lossy().to_string())
                         .on_click(cx.listener(move |this, _, w, cx| {
                             this.open_file(target.clone(), true, None, w, cx)
@@ -2088,6 +2157,50 @@ impl Pokarak {
                     ),
             );
         }
+        let tabs = div()
+            .flex()
+            .items_center()
+            .flex_none()
+            .border_b_1()
+            .border_color(palette.rgb(LINE))
+            .child(tabs)
+            .when_some(session.result_tab.as_ref(), |bar, tab| {
+                bar.child(self.result_tab_button(tab, cx))
+            });
+        let reader = div().size_full().v_flex().overflow_hidden().child(tabs);
+        if self.result_tab_active() {
+            return reader.child(self.render_results(cx)).into_any_element();
+        }
+        let Some(path) = &session.saved.selected else {
+            return reader
+                .child(
+                    div()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(palette.rgb(MUTED))
+                        .child("파일을 선택하면 변경사항과 코드를 볼 수 있습니다."),
+                )
+                .into_any_element();
+        };
+        let code = session.saved.code;
+        let diff = session.diffs.get(path);
+        let editor = session.documents.get(path).cloned();
+        let deleted = session
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.changes.iter().find(|f| &f.path == path))
+            .map(|f| f.status == FileStatus::Deleted)
+            .unwrap_or(false);
+        let dirty = self
+            .current
+            .as_ref()
+            .is_some_and(|root| self.code_edits.dirty(root, path));
+        let editing = self
+            .current
+            .as_ref()
+            .is_some_and(|root| self.code_edits.can_edit(root, path));
         let head = self.reader_command_bar(
             reader_toolbar::ReaderView {
                 path,
@@ -2187,11 +2300,7 @@ impl Pokarak {
                 .into_any_element()
         };
         let _ = window;
-        div()
-            .size_full()
-            .v_flex()
-            .overflow_hidden()
-            .child(tabs)
+        reader
             .child(head)
             .when(code, |d| d.children(self.code_previous_panel(path, cx)))
             .children(self.code_draft_notice(path, cx))

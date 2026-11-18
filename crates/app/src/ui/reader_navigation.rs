@@ -1,8 +1,70 @@
 //! Keep native editor coordinates separate from the UTF-16 navigation protocol.
 use super::*;
 use gpui_kit::component::input::{Rope, RopeExt};
+use pokarak_navigation::DocumentSnapshot;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The position actually submitted to the provider, including an explicit retry.
+#[derive(Clone)]
+pub(super) struct Query {
+    pub source: DocumentSnapshot,
+    pub position: Position,
+    pub tool: language_tools::Tool,
+}
+
+impl Query {
+    pub fn symbol(&self) -> Option<&str> {
+        let line = self
+            .source
+            .text()
+            .lines()
+            .nth(self.position.line as usize)?;
+        let mut chars = line.char_indices();
+        let mut units = 0;
+        let mut start = 0;
+        while units < self.position.character {
+            let (i, ch) = chars.next()?;
+            units += ch.len_utf16() as u32;
+            if !identifier_char(ch) {
+                start = i + ch.len_utf8();
+            }
+        }
+        let end = chars
+            .find(|(_, ch)| !identifier_char(*ch))
+            .map_or(line.len(), |(i, _)| i);
+        (units == self.position.character && start < end).then(|| &line[start..end])
+    }
+
+    pub fn matches_origin(&self, root: &Path, path: &Path, text: &str) -> bool {
+        self.source.root() == root
+            && self.source.path() == root.join(path)
+            && self.source.text() == text
+    }
+}
+
+pub(super) struct ResultSource {
+    pub query: Query,
+    pub revisions: HashMap<PathBuf, FileRevision>,
+}
+
+impl ResultSource {
+    pub fn new(
+        source: &DocumentSnapshot,
+        position: pokarak_navigation::Position,
+        tool: language_tools::Tool,
+        revisions: HashMap<PathBuf, FileRevision>,
+    ) -> Self {
+        Self {
+            query: Query {
+                source: source.clone(),
+                position: Position::new(position.line, position.character),
+                tool,
+            },
+            revisions,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum ResultGroup {
     Definition,
     Usages,
@@ -92,7 +154,7 @@ impl SymbolNavigation {
         (self.definitions.len() == 1).then(|| self.definitions[0].clone())
     }
 
-    fn excerpts(self) -> Arc<[ResultExcerpt]> {
+    fn excerpts(self) -> Vec<ResultExcerpt> {
         self.definitions
             .into_iter()
             .map(|location| ResultExcerpt {
@@ -289,14 +351,20 @@ impl Pokarak {
     ) {
         let definition = result.unique_definition();
         self.status = result.status.clone();
-        self.show_result_excerpts(result.title.clone(), true, result.excerpts(), window, cx);
+        self.show_result_excerpts(
+            result.title.clone(),
+            true,
+            result.excerpts(),
+            definition.is_none(),
+            window,
+            cx,
+        );
         self.result_anchor = anchor;
         if let Some(definition) = definition {
             self.open_location(definition, window, cx);
-            // open_location dismisses ordinary popover results. A symbol click
-            // keeps both groups available after its automatic definition jump.
-            self.results_open = true;
-            self.prepare_result_rows(cx);
+            if self.results_open {
+                self.prepare_result_rows(cx);
+            }
         }
     }
 }

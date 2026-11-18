@@ -232,6 +232,25 @@ fn late_package_completion_cannot_change_origin_or_resume_another_worktree() {
 }
 
 #[test]
+fn failures_show_one_summary_for_legacy_and_current_receipts() {
+    let raw = "Tool installer failed (Language server exited: exit code 56): curl: (56) The requested URL returned error: 403";
+    let mut receipt = InstallProgress {
+        package: "kotlin".into(),
+        phase: InstallPhase::Failed,
+        downloaded_bytes: 120,
+        total_bytes: None,
+        message: raw.into(),
+        error: Some(raw.into()),
+    };
+    let summary = super::progress_line(&receipt);
+    assert!(summary.contains("HTTP 403"));
+    assert!(!summary.contains("Language server"));
+    assert_eq!(receipt.error.as_deref(), Some(raw));
+    receipt.message = "Kotlin LSP 체크섬 · download.jetbrains.com · HTTP 403".into();
+    assert!(super::progress_line(&receipt).ends_with(&receipt.message));
+}
+
+#[test]
 fn progress_uses_only_actual_bytes_and_handles_missing_http_totals() {
     let mut p = InstallProgress {
         package: "java".into(),

@@ -257,19 +257,24 @@ impl Pokarak {
                             MUTED
                         }),
                     )
-                    .child(format!(
-                        "{} · {} {}",
-                        phase_label(&progress.phase),
-                        progress.message,
-                        bytes_label(progress)
-                    )),
+                    .child(progress_line(progress)),
             );
-            if let Some(error) = &progress.error {
+            if progress.phase == InstallPhase::Failed
+                && let Some(detail) = progress.error.clone()
+            {
                 row = row.child(
-                    div()
-                        .text_size(ui_text(11.))
-                        .text_color(palette.rgb(RED))
-                        .child(error.clone()),
+                    Button::new(SharedString::from(format!(
+                        "copy-install-error-{}",
+                        package.id
+                    )))
+                    .small()
+                    .ghost()
+                    .icon(IconName::Copy)
+                    .label("세부 정보 복사")
+                    .accessibility_label("설치 오류 세부 정보 복사")
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(detail.clone()));
+                    }),
                 );
             }
             if matches!(

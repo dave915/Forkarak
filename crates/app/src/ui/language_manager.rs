@@ -308,14 +308,16 @@ impl Pokarak {
         cx.spawn_in(window, async move |view, cx| {
             let outcome = wait.await;
             let _ = view.update_in(cx, |app, _, cx| {
-                if let Some(control) = app.language_manager.running.remove(&package) {
-                    app.language_manager
-                        .attempts
-                        .insert(package.clone(), control.snapshot());
+                let manager = &mut app.language_manager;
+                if let Some(control) = manager.running.remove(&package) {
+                    // Keep the terminal result on its package row, also if persisting it failed.
+                    manager.attempts.insert(package.clone(), control.snapshot());
                 }
-                app.language_manager.refresh();
-                if let Err(error) = outcome {
-                    app.language_manager.error = Some(format!("{error:#}"));
+                manager.refresh();
+                if manager.progress(&package).is_none()
+                    && let Err(error) = outcome
+                {
+                    manager.error = Some(format!("{error:#}"));
                 }
                 // Only package state changes. A late installer completion cannot
                 // close another dialog, grant trust, restart analysis or act on a worktree.

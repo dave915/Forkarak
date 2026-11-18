@@ -1,3 +1,4 @@
+use crate::theme::DisplaySettings;
 use pokarak_core::CompareMode;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -15,7 +16,7 @@ pub fn explicit_session_dir() -> Option<&'static std::path::Path> {
     SESSION_DIR.get().map(PathBuf::as_path)
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     /// Application defaults. Unknown keys are retained for forward compatibility.
@@ -37,21 +38,21 @@ pub struct Preferences {
     pub open_projects: Vec<SavedProject>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct UpdateWorkspace {
     pub root: Option<PathBuf>,
     pub view: UpdateView,
     pub messages: HashMap<PathBuf, String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum UpdateView {
     Graph(Option<SavedCommit>),
     Code,
     Changes,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SavedCommit {
     pub oid: String,
     pub parent: usize,
@@ -125,6 +126,26 @@ pub fn config_path() -> PathBuf {
     }
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config/pokarak/session.json")
 }
+
+// The session is atomically replaced, so all processes lock the same sibling file.
+fn lock_session(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::create_dir_all(path.parent().expect("session configuration directory"))?;
+    let lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.with_extension("lock"))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+fn read_display(path: &Path) -> Option<DisplaySettings> {
+    serde_json::from_slice::<DisplaySettings>(&std::fs::read(path).ok()?)
+        .ok()
+        .map(DisplaySettings::validated)
+}
+
 impl Preferences {
     /// Application-only: project overrides must never change the app's Dock icon.
     pub fn app_icon(&self) -> crate::app_icon::IconChoice {
@@ -198,8 +219,54 @@ impl Preferences {
     }
 
     fn try_save_to(&self, path: &Path) -> std::io::Result<()> {
+        let _lock = lock_session(path)?;
+        // A workspace save must preserve display changes made by another window.
+        if let Some(display) = read_display(path)
+            && display != self.display
+        {
+            let mut snapshot = self.clone();
+            snapshot.display = display;
+            return snapshot.write_session(path);
+        }
+        self.write_session(path)
+    }
+
+    pub fn saved_display() -> Option<DisplaySettings> {
+        read_display(&config_path())
+    }
+
+    pub fn try_save_appearance_reset(&self) -> std::io::Result<()> {
+        let path = config_path();
+        let _lock = lock_session(&path)?;
+        self.write_session(&path)
+    }
+
+    pub fn update_display(
+        step: impl FnOnce(DisplaySettings) -> DisplaySettings,
+    ) -> std::io::Result<DisplaySettings> {
+        Self::update_display_at(&config_path(), step)
+    }
+
+    fn update_display_at(
+        path: &Path,
+        step: impl FnOnce(DisplaySettings) -> DisplaySettings,
+    ) -> std::io::Result<DisplaySettings> {
+        let _lock = lock_session(path)?;
+        let mut latest: Self = match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => return Err(e),
+        };
+        let display = step(latest.display.validated());
+        if display != latest.display {
+            latest.display = display;
+            latest.write_session(path)?;
+        }
+        Ok(display)
+    }
+
+    fn write_session(&self, path: &Path) -> std::io::Result<()> {
         let parent = path.parent().expect("session configuration directory");
-        std::fs::create_dir_all(parent)?;
         let mut temp = tempfile::NamedTempFile::new_in(parent)?;
         serde_json::to_writer_pretty(temp.as_file_mut(), self)?;
         temp.persist(path)?;
@@ -304,6 +371,40 @@ mod display_tests {
         assert_eq!(saved["ui_zoom_percent"], 100);
         assert_eq!(saved["code_font_size"], 19.);
         assert!(old.split_diff);
+    }
+
+    #[test]
+    fn a_stale_workspace_save_preserves_zoom_and_concurrent_steps_accumulate() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session.json");
+        let mut stale_window = Preferences::default();
+        stale_window.try_save_to(&path).unwrap();
+
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(|| {
+                    Preferences::update_display_at(&path, |mut display| {
+                        display.ui_zoom_percent += 5;
+                        display
+                    })
+                    .unwrap();
+                });
+            }
+        });
+        stale_window.split_diff = true;
+        stale_window.try_save_to(&path).unwrap();
+        let saved: Preferences = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.display.ui_zoom_percent, 110);
+        assert!(saved.split_diff);
+        let display = Preferences::update_display_at(&path, |mut display| {
+            display.ui_font_size = 15.;
+            display
+        })
+        .unwrap();
+        assert_eq!(display.ui_zoom_percent, 110);
+        let saved: Preferences = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(saved.split_diff);
+        assert_eq!(saved.display, display);
     }
 
     #[test]

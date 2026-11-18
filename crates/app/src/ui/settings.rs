@@ -72,7 +72,7 @@ impl Setting {
                 .disabled(self.step(display, direction) == display)
                 .on_click(move |_, _, cx| {
                     let _ = view.update(cx, |app, cx| {
-                        app.set_display(self.step(app.prefs.display, direction), cx);
+                        app.step_display(self, direction, cx);
                     });
                 })
         };
@@ -403,7 +403,7 @@ pub(super) fn zoom_active_window(direction: i16, cx: &mut App) {
         let _ = window.update(cx, |root, _, cx| {
             if let Ok(workspace) = root.view().clone().downcast::<Pokarak>() {
                 workspace.update(cx, |app, cx| {
-                    app.set_display(Setting::Zoom.step(app.prefs.display, direction), cx);
+                    app.step_display(Setting::Zoom, direction, cx);
                 });
             }
         });
@@ -411,12 +411,21 @@ pub(super) fn zoom_active_window(direction: i16, cx: &mut App) {
 }
 
 impl Pokarak {
-    fn set_display(&mut self, display: DisplaySettings, cx: &mut Context<Self>) {
+    fn step_display(&mut self, setting: Setting, direction: i16, cx: &mut Context<Self>) {
+        match Preferences::update_display(|display| setting.step(display, direction)) {
+            Ok(display) => self.apply_display(display, cx),
+            Err(error) => {
+                self.error = Some(format!("디스플레이 설정을 저장하지 못했습니다: {error}"));
+                cx.notify();
+            }
+        }
+    }
+
+    pub(super) fn apply_display(&mut self, display: DisplaySettings, cx: &mut Context<Self>) {
         if self.prefs.display == display {
             return;
         }
         self.prefs.display = display;
-        self.prefs.save();
         theme::apply_display(display, cx);
         cx.notify();
     }
@@ -525,9 +534,11 @@ impl Pokarak {
                         for field in FIELDS.iter().filter(|field|field.category==category && !(root.is_some() && field.app_only)) {app.prefs.remove_option(root.as_deref(),field.key);}
                         if category==Category::Language {app.prefs.remove_option(root.as_deref(),"language.enabled");app.cancel_managed_language_request();}
                         let old_display=app.prefs.display; let old_theme=app.prefs.theme;
-                        if category==Category::Appearance && root.is_none() {app.prefs.display=DisplaySettings::DEFAULT;app.prefs.theme=ThemeChoice::System;app.prefs.remove_option(None,crate::app_icon::PREFERENCE_KEY);}
-                        if let Err(error)=app.prefs.try_save(){app.prefs.options=backup_options;app.prefs.project_options=backup_projects;app.prefs.display=old_display;app.prefs.theme=old_theme;return format!("초기화를 저장하지 못했습니다: {error}");}
-                        if category==Category::Appearance && root.is_none(){theme::apply(app.prefs.theme,app.prefs.display,window,cx);if let Err(error)=crate::app_icon::apply(app.prefs.app_icon()){return format!("설정 초기화됨 · 앱 아이콘 복원 실패: {error}");}}
+                        let reset_appearance = category==Category::Appearance && root.is_none();
+                        if reset_appearance {app.prefs.display=DisplaySettings::DEFAULT;app.prefs.theme=ThemeChoice::System;app.prefs.remove_option(None,crate::app_icon::PREFERENCE_KEY);}
+                        let saved=if reset_appearance {app.prefs.try_save_appearance_reset()} else {app.prefs.try_save()};
+                        if let Err(error)=saved{app.prefs.options=backup_options;app.prefs.project_options=backup_projects;app.prefs.display=old_display;app.prefs.theme=old_theme;return format!("초기화를 저장하지 못했습니다: {error}");}
+                        if reset_appearance{theme::apply(app.prefs.theme,app.prefs.display,window,cx);if let Err(error)=crate::app_icon::apply(app.prefs.app_icon()){return format!("설정 초기화됨 · 앱 아이콘 복원 실패: {error}");}}
                         cx.notify(); format!("{} · {} 초기화됨",if root.is_some(){"프로젝트 재정의"}else{"앱 설정"},category.label())
                     }).unwrap_or_default();
                     let _=reset.update(cx,|app,cx|reset_state.borrow_mut().load_inputs(&app.prefs,window,cx)); reset_state.borrow_mut().feedback=message;notify(&reset,cx);

@@ -660,6 +660,13 @@ impl Pokarak {
                 _ => {}
             },
         )];
+        subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active()
+                && let Some(display) = Preferences::saved_display()
+            {
+                this.apply_display(display, cx);
+            }
+        }));
         subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
             if this.prefs.theme == ThemeChoice::System {
                 theme::apply(this.prefs.theme, this.prefs.display, window, cx);

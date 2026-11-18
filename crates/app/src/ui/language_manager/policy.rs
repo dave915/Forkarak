@@ -89,19 +89,6 @@ pub(super) fn phase_label(phase: &InstallPhase) -> &'static str {
 pub(super) fn progress_line(progress: &InstallProgress) -> String {
     let phase = phase_label(&progress.phase);
     if progress.phase == InstallPhase::Failed {
-        // Earlier receipts stored the subprocess diagnostic in both fields.
-        if progress.error.as_deref() == Some(progress.message.as_str()) {
-            let status = progress
-                .message
-                .split_once("The requested URL returned error:")
-                .and_then(|(_, tail)| tail.split_whitespace().next())
-                .and_then(|code| code.parse::<u16>().ok())
-                .filter(|code| (400..600).contains(code));
-            return match status {
-                Some(code) => format!("{phase} · 다운로드 요청 실패 (HTTP {code})"),
-                None => format!("{phase} · 세부 정보에서 이전 설치 오류를 확인하세요."),
-            };
-        }
         return format!("{phase} · {}", progress.message);
     }
     let bytes = bytes_label(progress);

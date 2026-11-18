@@ -242,10 +242,26 @@ fn failures_show_one_summary_for_legacy_and_current_receipts() {
         message: raw.into(),
         error: Some(raw.into()),
     };
-    let summary = super::progress_line(&receipt);
+    let f = Fixture::new();
+    let attempts = f.root.join("attempts");
+    fs::create_dir_all(&attempts).unwrap();
+    fs::write(
+        attempts.join("kotlin.json"),
+        serde_json::to_vec(&receipt).unwrap(),
+    )
+    .unwrap();
+    let restored = f
+        .manager
+        .tools
+        .as_ref()
+        .unwrap()
+        .last_attempt("kotlin")
+        .unwrap()
+        .unwrap();
+    let summary = super::progress_line(&restored);
     assert!(summary.contains("HTTP 403"));
-    assert!(!summary.contains("Language server"));
-    assert_eq!(receipt.error.as_deref(), Some(raw));
+    assert!(!summary.contains("Language server") && !summary.contains("curl:"));
+    assert!(restored.error.unwrap().contains("curl: (56)"));
     receipt.message = "Kotlin LSP 체크섬 · download.jetbrains.com · HTTP 403".into();
     assert!(super::progress_line(&receipt).ends_with(&receipt.message));
 }

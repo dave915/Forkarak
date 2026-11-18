@@ -1,5 +1,8 @@
 //! Direct working-file editor. Drafts outlive reader entities
 //! and project sessions; the core operation owns the actual filesystem write.
+mod storage;
+use storage::{Alternatives, Checkpoint, DraftStorage};
+
 use super::draft_reconciliation::DraftComparison;
 use super::*;
 use crate::ui::dialogs::DialogWindowExt as _;
@@ -17,6 +20,8 @@ mod tests {
     use super::{CodeEdits, FileKey};
     use crate::ui::draft_reconciliation::DraftComparison;
     use std::{fs, path::Path, process::Command};
+
+    mod concurrency;
 
     fn state() -> (tempfile::TempDir, CodeEdits) {
         let temp = tempfile::tempdir().unwrap();
@@ -289,7 +294,10 @@ mod tests {
             assert_eq!(buffer.save_label(), "저장");
             assert_eq!(buffer.status(), "변경 없음");
             state.persist().unwrap();
-            state.storage.write(old_generation, &older).unwrap();
+            state
+                .storage
+                .checkpoint(old_generation, &older, None)
+                .unwrap();
             assert!(
                 CodeEdits::load_from(state.storage.path.clone())
                     .buffers
@@ -352,7 +360,8 @@ mod tests {
             expected: "unchanged\r\n".into(),
             text: "unchanged\r\n".into(),
         };
-        state.storage.write(1, &[draft]).unwrap();
+        fs::create_dir_all(state.storage.path.parent().unwrap()).unwrap();
+        fs::write(&state.storage.path, serde_json::to_vec(&[draft]).unwrap()).unwrap();
         let mut restored = CodeEdits::load_from(state.storage.path.clone());
         assert!(restored.buffers.is_empty());
         restored.loaded(root, path, "unchanged\r\n".into(), true, true);
@@ -476,7 +485,7 @@ mod tests {
         state.generation = 1; // Background checkpoint was scheduled.
         edit(&mut state, root, path, "latest before close");
         state.persist().unwrap(); // Generation 2, synchronous close flush.
-        state.storage.write(1, &older).unwrap(); // Older task starts late.
+        state.storage.checkpoint(1, &older, None).unwrap(); // Older task starts late.
         let restored = CodeEdits::load_from(state.storage.path.clone());
         assert_eq!(
             restored.buffer(root, path).unwrap().draft.text,
@@ -674,7 +683,7 @@ impl FileKey {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Draft {
     key: FileKey,
     expected: String,
@@ -686,38 +695,9 @@ struct Buffer {
     draft: Draft,
     editing: bool,
     stale: bool,
+    retired: bool,
     saving: bool,
     error: Option<String>,
-}
-
-struct DraftStorage {
-    path: PathBuf,
-    // Serialize background checkpoints with close/quit flushes. An older task
-    // can never overwrite a newer checkpoint, even if it starts out of order.
-    latest: Mutex<u64>,
-}
-
-impl DraftStorage {
-    fn write(&self, generation: u64, drafts: &[Draft]) -> io::Result<()> {
-        let mut latest = self
-            .latest
-            .lock()
-            .map_err(|_| io::Error::other("초안 저장 잠금 오류"))?;
-        if generation < *latest {
-            return Ok(());
-        }
-        *latest = generation;
-        let parent = self
-            .path
-            .parent()
-            .ok_or_else(|| io::Error::other("초안 저장 경로 없음"))?;
-        std::fs::create_dir_all(parent)?;
-        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-        serde_json::to_writer(temporary.as_file_mut(), drafts)?;
-        temporary.as_file().sync_all()?;
-        temporary.persist(&self.path)?;
-        Ok(())
-    }
 }
 
 impl Buffer {
@@ -726,6 +706,7 @@ impl Buffer {
             draft,
             editing: false,
             stale: false,
+            retired: false,
             saving: false,
             error: None,
         }
@@ -780,6 +761,7 @@ impl Buffer {
     fn changed(&mut self, text: String) {
         if self.draft.text != text {
             self.draft.text = text;
+            self.retired = false;
             self.error = None;
         }
         // `editing` is input eligibility, never evidence of an unsaved draft.
@@ -792,6 +774,7 @@ pub(super) struct CodeEdits {
     buffers: HashMap<FileKey, Buffer>,
     bindings: HashMap<FileKey, (EntityId, Subscription)>,
     storage: Arc<DraftStorage>,
+    alternatives: Alternatives,
     generation: u64,
     storage_error: Option<String>,
     unreadable_storage: bool,
@@ -805,39 +788,27 @@ impl CodeEdits {
     }
 
     fn load_from(storage: PathBuf) -> Self {
+        let mut storage = DraftStorage::new(storage);
+        let result = storage.load();
         let mut state = Self {
             tools: editor_tools::Tools::default(),
             buffers: HashMap::new(),
             bindings: HashMap::new(),
-            storage: Arc::new(DraftStorage {
-                path: storage,
-                latest: Mutex::new(0),
-            }),
+            storage: Arc::new(storage),
+            alternatives: Alternatives::new(),
             generation: 0,
             storage_error: None,
             unreadable_storage: false,
             commit_after_refresh: None,
             comparison_request: 0,
         };
-        let result = std::fs::read(&state.storage.path).and_then(|bytes| {
-            serde_json::from_slice::<Vec<Draft>>(&bytes).map_err(io::Error::other)
-        });
         match result {
-            Ok(drafts) => {
+            Ok((drafts, alternatives)) => {
+                state.alternatives = alternatives;
                 for draft in drafts {
-                    if FileKey::new(&draft.key.root, &draft.key.path).as_ref() != Some(&draft.key) {
-                        state.storage_error =
-                            Some("잘못된 경로가 있는 편집 초안 파일입니다.".into());
-                        state.unreadable_storage = true;
-                        break;
-                    }
-                    if draft.expected == draft.text {
-                        continue; // Older checkpoints can contain already-clean drafts.
-                    }
                     state.buffers.insert(draft.key.clone(), Buffer::new(draft));
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
                 state.storage_error = Some(format!("편집 초안을 복원하지 못했습니다: {error}"));
                 state.unreadable_storage = true;
@@ -846,19 +817,64 @@ impl CodeEdits {
         state
     }
 
-    fn persist(&mut self) -> io::Result<()> {
+    fn accept_checkpoint(&mut self, result: io::Result<Checkpoint>) -> io::Result<Option<Draft>> {
+        self.storage_error = result
+            .as_ref()
+            .err()
+            .map(|e| format!("편집 초안을 보관할 수 없습니다: {e}"));
+        let checkpoint = result?;
+        self.alternatives = checkpoint.alternatives;
+        for (key, buffer) in &mut self.buffers {
+            buffer.retired = checkpoint.retired.contains(key);
+        }
+        Ok(checkpoint.recovered)
+    }
+
+    fn checkpoint(&mut self, recover: Option<(&FileKey, u64)>) -> io::Result<Option<Draft>> {
         if self.unreadable_storage {
             return Err(io::Error::other(
                 self.storage_error.clone().unwrap_or_default(),
             ));
         }
         self.generation += 1;
-        let result = self.storage.write(self.generation, &self.drafts());
-        self.storage_error = result
-            .as_ref()
-            .err()
-            .map(|e| format!("편집 초안을 보관할 수 없습니다: {e}"));
-        result
+        let result = self
+            .storage
+            .checkpoint(self.generation, &self.drafts(), recover);
+        self.accept_checkpoint(result)
+    }
+
+    fn persist(&mut self) -> io::Result<()> {
+        self.checkpoint(None).map(|_| ())
+    }
+
+    fn recover(&mut self, key: &FileKey, revision: u64) -> io::Result<()> {
+        if self.buffers.get(key).is_some_and(|b| b.saving) {
+            return Err(io::Error::other("파일 저장이 진행 중입니다."));
+        }
+        let draft = self.checkpoint(Some((key, revision)))?.ok_or_else(|| {
+            io::Error::other("선택한 초안 버전이 변경되었습니다. 보관된 다른 버전을 확인하세요.")
+        })?;
+        self.buffers.insert(key.clone(), Buffer::new(draft));
+        self.bindings.remove(key);
+        Ok(())
+    }
+
+    fn discard(&mut self, expected: &Draft) -> io::Result<()> {
+        let key = &expected.key;
+        if self
+            .buffers
+            .get(key)
+            .is_none_or(|b| b.saving || b.draft != *expected)
+        {
+            return Err(io::Error::other("초안이 변경되었습니다. 다시 확인하세요."));
+        }
+        let buffer = self.buffers.remove(key).unwrap();
+        if let Err(error) = self.persist() {
+            self.buffers.insert(key.clone(), buffer);
+            return Err(error);
+        }
+        self.bindings.remove(key);
+        Ok(())
     }
 
     fn drafts(&self) -> Vec<Draft> {
@@ -918,8 +934,18 @@ impl CodeEdits {
         !self.unreadable_storage && self.editing(root, path)
     }
 
+    fn choices(&self, root: &Path, path: &Path) -> Option<&[storage::Choice]> {
+        self.alternatives
+            .get(&FileKey::new(root, path)?)
+            .map(Vec::as_slice)
+    }
+
     pub(super) fn has_draft_under(&self, root: &Path, path: &Path) -> bool {
         self.unreadable_storage
+            || self
+                .alternatives
+                .keys()
+                .any(|key| key.root == root && key.path.starts_with(path))
             || self.buffers.iter().any(|(key, buffer)| {
                 key.root == root && key.path.starts_with(path) && (buffer.dirty() || buffer.saving)
             })
@@ -1054,16 +1080,15 @@ impl Pokarak {
                 }
                 let storage = app.code_edits.storage.clone();
                 let drafts = app.code_edits.drafts();
-                let task = cx.background_spawn(async move { storage.write(generation, &drafts) });
+                let task = cx
+                    .background_spawn(async move { storage.checkpoint(generation, &drafts, None) });
                 cx.spawn(async move |view, cx| {
                     let result = task.await;
                     let _ = view.update(cx, |app, cx| {
                         if app.code_edits.generation != generation {
                             return;
                         }
-                        app.code_edits.storage_error = result
-                            .err()
-                            .map(|e| format!("편집 초안을 보관할 수 없습니다: {e}"));
+                        let _ = app.code_edits.accept_checkpoint(result);
                         cx.notify();
                     });
                 })
@@ -1477,6 +1502,44 @@ impl Pokarak {
         Ok(())
     }
 
+    pub(super) fn recover_code_draft(
+        &mut self,
+        revision: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.git_history.active
+            || self.loading
+            || self.file_loading
+            || self.git_is_busy()
+            || window.has_active_dialog(cx)
+        {
+            return;
+        }
+        let Some(path) = self.selected() else { return };
+        let Some(key) = self
+            .current
+            .as_ref()
+            .and_then(|root| FileKey::new(root, &path))
+        else {
+            return;
+        };
+        self.capture_code_buffers(cx);
+        if let Err(error) = self.code_edits.recover(&key, revision) {
+            self.status = error.to_string();
+            cx.notify();
+            return;
+        }
+        // Reopen through normal disk validation. Drop the old binding and
+        // editor so neither a queued Change nor a formatter can target the replacement.
+        self.capture_positions(cx);
+        if let Some(session) = self.sessions.get_mut(&key.root) {
+            session.documents.remove(&path);
+            session.saved.code = true;
+        }
+        self.open_file(path, false, None, window, cx);
+    }
+
     pub(super) fn discard_code_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(root), Some(path)) = (self.current.clone(), self.selected()) else {
             return;
@@ -1485,36 +1548,63 @@ impl Pokarak {
             return;
         };
         self.capture_code_buffers(cx);
-        if self
+        let Some(buffer) = self
             .code_edits
             .buffers
             .get(&key)
-            .is_none_or(|b| b.saving || !b.dirty())
-        {
+            .filter(|b| !b.saving && b.dirty())
+        else {
             return;
-        }
+        };
+        let expected = Arc::new(buffer.draft.clone());
         let weak = cx.entity().downgrade();
         window.open_app_dialog(cx, move |dialog, _, _| {
             let weak = weak.clone();
-            let key = key.clone();
-            dialog.title("파일의 편집 초안을 버릴까요?")
-                .child("디스크 파일은 변경하지 않습니다. 보관된 초안을 삭제하고 디스크에서 다시 읽습니다.")
-                .keyboard(false)
-                .footer(div().flex().justify_end().gap_2()
-                    .child(Button::new("cancel-discard-draft").label("취소").ghost().on_click(|_, w, cx| w.close_dialog(cx)))
-                    .child(Button::new("confirm-discard-draft").label("초안 버리기").danger().on_click(move |_, window, cx| {
+            let path = path.clone();
+            let expected = expected.clone();
+            let confirm = Button::new("confirm-discard-draft")
+                .label("초안 버리기")
+                .danger()
+                .on_click(move |_, window, cx| {
                     let _ = weak.update(cx, |app, cx| {
-                        let selected = app.selected();
-                        if app.current.as_ref() != Some(&key.root)
-                            || selected.as_ref().and_then(|p| FileKey::new(&key.root, p)).as_ref() != Some(&key) { return; }
-                        app.code_edits.buffers.remove(&key);
-                        app.code_edits.bindings.remove(&key);
-                        let _ = app.code_edits.persist();
-                        if let Some(session) = app.sessions.get_mut(&key.root) && let Some(selected) = selected { session.documents.remove(&selected); }
                         window.close_dialog(cx);
-                        app.open_file(key.path.clone(), false, None, window, cx);
+                        if app.current.as_ref() != Some(&expected.key.root)
+                            || app.selected().as_ref() != Some(&path)
+                        {
+                            return;
+                        }
+                        app.capture_code_buffers(cx);
+                        if let Err(error) = app.code_edits.discard(&expected) {
+                            app.status = error.to_string();
+                            cx.notify();
+                            return;
+                        }
+                        if let Some(session) = app.sessions.get_mut(&expected.key.root) {
+                            session.documents.remove(&path);
+                        }
+                        app.open_file(path.clone(), false, None, window, cx);
                     });
-                })))
+                });
+            dialog
+                .title("현재 편집 초안을 버릴까요?")
+                .child(format!(
+                    "{}의 현재 초안을 삭제하고 디스크에서 다시 읽습니다.",
+                    key.path.display()
+                ))
+                .keyboard(false)
+                .footer(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel-discard-draft")
+                                .label("취소")
+                                .ghost()
+                                .on_click(|_, w, cx| w.close_dialog(cx)),
+                        )
+                        .child(confirm),
+                )
         });
     }
 
@@ -1564,7 +1654,7 @@ impl Pokarak {
         let busy = self.loading
             || self.file_loading
             || self.git_is_busy()
-            || buffer.is_none_or(|b| b.saving)
+            || buffer.is_some_and(|b| b.saving)
             || self.code_edits.unreadable_storage;
         for (label, command, disabled) in [
             (
@@ -1596,22 +1686,49 @@ impl Pokarak {
                 false,
             );
         }
+        if let Some(choices) = self
+            .current
+            .as_ref()
+            .and_then(|root| self.code_edits.choices(root, path))
+        {
+            let mut versions = gpui_kit::component::native_menu::NativeMenu::new();
+            for choice in choices {
+                versions = identity.item(
+                    versions,
+                    format!("버전 {} · {}", choice.revision, choice.preview),
+                    Command::RecoverDraft(choice.revision),
+                    busy,
+                    false,
+                );
+            }
+            menu = menu.submenu("보관된 다른 초안 열기", versions);
+        }
         menu
     }
 
     pub(super) fn code_draft_notice(&self, path: &Path, cx: &App) -> Option<AnyElement> {
-        let buffer = self
-            .current
-            .as_ref()
-            .and_then(|root| self.code_edits.buffer(root, path))?;
-        let notice = if let Some(error) = &buffer.error {
-            error.clone()
-        } else if buffer.stale {
-            "디스크 내용이 변경되었거나 파일이 없습니다. 초안을 유지했습니다. ‘디스크와 비교…’에서 원본·초안·디스크를 확인하고 조정하세요.".into()
-        } else if buffer.dirty() {
-            "● 저장하지 않은 초안 — 탭·프로젝트를 닫거나 앱을 종료해도 보관됩니다. Git에는 아직 반영되지 않습니다.".into()
+        let root = self.current.as_ref()?;
+        let buffer = self.code_edits.buffer(root, path);
+        let choices = self.code_edits.choices(root, path);
+        let notice = if let Some(error) = buffer.and_then(|b| b.error.as_ref()) {
+            error.as_str()
+        } else if buffer.is_some_and(|b| b.retired) {
+            "다른 창에서 이 초안 버전을 교체하거나 정리했습니다. 현재 내용은 이 창에만 남아 있습니다."
+        } else if buffer.is_some_and(|b| b.stale) {
+            "디스크 내용이 변경되었거나 파일이 없습니다. 초안을 유지했습니다. ‘디스크와 비교…’에서 원본·초안·디스크를 확인하고 조정하세요."
+        } else if buffer.is_some_and(Buffer::dirty) {
+            "● 저장하지 않은 초안 — 탭·프로젝트를 닫거나 앱을 종료해도 보관됩니다. Git에는 아직 반영되지 않습니다."
+        } else if choices.is_some() {
+            ""
         } else {
             return None;
+        };
+        let notice = match choices {
+            Some(choices) => format!(
+                "{notice}  다른 초안 {}개 · 파일 명령 더 보기 → 편집 · 파일 → 보관된 다른 초안 열기",
+                choices.len()
+            ),
+            None => notice.to_owned(),
         };
         Some(
             div()
@@ -1625,25 +1742,31 @@ impl Pokarak {
     }
 
     pub(super) fn code_drafts_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let dirty = self
+        let active = self
             .code_edits
             .buffers
             .values()
-            .filter(|b| b.dirty())
-            .count();
+            .filter(|b| b.dirty() && !b.retired);
+        let dirty = active.clone().count()
+            + self
+                .code_edits
+                .alternatives
+                .values()
+                .map(Vec::len)
+                .sum::<usize>();
         let error = self.code_edits.storage_error.as_deref();
         if dirty == 0 && error.is_none() {
             return None;
         }
         let root = self.current.as_ref();
-        let mut drafts: Vec<_> = self
-            .code_edits
-            .buffers
-            .values()
-            .filter(|b| b.dirty() && Some(&b.draft.key.root) == root)
-            .map(|b| b.draft.key.path.clone())
+        let mut drafts: Vec<_> = active
+            .map(|b| &b.draft.key)
+            .chain(self.code_edits.alternatives.keys())
+            .filter(|key| Some(&key.root) == root)
+            .map(|key| key.path.clone())
             .collect();
         drafts.sort();
+        drafts.dedup();
         Some(
             div()
                 .id("code-drafts-banner")
@@ -1656,9 +1779,11 @@ impl Pokarak {
                 .gap_2()
                 .text_size(ui_text(11.))
                 .text_color(Palette::new(cx).rgb(if error.is_some() { RED } else { BLUE }))
-                .child(error.map(str::to_owned).unwrap_or_else(|| {
-                    format!("● 미저장 편집 초안 {dirty}개 보관 중 — 파일을 다시 열면 복원됩니다.")
-                }))
+                .child(
+                    error
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("● 미저장 편집 초안 {dirty}개 보관 중")),
+                )
                 .children(drafts.into_iter().take(3).enumerate().map(|(i, path)| {
                     Button::new(("reopen-code-draft", i))
                         .label(path.display().to_string())

@@ -66,6 +66,7 @@ pub(super) enum Command {
     SaveCommit,
     CompareDraft,
     DiscardDraft,
+    RecoverDraft(u64),
     CopyPath,
     Worktree,
     CompareBranch,
@@ -206,6 +207,7 @@ impl Pokarak {
             Save => self.save_code_file(false, window, cx),
             SaveCommit => self.save_code_file(true, window, cx),
             CompareDraft => self.compare_code_draft(window, cx),
+            RecoverDraft(revision) => self.recover_code_draft(revision, window, cx),
             DiscardDraft => self.discard_code_draft(window, cx),
             CopyPath => cx.write_to_clipboard(ClipboardItem::new_string(
                 action

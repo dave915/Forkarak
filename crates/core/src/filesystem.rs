@@ -202,7 +202,11 @@ pub(crate) fn inspect(
 }
 
 pub(crate) fn read(root: &Path, path: &Path) -> Result<Option<(Vec<u8>, bool)>> {
-    match open(root, path)? {
+    read_node(open(root, path)?)
+}
+
+pub(crate) fn read_node(node: Node) -> Result<Option<(Vec<u8>, bool)>> {
+    match node {
         Node::Missing | Node::Directory => Ok(None),
         Node::Link(bytes) => Ok(Some((bytes, false))),
         Node::File(file) => {

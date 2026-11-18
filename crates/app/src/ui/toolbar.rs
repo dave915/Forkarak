@@ -179,7 +179,7 @@ impl Pokarak {
             .dropdown_caret(true)
             .selected(only)
             .when(only, |button| button.icon(IconName::ListFilter))
-            .on_click(cx.listener(|app, event, window, cx| {
+            .on_click(cx.listener(|app, event: &ClickEvent, window, cx| {
                 let action = |command: &str| {
                     Box::new(RunToolbar {
                         root: app.current.clone(),

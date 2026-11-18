@@ -363,6 +363,7 @@ pub struct TaskRun {
     pub id: RunId,
     pub profile: TaskProfile,
     pub root: PathBuf,
+    pub cwd: PathBuf,
     pub logs: Arc<Mutex<LogBuffer>>,
     pub process: OwnedProcess,
     pub started: Instant,
@@ -394,7 +395,7 @@ impl TaskRuntime {
         self.runs.remove(&key);
         let mut cmd = Command::new(&profile.command[0]);
         cmd.args(&profile.command[1..])
-            .current_dir(cwd)
+            .current_dir(&cwd)
             .envs(&profile.env);
         let logs = Arc::new(Mutex::new(LogBuffer::new(options)));
         logs.lock().unwrap().push(
@@ -410,6 +411,7 @@ impl TaskRuntime {
                 id,
                 profile,
                 root,
+                cwd,
                 logs,
                 process,
                 started: Instant::now(),
@@ -476,6 +478,15 @@ pub struct StackLocation {
 /// Resolve only existing source files in this canonical worktree. Symlink escapes are rejected.
 pub fn resolve_stack_location(root: &Path, text: &str) -> Option<StackLocation> {
     let root = root.canonicalize().ok()?;
+    resolve_stack_location_from(&root, &root, text)
+}
+
+/// Both directories are the canonical paths captured when execution started.
+pub(crate) fn resolve_stack_location_from(
+    root: &Path,
+    cwd: &Path,
+    text: &str,
+) -> Option<StackLocation> {
     for (colon, _) in text.match_indices(':') {
         let suffix = &text[colon + 1..];
         let digits = suffix.bytes().take_while(u8::is_ascii_digit).count();
@@ -513,9 +524,9 @@ pub fn resolve_stack_location(root: &Path, text: &str) -> Option<StackLocation> 
             if file.is_empty() {
                 continue;
             }
-            if let Ok(path) = root.join(file).canonicalize()
+            if let Ok(path) = cwd.join(file).canonicalize()
                 && path.is_file()
-                && path.starts_with(&root)
+                && path.starts_with(root)
             {
                 return Some(StackLocation {
                     path,
@@ -543,9 +554,9 @@ pub fn resolve_stack_location(root: &Path, text: &str) -> Option<StackLocation> 
                     "src/main/kotlin",
                     "src/test/kotlin",
                 ] {
-                    if let Ok(path) = root.join(source).join(&package).join(file).canonicalize()
+                    if let Ok(path) = cwd.join(source).join(&package).join(file).canonicalize()
                         && path.is_file()
-                        && path.starts_with(&root)
+                        && path.starts_with(root)
                     {
                         return Some(StackLocation {
                             path,
@@ -677,6 +688,72 @@ mod tests {
         let mut p = profile("x");
         p.cwd = "..".into();
         assert!(p.validate(root.path()).is_err());
+    }
+
+    #[test]
+    fn stack_links_use_module_sources_but_allow_targets_across_the_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().canonicalize().unwrap();
+        let root = parent.join("worktree");
+        assert!(
+            Command::new("git")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .args(["init", "--quiet", "--template=", "--"])
+                .arg(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let cwd = root.join("services/api");
+        let java = "src/main/java/com/example/App.java";
+        let kotlin = "src/test/kotlin/com/example/AppTest.kt";
+        for base in [&root, &cwd] {
+            for file in ["src/main.rs", java, kotlin] {
+                let path = base.join(file);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, "fixture").unwrap();
+            }
+        }
+        for (text, file, line, column) in [
+            ("error src/main.rs:12:3", "src/main.rs", 11, 2),
+            ("at com.example.App.main(App.java:7)", java, 6, 0),
+            ("at com.example.AppTest.test(AppTest.kt:4)", kotlin, 3, 0),
+        ] {
+            let target = resolve_stack_location_from(&root, &cwd, text).unwrap();
+            assert_eq!(
+                target,
+                StackLocation {
+                    path: cwd.join(file),
+                    line,
+                    column
+                }
+            );
+            assert_eq!(
+                resolve_stack_location(&root, text).unwrap().path,
+                root.join(file)
+            );
+        }
+        let shared = root.join("shared.rs");
+        std::fs::write(&shared, "shared").unwrap();
+        let absolute = format!("{}:1", shared.display());
+        for text in ["../../shared.rs:1", &absolute] {
+            assert_eq!(
+                resolve_stack_location_from(&root, &cwd, text).unwrap().path,
+                shared
+            );
+        }
+        assert!(resolve_stack_location_from(&root, &cwd, "shared.rs:1").is_none());
+        let outside = parent.join("outside.rs");
+        std::fs::write(&outside, "outside").unwrap();
+        std::os::unix::fs::symlink(&outside, cwd.join("escape.rs")).unwrap();
+        for text in [
+            "../../../outside.rs:1",
+            "escape.rs:1",
+            &format!("{}:1", outside.display()),
+        ] {
+            assert!(resolve_stack_location_from(&root, &cwd, text).is_none());
+        }
     }
 }
 

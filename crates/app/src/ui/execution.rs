@@ -53,6 +53,61 @@ enum LogSource {
     Task(String, RunId),
     Extension(String),
 }
+struct SelectedLogs {
+    buffer: Arc<Mutex<LogBuffer>>,
+    cwd: PathBuf,
+}
+impl LogSource {
+    fn logs(&self, root: &Path, tasks: &TaskRuntime, host: &ExtensionHost) -> Option<SelectedLogs> {
+        match self {
+            Self::Task(name, id) => {
+                let run = tasks.run(root, name).filter(|run| run.id == *id)?;
+                Some(SelectedLogs {
+                    buffer: run.logs.clone(),
+                    cwd: run.cwd.clone(),
+                })
+            }
+            Self::Extension(id) => Some(SelectedLogs {
+                buffer: host.logs(root, id)?,
+                cwd: root.to_owned(),
+            }),
+        }
+    }
+}
+#[derive(Clone)]
+struct ExecutionLogLink {
+    root: PathBuf,
+    buffer: Arc<Mutex<LogBuffer>>,
+    text: String,
+    location: task_runtime::StackLocation,
+    revision: Option<FileRevision>,
+}
+impl ExecutionLogLink {
+    fn resolve(root: &Path, logs: &SelectedLogs, text: &str) -> Option<Self> {
+        let location = task_runtime::resolve_stack_location_from(root, &logs.cwd, text)?;
+        Some(Self {
+            root: root.to_owned(),
+            buffer: logs.buffer.clone(),
+            text: text.to_owned(),
+            revision: file_revision(&location.path),
+            location,
+        })
+    }
+
+    fn target(&self, logs: &SelectedLogs) -> anyhow::Result<Option<&Path>> {
+        // Each run owns its buffer, even after a restart with the same profile.
+        if !Arc::ptr_eq(&self.buffer, &logs.buffer) {
+            return Ok(None);
+        }
+        anyhow::ensure!(
+            task_runtime::resolve_stack_location_from(&self.root, &logs.cwd, &self.text).as_ref()
+                == Some(&self.location)
+                && file_revision(&self.location.path) == self.revision,
+            "로그 대상 파일이 변경되었습니다. 최신 실행 로그를 확인하세요."
+        );
+        Ok(Some(self.location.path.strip_prefix(&self.root)?))
+    }
+}
 #[derive(Default)]
 struct TreeView {
     query: Option<Entity<InputState>>,
@@ -433,7 +488,7 @@ impl Pokarak {
             .sum::<u64>();
         let extra = self
             .selected_execution_logs(&root)
-            .map(|b| b.lock().unwrap().revision)
+            .map(|logs| logs.buffer.lock().unwrap().revision)
             .unwrap_or(0);
         let view = self.execution.views.entry(root).or_default();
         let revision = revision.wrapping_add(extra);
@@ -442,16 +497,12 @@ impl Pokarak {
             cx.notify();
         }
     }
-    fn selected_execution_logs(&self, root: &Path) -> Option<Arc<Mutex<LogBuffer>>> {
-        match self.execution.views.get(root)?.selected.as_ref()? {
-            LogSource::Task(name, id) => self
-                .execution
-                .tasks
-                .run(root, name)
-                .filter(|r| r.id == *id)
-                .map(|r| r.logs.clone()),
-            LogSource::Extension(id) => self.execution.host.logs(root, id),
-        }
+    fn selected_execution_logs(&self, root: &Path) -> Option<SelectedLogs> {
+        self.execution.views.get(root)?.selected.as_ref()?.logs(
+            root,
+            &self.execution.tasks,
+            &self.execution.host,
+        )
     }
     pub(super) fn with_execution_manager(
         &mut self,
@@ -826,12 +877,12 @@ impl Pokarak {
     fn render_execution_logs(
         &mut self,
         root: &Path,
-        logs: Arc<Mutex<LogBuffer>>,
+        logs: SelectedLogs,
         query: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = Palette::new(cx);
-        let buffer = logs.lock().unwrap();
+        let buffer = logs.buffer.lock().unwrap();
         let lines = buffer.search(query);
         let options = buffer.options;
         let count = lines.len();
@@ -847,10 +898,10 @@ impl Pokarak {
         if options.auto_scroll {
             handle.set_offset(point(px(0.), px(-10_000_000.)));
         }
-        let opts = logs.clone();
-        let opts2 = logs.clone();
-        let opts3 = logs.clone();
-        let copy = logs.clone();
+        let opts = logs.buffer.clone();
+        let opts2 = logs.buffer.clone();
+        let opts3 = logs.buffer.clone();
+        let copy = logs.buffer.clone();
         let q = query.to_string();
         let controls = div()
             .flex()
@@ -943,8 +994,7 @@ impl Pokarak {
                 StreamKind::Host => MUTED,
                 StreamKind::Stdout => TEXT,
             };
-            let location = task_runtime::resolve_stack_location(root, &line.text);
-            let expected = root.to_path_buf();
+            let link = ExecutionLogLink::resolve(root, &logs, &line.text);
             let row = div()
                 .id(("execution-log", line.sequence as usize))
                 .px_2()
@@ -953,45 +1003,28 @@ impl Pokarak {
                 .when(options.word_wrap, |d| d.whitespace_normal())
                 .when(!options.word_wrap, |d| d.whitespace_nowrap())
                 .child(line.text)
-                .when_some(location, |d, location| {
-                    let source = self
-                        .execution
-                        .views
-                        .get(&expected)
-                        .and_then(|v| v.selected.clone());
-                    let revision = file_revision(&location.path);
-                    let accessible_root = expected.clone();
-                    let accessible_location = location.clone();
-                    let accessible_source = source.clone();
+                .when_some(link, |d, link| {
+                    let accessible_link = link.clone();
                     let accessible_view = cx.entity().downgrade();
                     d.cursor_pointer()
                         .underline()
                         .role(accesskit::Role::Button)
                         .aria_label(format!(
                             "{}:{}로 이동",
-                            location
+                            link.location
                                 .path
-                                .strip_prefix(&expected)
-                                .unwrap_or(&location.path)
+                                .strip_prefix(root)
+                                .unwrap_or(&link.location.path)
                                 .display(),
-                            location.line + 1
+                            link.location.line + 1
                         ))
                         .on_a11y_action(accesskit::Action::Click, move |_, w, cx| {
                             let _ = accessible_view.update(cx, |app, cx| {
-                                app.open_execution_location(
-                                    &accessible_root,
-                                    &accessible_location,
-                                    &accessible_source,
-                                    revision,
-                                    w,
-                                    cx,
-                                )
+                                app.open_execution_location(&accessible_link, w, cx)
                             });
                         })
                         .on_click(cx.listener(move |app, _, w, cx| {
-                            app.open_execution_location(
-                                &expected, &location, &source, revision, w, cx,
-                            );
+                            app.open_execution_location(&link, w, cx);
                         }))
                 });
             rows = rows.child(row);
@@ -1009,47 +1042,34 @@ impl Pokarak {
     }
     fn open_execution_location(
         &mut self,
-        root: &Path,
-        location: &task_runtime::StackLocation,
-        source: &Option<LogSource>,
-        revision: Option<FileRevision>,
+        link: &ExecutionLogLink,
         w: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.current.as_deref() != Some(root)
-            || self.opening_path.is_some()
-            || self
-                .execution
-                .views
-                .get(root)
-                .and_then(|v| v.selected.clone())
-                != *source
-        {
+        if self.current.as_ref() != Some(&link.root) || self.opening_path.is_some() {
             return;
         }
-        if file_revision(&location.path) != revision {
-            self.execution.message =
-                Some("로그 대상 파일이 변경되었습니다. 최신 실행 로그를 확인하세요.".into());
-            cx.notify();
+        let Some(logs) = self.selected_execution_logs(&link.root) else {
             return;
-        }
-        let text = format!(
-            "{}:{}:{}",
-            location.path.display(),
-            location.line + 1,
-            location.column + 1
+        };
+        let path = match link.target(&logs) {
+            Ok(Some(path)) => path,
+            Ok(None) => return,
+            Err(error) => {
+                self.execution.message = Some(error.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        self.execution.visible = false;
+        self.git_history.active = false;
+        self.open_file(
+            path.to_owned(),
+            true,
+            Some(Position::new(link.location.line, link.location.column)),
+            w,
+            cx,
         );
-        if let Some(target) = task_runtime::resolve_stack_location(root, &text) {
-            self.execution.visible = false;
-            self.git_history.active = false;
-            self.open_file(
-                target.path.strip_prefix(root).unwrap().to_path_buf(),
-                true,
-                Some(Position::new(target.line, target.column)),
-                w,
-                cx,
-            );
-        }
     }
     fn edit_task(&mut self, existing: Option<TaskProfile>, w: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.current.clone() else {
@@ -1891,4 +1911,55 @@ fn parse_profile(
     };
     profile.validate(root)?;
     Ok(profile)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExecutionLogLink, ExtensionHost, LogOptions, LogSource, TaskProfile, TaskRuntime};
+    use std::{collections::BTreeMap, fs, os::unix::fs::symlink, path::Path};
+
+    #[test]
+    fn task_log_click_uses_launch_directory_and_revalidates_run_and_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let module = root.join("module");
+        fs::create_dir(&module).unwrap();
+        fs::write(module.join("one.rs"), "first").unwrap();
+        fs::write(module.join("two.rs"), "second").unwrap();
+        symlink("one.rs", module.join("source.rs")).unwrap();
+        symlink("module", root.join("active")).unwrap();
+        let profile = TaskProfile {
+            name: "build".into(),
+            command: vec!["/usr/bin/true".into()],
+            cwd: "active".into(),
+            env: BTreeMap::new(),
+        };
+        let mut tasks = TaskRuntime::default();
+        let host = ExtensionHost::default();
+        let run = tasks
+            .start(&root, profile.clone(), true, LogOptions::default())
+            .unwrap();
+        let source = LogSource::Task(profile.name.clone(), run);
+        fs::remove_file(root.join("active")).unwrap();
+        symlink(".", root.join("active")).unwrap();
+        let logs = source.logs(&root, &tasks, &host).unwrap();
+        let link = ExecutionLogLink::resolve(&root, &logs, "source.rs:3:2").unwrap();
+        assert_eq!(
+            link.target(&logs).unwrap(),
+            Some(Path::new("module/one.rs"))
+        );
+
+        fs::remove_file(module.join("source.rs")).unwrap();
+        symlink("two.rs", module.join("source.rs")).unwrap();
+        assert!(link.target(&logs).is_err());
+
+        let next = tasks
+            .restart(&root, profile.clone(), true, LogOptions::default())
+            .unwrap();
+        assert!(source.logs(&root, &tasks, &host).is_none());
+        let next_logs = LogSource::Task(profile.name, next)
+            .logs(&root, &tasks, &host)
+            .unwrap();
+        assert!(link.target(&next_logs).unwrap().is_none());
+    }
 }

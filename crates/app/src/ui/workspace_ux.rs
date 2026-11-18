@@ -281,60 +281,6 @@ impl Pokarak {
         input.update(cx, |i, cx| i.focus(window, cx));
     }
 
-    pub(super) fn workspace_context(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        // Graph keeps context in its existing sidebar, detail and footer surfaces.
-        // Do not add a second full-width row, including during inline staging.
-        if self.git_history.active || !self.inline_commit_active() {
-            return None;
-        }
-        let root = self.current.as_ref()?;
-        Some(
-            div()
-                .flex_none()
-                .h(ui_px(32.))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .border_b_1()
-                .border_color(Palette::new(cx).rgb(LINE))
-                .child(
-                    Button::new("active-worktree-picker")
-                        .icon(IconName::FolderGit2)
-                        .label(
-                            root.file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string(),
-                        )
-                        .max_w(ui_px(220.))
-                        .overflow_hidden()
-                        .tooltip(root.display().to_string())
-                        .ghost()
-                        .small()
-                        .on_click(cx.listener(|app, _, w, cx| app.open_worktree_picker(w, cx))),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .text_size(ui_text(11.))
-                        .text_ellipsis()
-                        .id("workspace-comparison-label")
-                        .tooltip({
-                            let label = self.visible_comparison_label();
-                            move |w, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(label.clone())
-                                    .build(w, cx)
-                            }
-                        })
-                        .child(self.visible_comparison_label()),
-                )
-                .children(self.branch_review_controls(cx))
-                .into_any_element(),
-        )
-    }
-
     pub(super) fn visible_comparison_label(&self) -> String {
         if self.inline_commit_active() {
             return "스테이징 · HEAD ↔ Index ↔ 작업 파일".into();

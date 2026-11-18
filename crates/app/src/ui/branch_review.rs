@@ -29,64 +29,6 @@ impl Pokarak {
         )
     }
 
-    pub(super) fn branch_review_controls(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.current.as_ref()?;
-        if self.opening_path.is_some() {
-            return None;
-        }
-        let branch = self
-            .session()
-            .is_some_and(|session| matches!(session.saved.comparison, CompareMode::Branch(_)));
-        let busy = self.loading || self.git_is_busy() || self.file_loading;
-        Some(
-            div()
-                .id("branch-review-controls")
-                .flex_none()
-                .h(ui_px(28.))
-                .px_1()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    Button::new("compare-branch")
-                        .icon(IconName::GitCompare)
-                        .accessibility_label("브랜치 전체 변경 비교")
-                        .tooltip(
-                            "기준 브랜치와 HEAD의 공통 조상부터 현재 파일까지 코드 보기에서 비교",
-                        )
-                        .ghost()
-                        .small()
-                        .selected(branch && !self.git_history.active)
-                        .disabled(busy)
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            app.open_branch_review(window, cx);
-                        })),
-                )
-                .when(branch, |bar| {
-                    bar.child(
-                        Button::new("compare-head")
-                            .icon(IconName::Undo2)
-                            .tooltip("비교 기준을 HEAD로 변경")
-                            .accessibility_label("비교 기준을 HEAD로 변경")
-                            .ghost()
-                            .small()
-                            .disabled(busy)
-                            .on_click(cx.listener(|app, _, window, cx| {
-                                if let Some(root) = app.current.clone() {
-                                    app.apply_branch_review(
-                                        root,
-                                        CompareMode::Uncommitted,
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            })),
-                    )
-                })
-                .into_any_element(),
-        )
-    }
-
     pub(super) fn open_branch_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.loading || self.git_is_busy() || window.has_active_dialog(cx) {
             return;

@@ -175,7 +175,7 @@ impl Pokarak {
                     self.stop_analysis(cx);
                     self.status = "코드 탐색 중지됨".into();
                 } else {
-                    self.trust_prompt = true;
+                    self.show_explicit_analysis_prompt();
                 }
                 cx.notify();
             }

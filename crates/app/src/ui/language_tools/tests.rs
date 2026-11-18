@@ -167,6 +167,136 @@ fn stale_clicked_source_does_not_start_a_server() {
     );
     assert!(!f.root.join("protocol.jsonl").exists());
 }
+
+#[test]
+fn first_symbol_gesture_resumes_once_after_approval_at_its_exact_dirty_position() {
+    use super::model::PendingSymbolRequest;
+    let f = Fixture::new();
+    let mut identity = f.identity();
+    identity.cursor -= 2;
+    identity.selection = identity.cursor..identity.cursor;
+    let requested = gpui_kit::component::input::Position::new(2, 3);
+    let mut pending =
+        PendingSymbolRequest::remember(&Tool::Symbol, identity.clone(), Some(requested));
+    assert!(pending.is_some());
+    let mut nav = f.nav();
+    assert!(
+        !f.root.join("protocol.jsonl").exists(),
+        "prompting neither starts nor trusts a server"
+    );
+    // This is the approval handler's take-and-validate boundary, followed by
+    // the same dispatcher it invokes. A consumed gesture cannot run twice.
+    let resume = pending.take().unwrap().resume(Some(&identity)).unwrap();
+    assert_eq!(resume, requested);
+    assert!(pending.is_none());
+    let Reply::Symbol(result, _) = execute(
+        &mut nav,
+        &f.snapshot,
+        &[],
+        Tool::Symbol,
+        LspPosition {
+            line: resume.line,
+            character: resume.character,
+        },
+        &FormattingOptions::default(),
+    )
+    .unwrap() else {
+        panic!("resumed symbol reply")
+    };
+    assert_eq!(result.definitions.len(), 1);
+    assert_eq!(result.usages.len(), 1);
+    nav.shutdown();
+    let messages = fs::read_to_string(f.root.join("protocol.jsonl")).unwrap();
+    assert_eq!(
+        messages
+            .lines()
+            .filter(|line| line.contains("textDocument/definition"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        messages
+            .lines()
+            .filter(|line| line.contains("textDocument/references"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn pending_symbol_approval_discards_changed_scope_source_position_and_non_gesture_actions() {
+    use super::model::PendingSymbolRequest;
+    let f = Fixture::new();
+    let mut identity = f.identity();
+    identity.cursor -= 2;
+    identity.selection = identity.cursor..identity.cursor;
+    let requested = gpui_kit::component::input::Position::new(2, 3);
+    let pending = || {
+        PendingSymbolRequest::remember(&Tool::Symbol, identity.clone(), Some(requested)).unwrap()
+    };
+    assert!(pending().resume(None).is_none()); // navigation/loading has no current target
+    let mut changed = identity.clone();
+    changed.key.root = f.root.join("another-worktree");
+    assert!(pending().resume(Some(&changed)).is_none());
+    changed = identity.clone();
+    changed.key.path = "another.ts".into();
+    assert!(pending().resume(Some(&changed)).is_none());
+    changed = identity.clone();
+    changed.cursor -= 1;
+    changed.selection = changed.cursor..changed.cursor;
+    assert!(pending().resume(Some(&changed)).is_none());
+    changed = identity.clone();
+    changed.view += 1;
+    assert!(pending().resume(Some(&changed)).is_none());
+    changed = identity.clone();
+    changed.editor = EntityId::from(2);
+    assert!(pending().resume(Some(&changed)).is_none());
+    changed = identity.clone();
+    changed.snapshot = DocumentSnapshot::new(
+        f.root.clone(),
+        "entry.ts".into(),
+        "// replaced source\nconst dirty = 1;\ndirty".into(),
+        2,
+    )
+    .unwrap();
+    assert!(pending().resume(Some(&changed)).is_none());
+    assert!(
+        PendingSymbolRequest::remember(
+            &Tool::Navigate(NavigationKind::Definition),
+            identity.clone(),
+            Some(requested)
+        )
+        .is_none()
+    );
+    assert!(
+        PendingSymbolRequest::remember(
+            &Tool::Navigate(NavigationKind::References),
+            identity.clone(),
+            Some(requested)
+        )
+        .is_none()
+    );
+    assert!(
+        PendingSymbolRequest::remember(&Tool::Complete, identity.clone(), Some(requested))
+            .is_none()
+    );
+    assert!(PendingSymbolRequest::remember(&Tool::Symbol, identity.clone(), None).is_none());
+    assert!(
+        PendingSymbolRequest::remember(
+            &Tool::Symbol,
+            identity.clone(),
+            Some(gpui_kit::component::input::Position::new(2, 4))
+        )
+        .is_none()
+    );
+    let invalidated = pending();
+    identity.snapshot.invalidate();
+    assert!(invalidated.resume(Some(&identity)).is_none());
+    assert!(
+        !f.root.join("protocol.jsonl").exists(),
+        "discarding pending gestures never starts a process"
+    );
+}
 #[test]
 fn native_command_dispatch_uses_dirty_source_for_every_tool_and_never_saves() {
     let f = Fixture::new();

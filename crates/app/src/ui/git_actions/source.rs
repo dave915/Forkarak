@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 
 pub(super) fn stamp(root: &Path) -> anyhow::Result<[u8; 32]> {
-    let snapshot = pokarak_core::snapshot_current(root, &CompareMode::Uncommitted)?;
+    let snapshot = pokarak_core::snapshot_current_inventory(root, &CompareMode::Uncommitted)?;
     let mut paths = snapshot.files;
     paths.sort();
     anyhow::ensure!(

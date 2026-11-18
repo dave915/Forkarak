@@ -1096,7 +1096,10 @@ impl Pokarak {
         self.loading = true;
         self.error = None;
         self.status = "변경사항을 읽는 중…".into();
-        let task = cx.background_spawn(async move { pokarak_core::snapshot_current(&root, &mode) });
+        let task =
+            cx.background_spawn(
+                async move { pokarak_core::snapshot_current_inventory(&root, &mode) },
+            );
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {

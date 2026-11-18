@@ -146,11 +146,21 @@ pub fn worktree_change_summary(root: &Path) -> Result<(usize, String)> {
 pub fn snapshot(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
     backend::snapshot(path, compare)
 }
-/// Capture only the selected worktree's contents and diffs, plus the registered
+/// Capture the selected worktree's contents and change statistics, plus the registered
 /// worktree inventory. Sibling dirty counts are unavailable, not assumed zero.
-/// Use this for UI refreshes that must not read every sibling's working files.
 pub fn snapshot_current(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
     backend::snapshot_current(path, compare)
+}
+/// List files, changed paths (including rename sources), status and staging flags
+/// for the selected worktree. Shares the comparison, ordering, content fingerprint
+/// and worktree counts of [`snapshot_current`]. Rename matching may read bounded
+/// candidate contents. Ordinary listing does not load baseline blobs or compute patches.
+///
+/// The `additions`, `deletions` and `binary` fields on these [`ChangedFile`] rows
+/// are unmeasured and retain their defaults. Use [`diff`] for the selected row's
+/// preview or [`snapshot_current`] for measured statistics on every row.
+pub fn snapshot_current_inventory(path: &Path, compare: &CompareMode) -> Result<Snapshot> {
+    backend::snapshot_current_inventory(path, compare)
 }
 /// Compare against HEAD, or merge-base(base, HEAD), including working changes.
 /// Large text is returned as a bounded preview with `truncated = true`; its

@@ -16,7 +16,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-pub const USAGE: &str = "forkarak ctl <command> [options]\nRead: status/worktrees/branches/files [--changed]/search --query TEXT [--limit N]/diff --path FILE/read --path FILE\nAll repository commands require --repo PATH (absolute or relative selected worktree). status/files/diff accept --base BRANCH.\nWrite: write --path FILE --expected-file BEFORE --content-file AFTER | stage/unstage --path FILE [--path FILE ...] | commit --message TEXT | merge --branch BRANCH\nAll writes require --repo PATH --yes. write replaces an existing UTF-8 file only if exact expected bytes still match.\nGUI: sessions | gui status --session SOCKET | gui open-project/select-worktree/refresh --session SOCKET --repo PATH | gui open-file --session SOCKET --repo PATH --path FILE [--line N] | gui view --session SOCKET --repo PATH --mode graph|code\nAgent guide: instructions [--agent claude|codex]\nEvery ctl command returns one JSON object on stdout; ok=false means a nonzero exit. File paths are relative to the worktree, not the shell cwd.";
+pub const USAGE: &str = "forkarak ctl <command> [options]\nRead: status/worktrees/branches/files [--changed [--name-only]]/search --query TEXT [--limit N]/diff --path FILE/read --path FILE\nAll repository commands require --repo PATH (absolute or relative selected worktree). status/files/diff accept --base BRANCH. files --changed --name-only returns paths under files and skips line statistics.\nWrite: write --path FILE --expected-file BEFORE --content-file AFTER | stage/unstage --path FILE [--path FILE ...] | commit --message TEXT | merge --branch BRANCH\nAll writes require --repo PATH --yes. write replaces an existing UTF-8 file only if exact expected bytes still match.\nGUI: sessions | gui status --session SOCKET | gui open-project/select-worktree/refresh --session SOCKET --repo PATH | gui open-file --session SOCKET --repo PATH --path FILE [--line N] | gui view --session SOCKET --repo PATH --mode graph|code\nAgent guide: instructions [--agent claude|codex]\nEvery ctl command returns one JSON object on stdout; ok=false means a nonzero exit. File paths are relative to the worktree, not the shell cwd.";
 
 pub fn instructions(agent: &str) -> String {
     format!(
@@ -159,7 +159,7 @@ fn run(args: &[OsString]) -> Result<Value> {
     let (values, switches): (&[&str], &[&str]) = match command {
         "status" => (&["--repo", "--base"], &[]),
         "diff" => (&["--repo", "--base", "--path"], &[]),
-        "files" => (&["--repo", "--base"], &["--changed"]),
+        "files" => (&["--repo", "--base"], &["--changed", "--name-only"]),
         "worktrees" | "branches" => (&["--repo"], &[]),
         "search" => (&["--repo", "--query", "--limit"], &[]),
         "read" => (&["--repo", "--path"], &[]),
@@ -253,32 +253,51 @@ fn run(args: &[OsString]) -> Result<Value> {
                 ops.integrate_branch(IntegrationKind::Merge, &choice)?,
             ))
         }
-        _ => {
+        "status" => {
             let snapshot = pokarak_core::snapshot(&root, &compare)?;
-            match command {
-                "status" => Ok(
-                    json!({"repo":root,"worktree":serde_json::to_value(snapshot.worktree)?,"compare":compare,"changes":serde_json::to_value(snapshot.changes)?,"fingerprint":snapshot.fingerprint}),
-                ),
-                "branches" => Ok(json!({"repo":root,"branches":snapshot.branches})),
-                "files" if flags.switches.contains("--changed") => Ok(
-                    json!({"repo":root,"compare":compare,"changes":serde_json::to_value(snapshot.changes)?}),
-                ),
-                "files" => Ok(json!({"repo":root,"files":serde_json::to_value(snapshot.files)?})),
-                "diff" => {
-                    let path = relative(&root, &flags.path("--path")?)?;
-                    let file = snapshot
-                        .changes
-                        .iter()
-                        .find(|f| f.path == path || f.old_path.as_ref() == Some(&path))
-                        .context("File has no changes in the selected comparison")?;
-                    let doc = pokarak_core::diff(&root, file, &compare)?;
-                    Ok(
-                        json!({"repo":root,"compare":compare,"path":serde_json::to_value(doc.path)?,"old_path":serde_json::to_value(doc.old_path)?,"patch":doc.patch,"old_text":doc.old_text,"new_text":doc.new_text,"binary":doc.binary,"truncated":doc.truncated}),
-                    )
-                }
-                _ => unreachable!(),
+            Ok(
+                json!({"repo":root,"worktree":serde_json::to_value(snapshot.worktree)?,"compare":compare,"changes":serde_json::to_value(snapshot.changes)?,"fingerprint":snapshot.fingerprint}),
+            )
+        }
+        "files"
+            if flags.switches.contains("--changed") && !flags.switches.contains("--name-only") =>
+        {
+            let snapshot = pokarak_core::snapshot_current(&root, &compare)?;
+            Ok(
+                json!({"repo":root,"compare":compare,"changes":serde_json::to_value(snapshot.changes)?}),
+            )
+        }
+        "branches" => {
+            let inventory = pokarak_core::snapshot_current_inventory(&root, &compare)?;
+            Ok(json!({"repo":root,"branches":inventory.branches}))
+        }
+        "files" => {
+            let inventory = pokarak_core::snapshot_current_inventory(&root, &compare)?;
+            if flags.switches.contains("--changed") {
+                let paths: Vec<_> = inventory
+                    .changes
+                    .into_iter()
+                    .map(|file| file.path)
+                    .collect();
+                Ok(json!({"repo":root,"compare":compare,"files":serde_json::to_value(paths)?}))
+            } else {
+                Ok(json!({"repo":root,"files":serde_json::to_value(inventory.files)?}))
             }
         }
+        "diff" => {
+            let path = relative(&root, &flags.path("--path")?)?;
+            let inventory = pokarak_core::snapshot_current_inventory(&root, &compare)?;
+            let file = inventory
+                .changes
+                .iter()
+                .find(|f| f.path == path || f.old_path.as_ref() == Some(&path))
+                .context("File has no changes in the selected comparison")?;
+            let doc = pokarak_core::diff(&root, file, &compare)?;
+            Ok(
+                json!({"repo":root,"compare":compare,"path":serde_json::to_value(doc.path)?,"patch":doc.patch,"old_text":doc.old_text,"new_text":doc.new_text,"binary":doc.binary,"truncated":doc.truncated}),
+            )
+        }
+        _ => unreachable!(),
     }
 }
 

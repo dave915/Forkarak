@@ -1,5 +1,8 @@
 //! Only read-only Git plumbing lives here. Never run status/diff filters,
 //! refresh an index, materialize objects, or lazily fetch a missing object.
+mod blob_batch;
+pub(crate) use blob_batch::BlobBatch;
+
 use anyhow::{Context, Result, bail, ensure};
 use std::{
     collections::BTreeMap,
@@ -22,7 +25,11 @@ pub(crate) struct Output {
     pub truncated: bool,
 }
 
-fn spawn_read(root: &Path, args: &[&OsStr]) -> Result<(Child, thread::JoinHandle<Vec<u8>>)> {
+fn spawn_read(
+    root: &Path,
+    args: &[&OsStr],
+    stdin: Stdio,
+) -> Result<(Child, thread::JoinHandle<Vec<u8>>)> {
     let mut command = Command::new("git");
     // An inherited GIT_DIR/INDEX_FILE/WORK_TREE must not redirect a worktree read.
     for (key, _) in std::env::vars_os() {
@@ -52,7 +59,7 @@ fn spawn_read(root: &Path, args: &[&OsStr]) -> Result<(Child, thread::JoinHandle
         ])
         .arg(root)
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command
@@ -82,7 +89,7 @@ pub(crate) fn visit_oids(
     mut visit: impl FnMut(&str) -> bool,
 ) -> Result<()> {
     let args: Vec<_> = args.iter().map(OsStr::new).collect();
-    let (mut child, errors) = spawn_read(root, &args)?;
+    let (mut child, errors) = spawn_read(root, &args, Stdio::null())?;
     let mut stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
     let mut line = String::new();
     let consumed = (|| -> Result<bool> {
@@ -113,7 +120,7 @@ pub(crate) fn visit_oids(
 }
 
 pub(crate) fn run(root: &Path, args: &[&OsStr], limit: usize) -> Result<Output> {
-    let (mut child, errors) = spawn_read(root, args)?;
+    let (mut child, errors) = spawn_read(root, args, Stdio::null())?;
     let mut bytes = Vec::new();
     let result = child
         .stdout

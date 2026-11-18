@@ -110,13 +110,14 @@ fn routes_reads_without_changing_index_and_scopes_worktrees() {
             .unwrap()
             .contains("+two")
     );
-    assert_eq!(
-        f.ok("files", &["--changed"])["changes"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    let changed = f.ok("files", &["--changed"]);
+    let changes = changed["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["additions"], 1);
+    assert_eq!(changes[0]["deletions"], 1);
+    let names = f.ok("files", &["--changed", "--name-only"]);
+    assert_eq!(names["files"], serde_json::json!(["file.txt"]));
+    assert!(names.get("changes").is_none());
     assert_eq!(f.ok("files", &[])["files"].as_array().unwrap().len(), 2);
     assert!(
         f.ok("branches", &[])["branches"]

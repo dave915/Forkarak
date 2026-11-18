@@ -1,5 +1,5 @@
-use crate::{DiffDocument, DiffKind, DiffLine};
-use similar::TextDiff;
+use crate::{ChangedFile, DiffDocument, DiffKind, DiffLine};
+use similar::{ChangeTag, TextDiff};
 use std::time::Duration;
 
 const MAX_LINES: usize = 50_000;
@@ -18,25 +18,72 @@ pub(crate) fn decode(bytes: Vec<u8>, truncated: bool) -> Option<String> {
     }
 }
 
+struct Preview {
+    text: Option<(String, String)>,
+    truncated: bool,
+}
+
+impl Preview {
+    fn new(old: (Vec<u8>, bool), new: (Vec<u8>, bool)) -> Self {
+        let mut truncated = old.1 || new.1;
+        let text = decode(old.0, old.1).zip(decode(new.0, new.1));
+        if let Some((old, new)) = &text {
+            truncated |= [old, new]
+                .iter()
+                .any(|s| s.bytes().filter(|b| *b == b'\n').count() > MAX_LINES);
+        }
+        Self { text, truncated }
+    }
+}
+
+fn line_diff<'a>(old: &'a str, new: &'a str) -> TextDiff<'a, 'a, 'a, str> {
+    TextDiff::configure()
+        .timeout(Duration::from_millis(200))
+        .diff_lines(old, new)
+}
+
+/// Count the rows the selected preview would expose, without allocating its
+/// patch string or its per-line strings and line numbers.
+pub(crate) fn set_statistics(file: &mut ChangedFile, old: (Vec<u8>, bool), new: (Vec<u8>, bool)) {
+    let preview = Preview::new(old, new);
+    file.binary = preview.text.is_none();
+    file.additions = 0;
+    file.deletions = 0;
+    if let Some((old, new)) = preview.text
+        && !preview.truncated
+    {
+        let diff = line_diff(&old, &new);
+        for hunk in diff.unified_diff().iter_hunks() {
+            let mut starts_patch_line = true;
+            for change in hunk.iter_changes() {
+                if starts_patch_line {
+                    match change.tag() {
+                        ChangeTag::Insert => file.additions += 1,
+                        ChangeTag::Delete => file.deletions += 1,
+                        ChangeTag::Equal => (),
+                    }
+                }
+                // similar tokenizes a bare CR as a line ending. The formatted
+                // patch retains it, so parse_patch sees the next tag on the
+                // same LF-delimited row. A missing final newline gets a hint.
+                starts_patch_line = !change.value().ends_with('\r');
+            }
+        }
+    }
+}
+
 pub(crate) fn render(document: &mut DiffDocument, old: (Vec<u8>, bool), new: (Vec<u8>, bool)) {
-    document.truncated = old.1 || new.1;
-    let old_text = decode(old.0, old.1);
-    let new_text = decode(new.0, new.1);
-    document.binary = old_text.is_none() || new_text.is_none();
-    if document.binary {
-        document.patch = "Binary contents differ; text preview is unavailable.\n".into();
-    } else {
-        document.old_text = old_text.unwrap_or_default();
-        document.new_text = new_text.unwrap_or_default();
-        document.truncated |= document.old_text.bytes().filter(|b| *b == b'\n').count() > MAX_LINES
-            || document.new_text.bytes().filter(|b| *b == b'\n').count() > MAX_LINES;
+    let preview = Preview::new(old, new);
+    document.truncated = preview.truncated;
+    document.binary = preview.text.is_none();
+    if let Some((old, new)) = preview.text {
+        document.old_text = old;
+        document.new_text = new;
         if document.truncated {
             document.patch =
                 "Diff omitted: file exceeds the 2 MiB / 50,000 line preview limit.\n".into();
         } else {
-            let diff = TextDiff::configure()
-                .timeout(Duration::from_millis(200))
-                .diff_lines(&document.old_text, &document.new_text);
+            let diff = line_diff(&document.old_text, &document.new_text);
             let old_name = format!(
                 "{:?}",
                 format!(
@@ -63,6 +110,8 @@ pub(crate) fn render(document: &mut DiffDocument, old: (Vec<u8>, bool), new: (Ve
                 );
             }
         }
+    } else {
+        document.patch = "Binary contents differ; text preview is unavailable.\n".into();
     }
     document.lines = parse_patch(&document.patch);
 }

@@ -13,12 +13,23 @@ server, fetches missing objects, or runs repository filters or hooks.
   Invalid/unrelated bases and unborn branch comparisons return actionable errors.
 - Worktree inventory counts always describe uncommitted changes. The selected
   comparison's entries and line counts are in `Snapshot.changes`.
-- `snapshot_current` refreshes only the selected worktree's working contents and
-  diffs. Other registered worktrees remain inventory-only rows with
+- `snapshot_current` measures the selected worktree's changes against its
+  baseline. Both `snapshot` and `snapshot_current` return per-file binary flags
+  and line counts using the preview's decoding, diff algorithm and limits.
+  Other registered worktrees in `snapshot_current` are inventory-only rows with
   `changed_files_available = false`; their zero placeholder is not a clean count.
   Full `snapshot` still inspects sibling counts, but an unreadable sibling is
   reported through its `inspection_error` without blocking the selected reader.
   Successful counts set `changed_files_available = true`.
+- `snapshot_current_inventory(path, compare) -> Result<Snapshot>` is for GUI
+  lists. It returns the same files, change ordering, rename sources, status,
+  staging flags, worktree counts and fingerprint as `snapshot_current`. It
+  still hashes working files and checks bounded rename candidates. The three
+  row fields `additions`, `deletions` and `binary` are **unmeasured** in this
+  API and retain their defaults. GUI readers and review checkpoints obtain the
+  selected file's actual contents and binary flag through `diff(root, file, compare)`.
+  CLI `status` and `files --changed` serialize those three row fields and require
+  a measured snapshot. The staging view continues to use its own index snapshot.
 - `repository_watch_paths` returns the canonical worktree, its actual Git
   directory, and its common Git directory, deduplicated. This includes linked
   worktree indexes/HEAD and shared refs outside the working directory. Discovery

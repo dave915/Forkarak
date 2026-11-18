@@ -81,8 +81,9 @@ impl Pokarak {
             root: root.clone(),
             generation: self.request,
         };
-        let task =
-            cx.background_spawn(async move { pokarak_core::snapshot_current(&root, &compare) });
+        let task = cx.background_spawn(async move {
+            pokarak_core::snapshot_current_inventory(&root, &compare)
+        });
         cx.spawn_in(window, async move |view, cx| {
             let result = task.await;
             let _ = view.update_in(cx, |app, window, cx| {

@@ -21,6 +21,13 @@ server, fetches missing objects, or runs repository filters or hooks.
   Full `snapshot` still inspects sibling counts, but an unreadable sibling is
   reported through its `inspection_error` without blocking the selected reader.
   Successful counts set `changed_files_available = true`.
+- When the OS denies access to a selected regular file, snapshots return its
+  worktree-relative path in `skipped_paths`. Its name remains in the file list
+  if tracked or listed by Git. Change rows and counts cover the inspected
+  paths, and `changed_files_available` is false. Refresh fingerprints include
+  skipped paths. `worktree_change_summary_report` exposes that count,
+  fingerprint and skipped list for graph refreshes. The exact count and
+  summary APIs and the staging inventory require a complete read.
 - `snapshot_current_inventory(path, compare) -> Result<Snapshot>` is for GUI
   lists. It returns the same files, change ordering, rename sources, status,
   staging flags, worktree counts and fingerprint as `snapshot_current`. It
@@ -47,6 +54,8 @@ server, fetches missing objects, or runs repository filters or hooks.
   paths, **zero-based** lines, and **UTF-16** columns. Search is literal and case
   sensitive, returns individual occurrences, and honors the requested limit
   up to 10,000 results. Empty/multiline queries return no results.
+  `search_with_exclusions_report` returns matches plus the worktree-relative
+  paths of regular files whose content reads were denied before the hit limit.
 
 Status and working diffs apply Git's intrinsic text EOL attributes and
 `core.autocrlf`. Auto conversion respects binary contents and CRLF already in

@@ -139,6 +139,8 @@ fn unborn_repository_root_and_inventory() {
 
 #[path = "git_backend/eol.rs"]
 mod eol;
+#[path = "git_backend/partial_inspection.rs"]
+mod partial_inspection;
 
 #[test]
 fn combines_staged_and_unstaged_against_head() {
@@ -684,6 +686,15 @@ fn search_exclusions_apply_before_opening_an_excluded_candidate() {
         )
         .is_err()
     );
+    // An open denied on a special file must not be treated as a skippable
+    // regular file. The no-follow metadata check must still reject this FIFO.
+    fs::set_permissions(
+        repo.root.join("a-unreadable"),
+        fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    assert!(search(&repo.root, "needle", 1).is_err());
+    assert!(snapshot_current_inventory(&repo.root, &CompareMode::Uncommitted).is_err());
 }
 
 #[test]
@@ -1010,14 +1021,10 @@ fn sibling_inspection_failure_does_not_block_healthy_selected_worktree() {
     fs::write(good.join("new.rs"), "healthy change\n").unwrap();
     repo.write("src/code.rs", "selected change\n");
     let blocked = bad.join("src/code.rs");
-    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
-    // Elevated runners can still read chmod(000). A FIFO is a deterministic
-    // unsupported node instead; inspection must reject it without blocking.
-    if fs::File::open(&blocked).is_ok() {
-        fs::remove_file(&blocked).unwrap();
-        let name = std::ffi::CString::new(blocked.as_os_str().as_encoded_bytes()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
-    }
+    // A FIFO remains a fatal inspection failure, even for elevated runners.
+    fs::remove_file(&blocked).unwrap();
+    let name = std::ffi::CString::new(blocked.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
     let snap = repo.snap();
     assert_eq!(snap.worktree.changed_files, 1);
     assert!(snap.worktree.changed_files_available);

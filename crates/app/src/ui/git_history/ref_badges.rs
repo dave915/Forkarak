@@ -71,9 +71,14 @@ fn badge_layout(widths: &[f32], available: f32, overflow: impl Fn(usize) -> f32)
     }
 }
 
-fn ordered_refs(refs: &[String]) -> Vec<String> {
+fn ordered_refs(refs: &[String], current: Option<&str>) -> Vec<String> {
     let mut refs = refs.to_vec();
-    refs.sort_by_key(|r| !r.starts_with("refs/heads/"));
+    refs.sort_by_key(|reference| match reference.strip_prefix("refs/heads/") {
+        Some(branch) if Some(branch) == current => 0,
+        None if current.is_none() && reference == "HEAD" => 0,
+        Some(_) => 1,
+        None => 2,
+    });
     refs
 }
 
@@ -324,7 +329,7 @@ impl RefBadges {
             hover: hover.read(cx).clone(),
             ..self.clone()
         };
-        let refs = ordered_refs(&commit.refs);
+        let refs = ordered_refs(&commit.refs, badges.current.as_deref());
         let widths: Vec<_> = refs
             .iter()
             .map(|r| text_width(&visible(reference_name(r)), window) + PADDING)
@@ -360,11 +365,13 @@ impl RefBadges {
                 |window, cx| RefOverflow::new(badges.clone(), commit.clone(), window, cx),
             );
             popup.update(cx, |popup, cx| {
-                let changed = !popup.badges.scope.same(&self.scope)
+                let context_changed =
+                    !popup.badges.scope.same(&self.scope) || popup.badges.current != self.current;
+                let changed = context_changed
                     || popup.hidden != layout.hidden
                     || popup.width != trigger_width
                     || popup.color != color;
-                if !popup.badges.scope.same(&self.scope) {
+                if context_changed {
                     popup.badges.clear_hover(&popup.commit.oid, cx);
                     popup.open = false;
                     popup.badges = badges.clone();
@@ -432,7 +439,7 @@ impl Render for RefOverflow {
         let weak = cx.weak_entity();
         let badges = self.badges.clone();
         let commit = self.commit.clone();
-        let refs = ordered_refs(&commit.refs);
+        let refs = ordered_refs(&commit.refs, badges.current.as_deref());
         let scroll = self.scroll.clone();
         let horizontal = self.horizontal.clone();
         let color = self.color;
@@ -599,7 +606,17 @@ mod tests {
         ]
         .map(str::to_owned)
         .into();
-        let ordered = ordered_refs(&refs);
+        let ordered = ordered_refs(&refs, None);
+        let attached = ordered_refs(&refs, Some("alias"));
+        assert_eq!(attached[0], "refs/heads/alias");
+        assert_eq!(attached[1], "refs/heads/feature");
+        let mut head_refs = refs.clone();
+        head_refs.push("HEAD".to_owned());
+        assert_eq!(ordered_refs(&head_refs, None)[0], "HEAD");
+        assert_eq!(
+            ordered_refs(&head_refs, Some("feature"))[0],
+            "refs/heads/feature"
+        );
         assert_eq!(
             ordered,
             [

@@ -16,6 +16,7 @@ mod git_actions;
 mod git_commit;
 mod git_history;
 mod git_workflow;
+mod keyboard;
 mod keycaps;
 mod language_manager;
 mod language_tools;
@@ -127,6 +128,7 @@ actions!(
         FindText,
         FindReferences,
         FindDefinition,
+        FindImplementation,
         ToggleCode,
         ToggleSidebar,
         ToggleFiles,
@@ -144,7 +146,42 @@ pub fn bind_keys(cx: &mut App) {
     cx.on_action(git_actions::request_app_quit);
     cx.on_action(|_: &ZoomIn, cx| settings::zoom_active_window(1, cx));
     cx.on_action(|_: &ZoomOut, cx| settings::zoom_active_window(-1, cx));
-    cx.set_menus([
+    cx.bind_keys(fixed_bindings());
+    language_tools::bind_keys(cx);
+    editor_tools::bind_keys(cx);
+}
+
+fn fixed_bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("cmd-=", ZoomIn, None),
+        KeyBinding::new("cmd-shift-=", ZoomIn, None),
+        KeyBinding::new("cmd-+", ZoomIn, None),
+        KeyBinding::new("cmd--", ZoomOut, None),
+        KeyBinding::new("cmd-enter", git_commit::SubmitCommit, Some("CommitDialog")),
+        KeyBinding::new("cmd-shift-g", OpenGitWorkflow, None),
+        KeyBinding::new("cmd-alt-h", OpenGitHistory, None),
+        KeyBinding::new("cmd-f", SearchGitGraph, Some("GitGraph")),
+        KeyBinding::new("cmd-w", CloseFile, None),
+        KeyBinding::new("cmd-shift-w", CloseProject, None),
+        KeyBinding::new("ctrl-tab", NextProject, None),
+        KeyBinding::new("ctrl-shift-tab", PreviousProject, None),
+        KeyBinding::new("cmd-o", OpenRepository, None),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("ctrl-`", OpenWorktreeTerminal, None),
+        KeyBinding::new("cmd-[", Back, None),
+        KeyBinding::new("cmd-]", Forward, None),
+        KeyBinding::new("cmd-shift-j", ChooseWorktree, None),
+    ]
+}
+
+fn install_menus(keyboard: keyboard::Keyboard, cx: &App) {
+    cx.set_menus(app_menus(keyboard));
+}
+
+fn app_menus(keyboard: keyboard::Keyboard) -> [Menu; 6] {
+    let mut menus = [
         Menu::new("Forkarak").items([
             MenuItem::action("설정…", OpenSettings),
             MenuItem::separator(),
@@ -197,6 +234,7 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("본문 검색", FindText),
             MenuItem::separator(),
             MenuItem::action("정의로 이동", FindDefinition),
+            MenuItem::action("구현으로 이동", FindImplementation),
             MenuItem::action("사용처 찾기", FindReferences),
             MenuItem::action("파일 구조 검색…", language_tools::Symbols),
             MenuItem::separator(),
@@ -210,43 +248,22 @@ pub fn bind_keys(cx: &mut App) {
             MenuItem::action("사이드바 표시 / 숨기기", ToggleSidebar),
             MenuItem::action("파일 목록 표시 / 숨기기 (코드 보기)", ToggleFiles),
         ]),
-    ]);
-    cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-,", OpenSettings, None),
-        KeyBinding::new("cmd-=", ZoomIn, None),
-        KeyBinding::new("cmd-shift-=", ZoomIn, None),
-        KeyBinding::new("cmd-+", ZoomIn, None),
-        KeyBinding::new("cmd--", ZoomOut, None),
-        KeyBinding::new("cmd-shift-k", OpenGitCommit, None),
-        KeyBinding::new("cmd-enter", git_commit::SubmitCommit, Some("CommitDialog")),
-        KeyBinding::new("cmd-shift-g", OpenGitWorkflow, None),
-        KeyBinding::new("cmd-alt-h", OpenGitHistory, None),
-        KeyBinding::new("cmd-f", SearchGitGraph, Some("GitGraph")),
-        KeyBinding::new("cmd-w", CloseFile, None),
-        KeyBinding::new("cmd-shift-w", CloseProject, None),
-        KeyBinding::new("cmd-alt-down", NextWorktree, None),
-        KeyBinding::new("cmd-alt-up", PreviousWorktree, None),
-        KeyBinding::new("ctrl-tab", NextProject, None),
-        KeyBinding::new("ctrl-shift-tab", PreviousProject, None),
-        KeyBinding::new("cmd-o", OpenRepository, None),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("ctrl-`", OpenWorktreeTerminal, None),
-        KeyBinding::new("cmd-r", Refresh, None),
-        KeyBinding::new("cmd-s", SaveCodeFile, None),
-        KeyBinding::new("cmd-[", Back, None),
-        KeyBinding::new("cmd-]", Forward, None),
-        KeyBinding::new("cmd-p", FindFile, None),
-        KeyBinding::new("cmd-shift-j", ChooseWorktree, None),
-        KeyBinding::new("cmd-shift-f", FindText, None),
-        KeyBinding::new("alt-f7", FindReferences, None),
-        KeyBinding::new("cmd-b", FindDefinition, None),
-        KeyBinding::new("cmd-alt-b", ToggleSidebar, None),
-        KeyBinding::new("cmd-shift-b", ToggleFiles, None),
-        KeyBinding::new("cmd-alt-d", ToggleCode, None),
-    ]);
-    editor_tools::bind_keys(cx);
-    language_tools::bind_keys(cx);
+    ];
+    // AppKit supplies single-stroke equivalents from the installed keymap.
+    // Chords have no native equivalent, so show both strokes in the title.
+    for item in menus.iter_mut().flat_map(|menu| &mut menu.items) {
+        if let MenuItem::Action { name, action, .. } = item
+            && let Some(shortcut) = keyboard::KEYBOARD_DEFAULTS
+                .iter()
+                .find(|s| (s.action)().as_ref().type_id() == action.as_ref().type_id())
+        {
+            let key = keyboard.key(shortcut);
+            if key.split_whitespace().count() > 1 {
+                *name = format!("{name}  {}", keycaps::format_binding(key)).into();
+            }
+        }
+    }
+    menus
 }
 
 #[derive(Clone)]
@@ -454,7 +471,10 @@ impl Pokarak {
             return;
         }
         let key = event.keystroke.key.as_str();
-        if self.search_input.focus_handle(cx).is_focused(window) && !self.text_search {
+        if self.search_input.focus_handle(cx).is_focused(window)
+            && !self.text_search
+            && !event.keystroke.modifiers.modified()
+        {
             let rows = self.file_rows();
             match key {
                 "down" if !rows.is_empty() => {
@@ -663,10 +683,12 @@ impl Pokarak {
             },
         )];
         subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
-            if window.is_window_active()
-                && let Some(display) = Preferences::saved_display()
-            {
-                this.apply_display(display, cx);
+            if window.is_window_active() {
+                if let Some(display) = this.prefs.refresh_shared_settings() {
+                    this.apply_display(display, cx);
+                }
+                this.sync_editor_bindings(cx);
+                cx.notify();
             }
         }));
         subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
@@ -2452,7 +2474,9 @@ impl Pokarak {
 impl Render for Pokarak {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.observe_feedback();
-        self.sync_editor_bindings(cx);
+        if window.is_window_active() {
+            self.sync_editor_bindings(cx);
+        }
         self.sync_editor_options(window, cx);
         self.sync_language_tools(cx);
         let narrow = theme::logical_px(window.viewport_size().width) < 1100.;

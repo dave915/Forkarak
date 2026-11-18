@@ -471,6 +471,9 @@ impl Pokarak {
             )
             .child(
                 div()
+                    .when(!self.text_search, |row| {
+                        row.key_context("ForkarakFileSearch")
+                    })
                     .flex_none()
                     .px(ui_px(4.))
                     .pb_2()

@@ -275,9 +275,20 @@ pub(super) const FIELDS: &[Field] = &[
     ),
     field!(
         Keyboard,
+        "keyboard.preset",
+        "단축키 프리셋",
+        "개별 명령에 지정한 단축키가 우선합니다.",
+        Kind::Choice(&[
+            ("forkarak", "Forkarak 기본"),
+            ("intellij", "IntelliJ"),
+            ("vscode", "VS Code")
+        ])
+    ),
+    field!(
+        Keyboard,
         "keyboard.bindings",
         "단축키 재정의",
-        "JSON: 명령 ID → cmd-alt-f 형태의 키. 아래에서 충돌을 확인합니다.",
+        "명령 ID에 키를 지정하세요. 빈 문자열은 키를 해제하고, 항목을 삭제하면 상속합니다.",
         Kind::Json
     ),
     field!(
@@ -417,6 +428,7 @@ pub(super) const FIELDS: &[Field] = &[
 ];
 pub(super) fn default_value(key: &str) -> Value {
     match key {
+        "keyboard.preset" => json!("forkarak"),
         "workspace.default_view" => json!("git"),
         "navigation.results_placement" => json!("editor"),
         "navigation.blame_mode" => json!("line"),

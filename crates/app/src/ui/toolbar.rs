@@ -434,7 +434,11 @@ impl Pokarak {
                     .child(
                         content_toolbar_icon("git-actions", IconName::Ellipsis, "Git 작업 더 보기")
                             .tooltip("Git 작업 더 보기 · 브랜치, Pop, Merge/Rebase, 작업 기록")
-                            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+                            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, cx| {
+                                let Some(owner) = weak.upgrade() else {
+                                    return menu;
+                                };
+                                let app = owner.read(cx);
                                 let add =
                                     |menu: gpui_kit::component::menu::PopupMenu,
                                      label: &'static str,
@@ -450,7 +454,13 @@ impl Pokarak {
                                             || (command.starts_with("graph-") && !graph)
                                             || (command == "head" && !branch);
                                         menu.item(
-                                            keycaps::popup_item(label).disabled(disabled).on_click(
+                                            keycaps::popup_item(
+                                                label,
+                                                &app.prefs,
+                                                app.current_project.as_deref(),
+                                            )
+                                            .disabled(disabled)
+                                            .on_click(
                                                 move |_, w, cx| {
                                                     let _ = target.update(cx, |app, cx| {
                                                         app.run_toolbar_command(&action, w, cx);

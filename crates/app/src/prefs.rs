@@ -7,6 +7,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub const KEYBOARD_OPTIONS: [&str; 2] = ["keyboard.preset", "keyboard.bindings"];
+
 static SESSION_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub fn set_session_dir(path: PathBuf) {
     let _ = SESSION_DIR.set(path);
@@ -146,10 +148,64 @@ fn lock_session(path: &Path) -> std::io::Result<std::fs::File> {
     Ok(lock)
 }
 
-fn read_display(path: &Path) -> Option<DisplaySettings> {
-    serde_json::from_slice::<DisplaySettings>(&std::fs::read(path).ok()?)
-        .ok()
-        .map(DisplaySettings::validated)
+// A --new-window launch has its own process. Read only the shared settings
+// from the session when another window may have updated them.
+#[derive(Default, Deserialize)]
+struct SharedSettings {
+    #[serde(flatten)]
+    display: DisplaySettings,
+    #[serde(default)]
+    options: KeyboardOptions,
+    #[serde(default)]
+    project_options: HashMap<PathBuf, KeyboardOptions>,
+}
+
+#[derive(Default, Deserialize)]
+struct KeyboardOptions {
+    #[serde(rename = "keyboard.preset")]
+    preset: Option<serde_json::Value>,
+    #[serde(rename = "keyboard.bindings")]
+    bindings: Option<serde_json::Value>,
+}
+
+impl KeyboardOptions {
+    fn apply(self, map: &mut HashMap<String, serde_json::Value>) {
+        for (key, value) in KEYBOARD_OPTIONS
+            .into_iter()
+            .zip([self.preset, self.bindings])
+        {
+            if let Some(value) = value {
+                map.insert(key.into(), value);
+            } else {
+                map.remove(key);
+            }
+        }
+    }
+}
+
+impl SharedSettings {
+    fn read(path: &Path) -> std::io::Result<Option<Self>> {
+        match std::fs::read(path) {
+            Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn apply_keyboard(mut self, prefs: &mut Preferences) {
+        self.options.apply(&mut prefs.options);
+        for (root, map) in &mut prefs.project_options {
+            self.project_options
+                .remove(root)
+                .unwrap_or_default()
+                .apply(map);
+        }
+        for (root, keys) in self.project_options {
+            if keys.preset.is_some() || keys.bindings.is_some() {
+                keys.apply(prefs.project_options.entry(root).or_default());
+            }
+        }
+    }
 }
 
 impl Preferences {
@@ -187,9 +243,15 @@ impl Preferences {
     }
 
     pub fn option(&self, root: Option<&Path>, key: &str) -> Option<&serde_json::Value> {
-        root.and_then(|root| self.project_options.get(root))
-            .and_then(|options| options.get(key))
+        self.scoped_option(root, key)
             .or_else(|| self.options.get(key))
+    }
+
+    pub fn scoped_option(&self, root: Option<&Path>, key: &str) -> Option<&serde_json::Value> {
+        match root {
+            Some(root) => self.project_options.get(root)?.get(key),
+            None => self.options.get(key),
+        }
     }
 
     pub fn set_option(&mut self, root: Option<&Path>, key: &str, value: serde_json::Value) {
@@ -225,26 +287,87 @@ impl Preferences {
     }
 
     fn try_save_to(&self, path: &Path) -> std::io::Result<()> {
-        let _lock = lock_session(path)?;
-        // A workspace save must preserve display changes made by another window.
-        if let Some(display) = read_display(path)
-            && display != self.display
-        {
-            let mut snapshot = self.clone();
-            snapshot.display = display;
-            return snapshot.write_session(path);
-        }
-        self.write_session(path)
+        self.save_workspace(path, false)
     }
 
-    pub fn saved_display() -> Option<DisplaySettings> {
-        read_display(&config_path())
+    fn save_workspace(&self, path: &Path, reset_display: bool) -> std::io::Result<()> {
+        let _lock = lock_session(path)?;
+        if let Some(shared) = SharedSettings::read(path)? {
+            let mut snapshot = self.clone();
+            if !reset_display {
+                snapshot.display = shared.display.validated();
+            }
+            shared.apply_keyboard(&mut snapshot);
+            snapshot.write_session(path)
+        } else {
+            self.write_session(path)
+        }
+    }
+
+    pub fn refresh_shared_settings(&mut self) -> Option<DisplaySettings> {
+        let latest = SharedSettings::read(&config_path()).ok()??;
+        let display = latest.display.validated();
+        latest.apply_keyboard(self);
+        Some(display)
     }
 
     pub fn try_save_appearance_reset(&self) -> std::io::Result<()> {
-        let path = config_path();
-        let _lock = lock_session(&path)?;
-        self.write_session(&path)
+        self.save_workspace(&config_path(), true)
+    }
+
+    pub fn save_keyboard(
+        &mut self,
+        root: Option<&Path>,
+        edits: &[(&str, Option<serde_json::Value>)],
+    ) -> std::io::Result<()> {
+        self.save_keyboard_at(&config_path(), root, edits)
+    }
+
+    fn save_keyboard_at(
+        &mut self,
+        path: &Path,
+        root: Option<&Path>,
+        edits: &[(&str, Option<serde_json::Value>)],
+    ) -> std::io::Result<()> {
+        let _lock = lock_session(path)?;
+        let mut latest: Self = match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => self.clone(),
+            Err(error) => return Err(error),
+        };
+        for &(key, ref value) in edits {
+            if key == "keyboard.bindings"
+                && let Some(edited) = value.as_ref().and_then(|v| v.as_object())
+            {
+                // Carry only the edits made to this scope into the latest saved map.
+                let previous = self.scoped_option(root, key).and_then(|v| v.as_object());
+                let mut merged = latest
+                    .scoped_option(root, key)
+                    .and_then(|v| v.as_object())
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some(previous) = previous {
+                    merged.retain(|id, _| !previous.contains_key(id) || edited.contains_key(id));
+                }
+                for (id, binding) in edited {
+                    if previous.and_then(|p| p.get(id)) != Some(binding) {
+                        merged.insert(id.clone(), binding.clone());
+                    }
+                }
+                latest.set_option(root, key, merged.into());
+            } else if let Some(value) = value {
+                latest.set_option(root, key, value.clone());
+            } else {
+                latest.remove_option(root, key);
+            }
+        }
+        latest.write_session(path)?;
+        // Synchronize this window under the same lock, without adopting another
+        // window's selected project, open tabs or display state.
+        if let Some(shared) = SharedSettings::read(path)? {
+            shared.apply_keyboard(self);
+        }
+        Ok(())
     }
 
     pub fn update_display(
@@ -411,6 +534,82 @@ mod display_tests {
         let saved: Preferences = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert!(saved.split_diff);
         assert_eq!(saved.display, display);
+    }
+
+    #[test]
+    fn separate_windows_merge_keyboard_edits_and_workspace_saves_cannot_restore_old_keys() {
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let project = dir.path().join("project");
+        let mut first = Preferences::default();
+        first.set_option(None, "keyboard.bindings", json!({"refresh":"f8"}));
+        first.try_save_to(&path).unwrap();
+        let mut second = first.clone();
+        first
+            .save_keyboard_at(
+                &path,
+                None,
+                &[
+                    ("keyboard.preset", Some(json!("intellij"))),
+                    (
+                        "keyboard.bindings",
+                        Some(json!({"refresh":"f8","find_file":"f7"})),
+                    ),
+                ],
+            )
+            .unwrap();
+        second
+            .save_keyboard_at(
+                &path,
+                None,
+                &[("keyboard.bindings", Some(json!({"refresh":""})))],
+            )
+            .unwrap();
+        second
+            .save_keyboard_at(
+                &path,
+                Some(&project),
+                &[("keyboard.preset", Some(json!("vscode")))],
+            )
+            .unwrap();
+
+        first.try_save_to(&path).unwrap();
+        let read =
+            || serde_json::from_slice::<Preferences>(&std::fs::read(&path).unwrap()).unwrap();
+        let persisted = read();
+        assert_eq!(
+            persisted.option(None, "keyboard.bindings"),
+            Some(&json!({"refresh":"","find_file":"f7"}))
+        );
+        assert_eq!(
+            persisted.option(None, "keyboard.preset"),
+            Some(&json!("intellij"))
+        );
+        assert_eq!(
+            persisted.option(Some(&project), "keyboard.preset"),
+            Some(&json!("vscode"))
+        );
+
+        // The activation path only refreshes shared keyboard settings.
+        first.last_root = Some(project.clone());
+        super::SharedSettings::read(&path)
+            .unwrap()
+            .unwrap()
+            .apply_keyboard(&mut first);
+        assert_eq!(first.last_root.as_ref(), Some(&project));
+        assert_eq!(
+            first.option(None, "keyboard.bindings"),
+            persisted.option(None, "keyboard.bindings")
+        );
+        first
+            .save_keyboard_at(&path, Some(&project), &[("keyboard.preset", None)])
+            .unwrap();
+        second.save_workspace(&path, true).unwrap();
+        assert_eq!(
+            read().option(Some(&project), "keyboard.preset"),
+            Some(&json!("intellij"))
+        );
     }
 
     #[test]

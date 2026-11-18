@@ -29,7 +29,17 @@ actions!(
         PinTab,
         ManageFiles,
         PreviousCode,
-        FormatFile
+        FormatFile,
+        SaveAll,
+        RenameSymbol,
+        QuickFix,
+        RunTest,
+        RunFileTests,
+        RerunTest,
+        SplitRight,
+        FocusGroup1,
+        FocusGroup2,
+        OpenToSide
     ]
 );
 
@@ -43,7 +53,6 @@ pub(super) struct Tools {
     indent_request: HashMap<FileKey, u64>,
     marker_request: HashMap<FileKey, u64>,
     formatting: HashSet<FileKey>,
-    bindings: Option<(Option<PathBuf>, serde_json::Value)>,
     configuration: Option<(FileKey, EntityId, serde_json::Value)>,
 }
 
@@ -105,16 +114,7 @@ pub(super) fn actions(
 
 impl Pokarak {
     pub(super) fn sync_editor_bindings(&mut self, cx: &mut Context<Self>) {
-        let project = self.current_project.clone();
-        let value = self
-            .prefs
-            .option(project.as_deref(), "keyboard.bindings")
-            .cloned()
-            .unwrap_or(serde_json::json!({}));
-        if self.code_edits.tools.bindings.as_ref() != Some(&(project.clone(), value.clone())) {
-            shortcuts::install(&self.prefs, project.as_deref(), cx);
-            self.code_edits.tools.bindings = Some((project, value));
-        }
+        shortcuts::install(&self.prefs, self.current_project.as_deref(), cx);
     }
 
     pub(super) fn sync_editor_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -461,7 +461,7 @@ impl Pokarak {
             ("파일 관리…", Command::Files, !ready, false),
             ("줄 이동…  ⌘L", Command::Line, !code, false),
             (
-                "줄바꿈",
+                "줄바꿈  ⌥Z",
                 Command::Wrap,
                 !code,
                 self.current
@@ -469,7 +469,7 @@ impl Pokarak {
                     .is_some_and(|r| self.word_wrap(r, path)),
             ),
             (
-                "탭 고정",
+                "미리보기 탭 고정  ⌘⇧⏎",
                 Command::Pin,
                 !code
                     || !self
@@ -496,7 +496,7 @@ impl Pokarak {
                 false,
             ),
             (
-                "파일 포맷…",
+                "파일 포맷…  ⌥⇧F",
                 Command::Format,
                 !code
                     || !self

@@ -7,13 +7,14 @@ enum Target {
 }
 #[derive(Clone)]
 struct Entry {
+    shortcut: Option<&'static keyboard::Shortcut>,
     title: String,
     keywords: String,
     key: String,
     target: Target,
     enabled: bool,
 }
-fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
+fn entries(app: &Pokarak, window: &Window, cx: &App) -> Vec<Entry> {
     let code = app.code_tools_target(cx).is_some();
     let ready =
         app.current.is_some() && app.opening_path.is_none() && !app.loading && !app.git_is_busy();
@@ -23,267 +24,191 @@ fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
             .as_ref()
             .zip(app.selected().as_ref())
             .is_some_and(|(root, path)| app.code_edits.can_edit(root, path));
-    let mut list = vec![];
-    let bindings = app
-        .prefs
-        .option(app.current_project.as_deref(), "keyboard.bindings")
-        .and_then(|v| v.as_object());
-    macro_rules! add {
-        ($title:literal,$id:literal,$key:literal,$action:expr) => {
+    let mut list = Vec::new();
+    let keyboard = keyboard::Keyboard::new(&app.prefs, app.current_project.as_deref());
+    let managed = |s: &'static keyboard::Shortcut, title: &str, enabled: bool| Entry {
+        shortcut: Some(s),
+        title: title.into(),
+        keywords: s.id.replace('_', " "),
+        key: keyboard.key(s).into(),
+        target: Target::Action(s.action),
+        enabled,
+    };
+    macro_rules! command {
+        ($title:literal, $id:literal, $enabled:expr) => {
+            list.push(managed(
+                keyboard::shortcut($id).expect("registered palette command"),
+                $title,
+                $enabled,
+            ))
+        };
+        ($title:literal, $id:literal, $key:literal, $action:path, $enabled:expr) => {
             list.push(Entry {
+                shortcut: None,
                 title: $title.into(),
                 keywords: $id.replace('_', " "),
-                key: bindings
-                    .and_then(|v| v.get($id))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or($key)
-                    .into(),
+                key: $key.into(),
                 target: Target::Action(|| Box::new($action)),
-                enabled: match $id {
-                    "open_repository" | "settings" => true,
-                    "toggle_comment"
-                    | "move_line_up"
-                    | "move_line_down"
-                    | "duplicate_line_up"
-                    | "duplicate_line_down"
-                    | "replace_file"
-                    | "format_file" => editable,
-                    "language_completion"
-                    | "language_diagnostics"
-                    | "language_symbols"
-                    | "language_signature"
-                    | "language_hover"
-                    | "go_to_line"
-                    | "word_wrap"
-                    | "select_next_word"
-                    | "pin_tab"
-                    | "previous_code" => code,
-                    _ => ready,
-                },
-            });
+                enabled: $enabled,
+            })
         };
     }
-    add!(
+    command!(
         "파일: 저장소 열기…",
         "open_repository",
         "cmd-o",
-        OpenRepository
+        OpenRepository,
+        true
     );
-    add!(
+    command!(
         "파일: 이름 변경 · 이동 · 파일/폴더 생성…",
         "manage_files",
         "",
-        ManageFiles
+        ManageFiles,
+        ready
     );
-    add!("파일: 현재 파일 저장", "save_file", "cmd-s", SaveCodeFile);
-    add!("파일: 현재 파일 닫기", "close_file", "cmd-w", CloseFile);
-    add!("편집: 주석 토글", "toggle_comment", "cmd-/", ToggleComment);
-    add!("편집: 줄 위로 이동", "move_line_up", "alt-up", MoveLineUp);
-    add!(
-        "편집: 줄 아래로 이동",
-        "move_line_down",
-        "alt-down",
-        MoveLineDown
+    command!("파일: 현재 파일 저장", "save_file", ready);
+    command!(
+        "파일: 현재 파일 닫기",
+        "close_file",
+        "cmd-w",
+        CloseFile,
+        ready
     );
-    add!(
-        "편집: 줄 위에 복제",
-        "duplicate_line_up",
-        "alt-shift-up",
-        DuplicateLineUp
-    );
-    add!(
-        "편집: 줄 아래에 복제",
-        "duplicate_line_down",
-        "alt-shift-down",
-        DuplicateLineDown
-    );
-    add!(
+    command!("편집: 주석 토글", "toggle_comment", editable);
+    command!("편집: 줄 위로 이동", "move_line_up", editable);
+    command!("편집: 줄 아래로 이동", "move_line_down", editable);
+    command!("편집: 줄 위에 복제", "duplicate_line_up", editable);
+    command!("편집: 줄 아래에 복제", "duplicate_line_down", editable);
+    command!(
         "편집: 같은 단어 다음 항목 추가 선택",
         "select_next_word",
-        "cmd-d",
-        SelectNextWord
+        code
     );
-    add!(
-        "편집: 위 줄에 커서 추가",
-        "add_cursor_above",
-        "ctrl-alt-up",
-        gpui_kit::base::input::AddCursorAbove
-    );
-    add!(
-        "편집: 아래 줄에 커서 추가",
-        "add_cursor_below",
-        "ctrl-alt-down",
-        gpui_kit::base::input::AddCursorBelow
-    );
-    add!(
-        "편집: 파일 내 바꾸기",
-        "replace_file",
-        "cmd-alt-f",
-        ReplaceFile
-    );
-    add!("편집: 파일 포맷", "format_file", "alt-shift-f", FormatFile);
-    add!("이동: 줄:열 번호로 이동…", "go_to_line", "cmd-l", GoToLine);
-    add!("이동: 파일 찾기…", "find_file", "cmd-p", FindFile);
-    add!(
-        "이동: 프로젝트 본문 검색…",
-        "find_text",
-        "cmd-shift-f",
-        FindText
-    );
-    add!(
-        "이동: 정의로 이동",
-        "find_definition",
-        "cmd-b",
-        FindDefinition
-    );
-    add!(
-        "이동: 사용처 찾기",
-        "find_references",
-        "alt-f7",
-        FindReferences
-    );
-    add!(
+    command!("편집: 위 줄에 커서 추가", "add_cursor_above", ready);
+    command!("편집: 아래 줄에 커서 추가", "add_cursor_below", ready);
+    command!("편집: 파일 내 바꾸기", "replace_file", editable);
+    command!("편집: 파일 포맷", "format_file", editable);
+    command!("이동: 줄:열 번호로 이동…", "go_to_line", code);
+    command!("이동: 파일 찾기…", "find_file", ready);
+    command!("이동: 프로젝트 본문 검색…", "find_text", ready);
+    command!("이동: 정의로 이동", "find_definition", ready);
+    command!("이동: 사용처 찾기", "find_references", ready);
+    command!(
         "코드 지원: 자동완성",
         "language_completion",
         "ctrl-space",
-        language_tools::Complete
+        language_tools::Complete,
+        code
     );
-    add!(
+    command!(
         "코드 지원: 오류 확인",
         "language_diagnostics",
         "",
-        language_tools::Diagnostics
+        language_tools::Diagnostics,
+        code
     );
-    add!(
-        "코드 지원: 파일 구조 검색",
-        "language_symbols",
-        "cmd-shift-o",
-        language_tools::Symbols
-    );
-    add!(
-        "코드 지원: 함수 도움말",
-        "language_signature",
-        "cmd-i",
-        language_tools::Signature
-    );
-    add!(
+    command!("코드 지원: 파일 구조 검색", "language_symbols", code);
+    command!("코드 지원: 함수 도움말", "language_signature", code);
+    command!(
         "코드 지원: 타입 · 설명",
         "language_hover",
         "alt-f1",
-        language_tools::Hover
+        language_tools::Hover,
+        code
     );
-    add!("이동: 뒤로", "back", "cmd-[", Back);
-    add!("이동: 앞으로", "forward", "cmd-]", Forward);
-    add!(
-        "보기: 코드 / 변경사항 전환",
-        "toggle_code",
-        "cmd-alt-d",
-        ToggleCode
-    );
-    add!(
-        "보기: 긴 줄 화면 줄바꿈 전환",
-        "word_wrap",
-        "alt-z",
-        ToggleWordWrap
-    );
-    add!(
-        "보기: 미리보기 탭 고정",
-        "pin_tab",
-        "cmd-shift-enter",
-        PinTab
-    );
-    add!(
+    command!("이동: 구현으로 이동", "find_implementation", code);
+    command!("이동: 뒤로", "back", "cmd-[", Back, ready);
+    command!("이동: 앞으로", "forward", "cmd-]", Forward, ready);
+    command!("보기: 코드 / 변경사항 전환", "toggle_code", ready);
+    command!("보기: 긴 줄 화면 줄바꿈 전환", "word_wrap", code);
+    command!("보기: 미리보기 탭 고정", "pin_tab", code);
+    command!(
         "보기: 현재 변경 구간의 이전 코드 펼치기",
         "previous_code",
         "",
-        PreviousCode
+        PreviousCode,
+        code
     );
-    add!(
+    command!(
         "보기: 다음 변경 구간",
         "next_diff_hunk",
         "alt-down",
-        diff_tools::NextDiffHunk
+        diff_tools::NextDiffHunk,
+        ready
     );
-    add!(
+    command!(
         "보기: 이전 변경 구간",
         "previous_diff_hunk",
         "alt-up",
-        diff_tools::PreviousDiffHunk
+        diff_tools::PreviousDiffHunk,
+        ready
     );
-    add!(
-        "Git: Stage / 커밋…",
-        "git_commit",
-        "cmd-shift-k",
-        OpenGitCommit
-    );
-    add!(
+    command!("Git: Stage / 커밋…", "open_git_commit", ready);
+    command!(
         "Git: 커밋 그래프",
         "git_history",
         "cmd-alt-h",
-        OpenGitHistory
+        OpenGitHistory,
+        ready
     );
-    add!("Git: 커밋 검색…", "git_search", "", SearchGitGraph);
-    add!(
+    command!("Git: 커밋 검색…", "git_search", "", SearchGitGraph, ready);
+    command!(
         "Git: Stash / 충돌 해결…",
         "git_workflow",
         "cmd-shift-g",
-        OpenGitWorkflow
+        OpenGitWorkflow,
+        ready
     );
-    add!(
+    command!(
         "Git: 브랜치 · 원격 · Git 작업…",
         "git_actions",
         "",
-        OpenGitActions
+        OpenGitActions,
+        ready
     );
-    add!(
-        "워크트리: 다음 워크트리",
-        "next_worktree",
-        "cmd-alt-down",
-        NextWorktree
-    );
-    add!(
-        "워크트리: 이전 워크트리",
-        "previous_worktree",
-        "cmd-alt-up",
-        PreviousWorktree
-    );
-    add!(
+    command!("워크트리: 다음 워크트리", "next_worktree", ready);
+    command!("워크트리: 이전 워크트리", "previous_worktree", ready);
+    command!(
         "프로젝트: 다음 프로젝트",
         "next_project",
         "ctrl-tab",
-        NextProject
+        NextProject,
+        ready
     );
-    add!(
+    command!(
         "프로젝트: 이전 프로젝트",
         "previous_project",
         "ctrl-shift-tab",
-        PreviousProject
+        PreviousProject,
+        ready
     );
-    add!(
-        "보기: 사이드바 표시 / 숨기기",
-        "toggle_sidebar",
-        "cmd-alt-b",
-        ToggleSidebar
-    );
-    add!(
-        "보기: 파일 목록 표시 / 숨기기",
-        "toggle_files",
-        "cmd-shift-b",
-        ToggleFiles
-    );
+    command!("보기: 사이드바 표시 / 숨기기", "toggle_sidebar", ready);
+    command!("보기: 파일 목록 표시 / 숨기기", "toggle_files", ready);
     #[cfg(target_os = "macos")]
-    {
-        add!(
-            "터미널: 현재 워크트리 터미널 표시 / 숨기기",
-            "terminal",
-            "ctrl-`",
-            OpenWorktreeTerminal
-        );
+    command!(
+        "터미널: 현재 워크트리 터미널 표시 / 숨기기",
+        "terminal",
+        "ctrl-`",
+        OpenWorktreeTerminal,
+        ready
+    );
+    command!("새로고침: 현재 워크트리", "refresh", ready);
+    command!("설정: 환경설정…", "settings", "cmd-,", OpenSettings, true);
+    // New feature actions appear when their owning view installs a handler.
+    for s in keyboard::KEYBOARD_DEFAULTS {
+        if s.id != "command_palette"
+            && !list
+                .iter()
+                .any(|e| e.shortcut.is_some_and(|entry| entry.id == s.id))
+            && window.is_action_available((s.action)().as_ref(), cx)
+        {
+            list.push(managed(s, s.label, true));
+        }
     }
-    add!("새로고침: 현재 워크트리", "refresh", "cmd-r", Refresh);
-    add!("설정: 환경설정…", "settings", "cmd-,", OpenSettings);
     for tree in app.inventory.iter().filter(|t| !t.is_prunable) {
         list.push(Entry {
+            shortcut: None,
             title: format!(
                 "워크트리 열기: {} · {}",
                 tree.branch.as_str(),
@@ -332,7 +257,9 @@ impl Palette {
         }
         window.close_dialog(cx);
         let _ = self.owner.update(cx, |app, cx| {
-            if let Some(editor) = app.active_editor() {
+            if entry.shortcut.is_some_and(|s| s.id == "open_to_side") {
+                app.search_input.focus_handle(cx).focus(window, cx);
+            } else if let Some(editor) = app.active_editor() {
                 editor.read(cx).focus_handle(cx).focus(window, cx);
             } else {
                 app.focus.focus(window, cx);
@@ -346,6 +273,15 @@ impl Palette {
 }
 impl Render for Palette {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(owner) = self.owner.upgrade() {
+            let app = owner.read(cx);
+            let keyboard = keyboard::Keyboard::new(&app.prefs, app.current_project.as_deref());
+            for entry in &mut self.entries {
+                if let Some(shortcut) = entry.shortcut {
+                    entry.key = keyboard.key(shortcut).into();
+                }
+            }
+        }
         let indices = self.filtered();
         let list = indices.clone();
         let count = indices.len();
@@ -517,7 +453,7 @@ impl Pokarak {
         if window.has_active_dialog(cx) {
             return;
         }
-        let entries = entries(self, cx);
+        let entries = entries(self, window, cx);
         let owner = cx.entity().downgrade();
         let palette = cx.new(|cx| {
             let input = cx.new(|cx| {

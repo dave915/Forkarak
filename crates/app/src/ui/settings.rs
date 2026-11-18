@@ -1,6 +1,7 @@
 use super::*;
 use crate::theme::DisplaySettings;
 use crate::ui::dialogs::DialogWindowExt as _;
+use keyboard::{KEYBOARD_DEFAULTS, Keyboard, normalize_key};
 
 #[derive(Clone, Copy)]
 enum Setting {
@@ -149,7 +150,16 @@ impl SettingsDialog {
             if !matches!(field.kind, Kind::Text | Kind::Json | Kind::Number(..)) {
                 continue;
             }
-            let value = effective_value(prefs, self.root.as_deref(), field);
+            // Edit only this scope's overrides. Showing inherited JSON here
+            // would copy it into the project on the next Apply.
+            let value = if field.key == "keyboard.bindings" {
+                prefs
+                    .scoped_option(self.root.as_deref(), field.key)
+                    .cloned()
+                    .unwrap_or_else(|| json!({}))
+            } else {
+                effective_value(prefs, self.root.as_deref(), field)
+            };
             let text = value
                 .as_str()
                 .map(str::to_owned)
@@ -202,6 +212,27 @@ fn save_option(
     };
     let message = view
         .update(cx, |app, cx| {
+            if field.key == "keyboard.bindings"
+                && let Some(candidate) = value.as_ref()
+                && let Err(error) = validate_bindings(candidate, &app.prefs, root.as_deref(), cx)
+            {
+                return error;
+            }
+            if crate::prefs::KEYBOARD_OPTIONS.contains(&field.key) {
+                if let Err(error) = app
+                    .prefs
+                    .save_keyboard(root.as_deref(), &[(field.key, value)])
+                {
+                    return format!("설정을 저장하지 못했습니다: {error}");
+                }
+                app.sync_editor_bindings(cx);
+                cx.notify();
+                if field.key == "keyboard.preset" {
+                    let count = Keyboard::new(&app.prefs, root.as_deref()).custom_count();
+                    return format!("단축키 프리셋 적용됨 · 사용자 지정 {count}개는 유지됩니다");
+                }
+                return "단축키 재정의를 적용했습니다.".into();
+            }
             let previous = match &root {
                 Some(root) => app
                     .prefs
@@ -321,12 +352,6 @@ fn field_row(
                     .on_click(
                         move |_, _, cx| match schema::parse(field, &input.value(cx)) {
                             Ok(value) => {
-                                if field.key == "keyboard.bindings"
-                                    && let Err(error) = validate_bindings(&value, cx)
-                                {
-                                    feedback(&state, &view, error, cx);
-                                    return;
-                                }
                                 save_option(&view, &state, field, Some(value), cx);
                             }
                             Err(error) => feedback(&state, &view, error, cx),
@@ -530,6 +555,12 @@ impl Pokarak {
                 .footer(div().v_flex().gap_2().child(div().text_size(ui_text(12.)).text_color(palette.rgb(BLUE)).child(feedback)).child(div().flex().items_center().justify_between().child(Button::new("settings-category-reset").ghost().small().label(reset_label).on_click(move |_,window,cx|{
                     let root=reset_state.borrow().root.clone();
                     let message=reset.update(cx,|app,cx| {
+                        if category == Category::Keyboard {
+                            return match app.prefs.save_keyboard(root.as_deref(), &[("keyboard.preset", None), ("keyboard.bindings", None)]) {
+                                Ok(()) => { app.sync_editor_bindings(cx); cx.notify(); "단축키 설정을 초기화했습니다.".into() }
+                                Err(error) => format!("초기화를 저장하지 못했습니다: {error}"),
+                            };
+                        }
                         let backup_options=app.prefs.options.clone(); let backup_projects=app.prefs.project_options.clone();
                         for field in FIELDS.iter().filter(|field|field.category==category && !(root.is_some() && field.app_only)) {app.prefs.remove_option(root.as_deref(),field.key);}
                         if category==Category::Language {app.prefs.remove_option(root.as_deref(),"language.enabled");app.cancel_managed_language_request();}
@@ -737,120 +768,99 @@ fn trust_settings(app: &Pokarak, view: &WeakEntity<Pokarak>, state: &DialogState
     let _ = cx;
     section
 }
-// Defaults include editor/search/worktree commands so conflicts are visible together.
-pub(super) const KEYBOARD_DEFAULTS: &[(&str, &str, &str)] = &[
-    ("find_file", "파일 찾기", "cmd-p"),
-    ("find_text", "프로젝트 검색", "cmd-shift-f"),
-    ("find_definition", "정의로 이동", "cmd-b"),
-    ("find_references", "사용처 찾기", "alt-f7"),
-    ("next_worktree", "다음 워크트리", "cmd-alt-down"),
-    ("previous_worktree", "이전 워크트리", "cmd-alt-up"),
-    ("save_file", "파일 저장", "cmd-s"),
-    ("toggle_code", "코드/diff", "cmd-alt-d"),
-    ("replace_file", "파일 내 바꾸기", "cmd-alt-f"),
-    ("select_next_word", "다음 같은 단어 선택", "cmd-d"),
-    ("add_cursor_above", "위에 커서 추가", "ctrl-alt-up"),
-    ("add_cursor_below", "아래에 커서 추가", "ctrl-alt-down"),
-    ("move_line_up", "줄 위로 이동", "alt-up"),
-    ("move_line_down", "줄 아래로 이동", "alt-down"),
-    ("duplicate_line_up", "줄 위로 복제", "alt-shift-up"),
-    ("duplicate_line_down", "줄 아래로 복제", "alt-shift-down"),
-    ("go_to_line", "줄로 이동", "cmd-l"),
-    ("word_wrap", "화면 줄바꿈", "alt-z"),
-    ("command_palette", "명령 팔레트", "cmd-shift-p"),
-    ("toggle_comment", "주석 토글", "cmd-/"),
-    ("pin_tab", "탭 고정", "cmd-shift-enter"),
-    ("format_file", "파일 포맷", "alt-shift-f"),
-];
-/// An explicitly assigned chord wins over an optional code-reader default.
-pub(super) fn navigation_alias(
-    id: &str,
-    bindings: Option<&serde_json::Map<String, Value>>,
-) -> Option<&'static str> {
-    let key = match id {
-        "find_definition" => "f12",
-        "find_references" => "alt-shift-f12",
-        _ => return None,
+fn binding_conflicts(keyboard: Keyboard) -> Vec<String> {
+    // Only compare keys that can be active together. The file picker's
+    // Cmd-Enter and the commit dialog's Cmd-Enter intentionally coexist.
+    let contexts = [
+        vec!["Workspace"],
+        vec!["ForkarakCode", "Input"],
+        vec!["Input"],
+        vec!["ForkarakFileSearch", "Input"],
+        vec!["GitGraph"],
+        vec!["DiffReview"],
+        vec!["CommitDialog", "Input"],
+    ]
+    .map(|stack| {
+        stack
+            .into_iter()
+            .map(|c| KeyContext::parse(c).unwrap())
+            .collect::<Vec<_>>()
+    });
+    let mask = |predicate: Option<&KeyBindingContextPredicate>| -> u32 {
+        contexts
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| predicate.is_none_or(|p| p.depth_of(c).is_some()))
+            .fold(0, |mask, (i, _)| mask | (1 << i))
     };
-    if let Some(bindings) = bindings
-        && (bindings.contains_key(id)
-            || bindings
-                .values()
-                .filter_map(Value::as_str)
-                .any(|assigned| normalize_key(assigned) == key))
-    {
-        return None;
-    }
-    Some(key)
-}
-
-fn binding_conflicts(value: &Value) -> Vec<String> {
-    let mut keys: HashMap<String, Vec<String>> = HashMap::new();
-    for &(id, label, key) in KEYBOARD_DEFAULTS {
-        let key = value.get(id).and_then(Value::as_str).unwrap_or(key);
-        if !key.is_empty() {
-            keys.entry(normalize_key(key))
-                .or_default()
-                .push(label.into());
-        }
-    }
-    if let Some(map) = value.as_object() {
-        for (id, key) in map {
-            if KEYBOARD_DEFAULTS.iter().any(|(known, _, _)| known == id) {
-                continue;
-            }
-            if let Some(key) = key.as_str().filter(|key| !key.is_empty()) {
-                keys.entry(normalize_key(key)).or_default().push(id.clone());
-            }
-        }
-    }
-    let mut conflicts: Vec<_> = keys
-        .into_iter()
-        .filter(|(_, commands)| commands.len() > 1)
-        .map(|(key, commands)| format!("{key}: {}", commands.join(" · ")))
+    let mut bindings: Vec<_> = fixed_bindings()
+        .iter()
+        .map(|b| {
+            let key = b
+                .keystrokes()
+                .iter()
+                .map(|k| k.as_keystroke().unparse(OperatingSystem::Mac))
+                .collect::<Vec<_>>()
+                .join(" ");
+            (key, b.action().name(), mask(b.predicate().as_deref()))
+        })
         .collect();
-    conflicts.sort();
+    let mut conflicts = Vec::new();
+    for s in KEYBOARD_DEFAULTS {
+        let key = normalize_key(keyboard.key(s));
+        if key.is_empty() {
+            continue;
+        }
+        let scope = s.contexts.iter().fold(0, |bits, c| {
+            bits | mask(
+                c.map(|c| KeyBindingContextPredicate::parse(c).unwrap())
+                    .as_ref(),
+            )
+        });
+        for (other, label, other_scope) in &bindings {
+            // Sharing a complete prefix would delay or shadow the single-stroke command.
+            if scope & other_scope != 0
+                && (other == &key
+                    || key
+                        .strip_prefix(other)
+                        .is_some_and(|tail| tail.starts_with(' '))
+                    || other
+                        .strip_prefix(&key)
+                        .is_some_and(|tail| tail.starts_with(' ')))
+            {
+                conflicts.push(format!("{key} · {label} / {}", s.label));
+            }
+        }
+        bindings.push((key, s.label, scope));
+    }
     conflicts
 }
-fn normalize_key(key: &str) -> String {
-    key.split_whitespace()
-        .map(|stroke| {
-            let mut parts: Vec<_> = stroke
-                .split('-')
-                .map(|part| match part.to_lowercase().as_str() {
-                    "command" | "super" => "cmd".to_owned(),
-                    "option" => "alt".to_owned(),
-                    "control" => "ctrl".to_owned(),
-                    other => other.to_owned(),
-                })
-                .collect();
-            if parts.len() > 1 {
-                let last = parts.pop().unwrap();
-                parts.sort();
-                parts.push(last);
-            }
-            parts.join("-")
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-fn validate_bindings(value: &Value, cx: &App) -> Result<(), String> {
+
+fn validate_bindings(
+    value: &Value,
+    prefs: &Preferences,
+    root: Option<&Path>,
+    cx: &App,
+) -> Result<(), String> {
     let Some(map) = value.as_object() else {
         return Err("명령 ID와 단축키의 JSON 객체를 입력하세요.".into());
     };
     for (id, key) in map {
-        let key = key.as_str().ok_or("단축키는 문자열이어야 합니다.")?;
-        if key.trim().is_empty() {
-            return Err("빈 단축키 대신 항목을 삭제하여 기본값을 복원하세요.".into());
+        let shortcut =
+            keyboard::shortcut(id).ok_or_else(|| format!("등록되지 않은 명령입니다: {id}"))?;
+        let key = key.as_str().ok_or("단축키는 문자열이어야 합니다.")?.trim();
+        if !key.is_empty() {
+            KeyBinding::load(key, (shortcut.action)(), None, false, None, cx)
+                .map_err(|error| format!("{id}: {error}"))?;
         }
-        if !KEYBOARD_DEFAULTS.iter().any(|(known, _, _)| known == id) {
-            return Err(format!("등록되지 않은 명령입니다: {id}"));
-        }
-        let action = Box::new(FindFile);
-        KeyBinding::load(key, action, None, false, None, cx)
-            .map_err(|error| format!("{id}: {error}"))?;
     }
-    let conflicts = binding_conflicts(value);
+    let mut keyboard = Keyboard::new(prefs, root);
+    if root.is_some() {
+        keyboard.project = Some(map);
+    } else {
+        keyboard.global = Some(map);
+    }
+    let conflicts = binding_conflicts(keyboard);
     if !conflicts.is_empty() {
         return Err(format!("단축키 충돌 · {}", conflicts.join(" / ")));
     }
@@ -858,11 +868,7 @@ fn validate_bindings(value: &Value, cx: &App) -> Result<(), String> {
 }
 fn keyboard_settings(app: &Pokarak, state: &DialogState, cx: &App) -> Div {
     let root = state.borrow().root.clone();
-    let value = app
-        .prefs
-        .option(root.as_deref(), "keyboard.bindings")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let keyboard = Keyboard::new(&app.prefs, root.as_deref());
     let query = state
         .borrow()
         .keyboard_filter
@@ -873,11 +879,17 @@ fn keyboard_settings(app: &Pokarak, state: &DialogState, cx: &App) -> Div {
         .v_flex()
         .gap_1()
         .pt_2()
-        .child(Input::new(&state.borrow().keyboard_filter))
-        .child("등록된 기본 단축키 · 저장한 재정의는 명령 등록 시 적용됩니다.");
-    for &(id, label, key) in KEYBOARD_DEFAULTS {
-        let key = value.get(id).and_then(Value::as_str).unwrap_or(key);
-        let alias = navigation_alias(id, value.as_object());
+        .child(Input::new(&state.borrow().keyboard_filter));
+    for s in KEYBOARD_DEFAULTS {
+        let (id, label, key) = (s.id, s.label, keyboard.key(s));
+        let alias = keyboard.alias(id);
+        let source = if keyboard.project.is_some_and(|m| m.contains_key(id)) {
+            "프로젝트 사용자 지정"
+        } else if keyboard.custom(id).is_some() {
+            "앱 사용자 지정"
+        } else {
+            "프리셋"
+        };
         if !format!("{id} {label} {key} {}", alias.unwrap_or_default())
             .to_lowercase()
             .contains(&query)
@@ -894,14 +906,19 @@ fn keyboard_settings(app: &Pokarak, state: &DialogState, cx: &App) -> Div {
                 .py_1()
                 .text_size(ui_text(11.))
                 .child(div().min_w(ui_px(150.)).child(label))
+                .when(key.is_empty(), |row| row.child("미지정"))
                 .child(keycaps::binding(key, Palette::new(cx)))
                 .when_some(alias, |row, alias| {
                     row.child(keycaps::binding(alias, Palette::new(cx)))
                 })
-                .child(div().text_color(Palette::new(cx).rgb(MUTED)).child(id)),
+                .child(
+                    div()
+                        .text_color(Palette::new(cx).rgb(MUTED))
+                        .child(format!("{source} · {id}")),
+                ),
         );
     }
-    let conflicts = binding_conflicts(&value);
+    let conflicts = binding_conflicts(keyboard);
     if conflicts.is_empty() {
         section = section.child("✓ 편집·검색·다중 선택·워크트리 단축키 충돌 없음");
     } else {
@@ -1183,13 +1200,36 @@ mod tests {
     }
 
     #[test]
+    fn every_preset_is_conflict_free_including_fixed_window_keys() {
+        let mut prefs = crate::prefs::Preferences::default();
+        for preset in ["forkarak", "intellij", "vscode"] {
+            prefs.set_option(None, "keyboard.preset", json!(preset));
+            let conflicts = binding_conflicts(super::Keyboard::new(&prefs, None));
+            assert!(conflicts.is_empty(), "{preset}: {conflicts:?}");
+        }
+        prefs.set_option(
+            None,
+            "keyboard.bindings",
+            json!({"refresh":"cmd-q","find_file":"cmd-;"}),
+        );
+        let conflicts = binding_conflicts(super::Keyboard::new(&prefs, None));
+        assert!(conflicts.iter().any(|c| c.contains("Quit")));
+        assert!(conflicts.iter().any(|c| c.contains("현재 테스트 실행")));
+    }
+
+    #[test]
     fn conflicts_compare_modifier_order_and_defaults() {
-        let value = json!({"find_text":"alt-cmd-down"});
+        let mut prefs = crate::prefs::Preferences::default();
+        prefs.set_option(
+            None,
+            "keyboard.bindings",
+            json!({"find_text":"alt-cmd-down"}),
+        );
         assert!(
-            binding_conflicts(&value)
+            binding_conflicts(super::Keyboard::new(&prefs, None))
                 .iter()
                 .any(|conflict| conflict.contains("다음 워크트리"))
         );
-        assert!(binding_conflicts(&json!({})).is_empty());
+        assert!(binding_conflicts(super::Keyboard::new(&Default::default(), None)).is_empty());
     }
 }

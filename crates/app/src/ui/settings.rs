@@ -569,7 +569,7 @@ fn app_icons(app: &Pokarak, view: &WeakEntity<Pokarak>, state: &DialogState, cx:
                 .ghost()
                 .selected(selected)
                 .w(ui_px(80.))
-                .h(ui_px(110.))
+                .h(ui_px(126.))
                 .px_1()
                 .accessibility_label(format!(
                     "앱 아이콘 · {}{}",
@@ -577,9 +577,11 @@ fn app_icons(app: &Pokarak, view: &WeakEntity<Pokarak>, state: &DialogState, cx:
                     if selected { " · 선택됨" } else { "" }
                 ))
                 .tooltip(if choice == IconChoice::FollowDefault {
-                    "업데이트에 포함된 기본 아이콘을 따릅니다"
+                    "macOS가 앱에 포함된 기본 아이콘을 렌더링합니다 · 지원되는 시스템에서는 Liquid Glass, 이전 버전에서는 호환 아이콘"
+                } else if choice.uses_native_artwork() {
+                    "macOS의 컴파일된 Liquid Glass 원본을 사용합니다 · 미리보기는 정지 이미지 · 이 색상을 유지하며 Dock에 바로 적용"
                 } else {
-                    "이 색상을 유지합니다 · Dock에 바로 적용"
+                    "같은 아이콘 원본에서 렌더링한 고정 이미지 · 이 색상을 유지하며 Dock에 바로 적용"
                 })
                 .child(
                     div()
@@ -588,6 +590,7 @@ fn app_icons(app: &Pokarak, view: &WeakEntity<Pokarak>, state: &DialogState, cx:
                         .gap_1()
                         .child(img(choice.preview_path()).w(ui_px(56.)).h(ui_px(56.)))
                         .child(div().text_size(ui_text(10.)).child(choice.label()))
+                        .child(div().text_size(ui_text(10.)).child(choice.material_label()))
                         .child(div().text_size(ui_text(10.)).child(if selected {
                             "✓ 선택됨"
                         } else {
@@ -625,7 +628,7 @@ fn app_icons(app: &Pokarak, view: &WeakEntity<Pokarak>, state: &DialogState, cx:
         .child(div().font_weight(FontWeight::MEDIUM).child("앱 아이콘 · 앱 전체"))
         .child(choices)
         .child(div().text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
-            .child("Dock에 바로 적용되며 다음 실행에도 유지됩니다. ‘기본값 따르기’는 업데이트의 기본 아이콘을 따릅니다. Finder 아이콘은 앱에 포함된 기본 아이콘을 사용합니다."))
+            .child("Dock에 바로 적용되며 다음 실행에도 유지됩니다. ‘기본값 따르기’는 macOS가 앱의 기본 아이콘을 표시합니다. 미리보기는 정지 이미지입니다. 네이티브 원본이 없는 시스템은 같은 원본의 고정 이미지를 사용합니다. Finder는 앱의 기본 아이콘을 사용합니다."))
 }
 fn trust_settings(app: &Pokarak, view: &WeakEntity<Pokarak>, state: &DialogState, cx: &App) -> Div {
     let mut section=div().v_flex().gap_2().pt_2().child("분석 허용 워크트리").child(div().text_size(ui_text(11.)).child("허용 추가는 해당 워크트리에서 언어 분석을 켤 때 확인합니다. 해제하면 실행 중인 해당 분석을 중지합니다."));

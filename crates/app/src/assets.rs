@@ -16,8 +16,9 @@ impl AssetSource for AppAssets {
             .strip_prefix("app-icons/")
             .and_then(|name| name.strip_suffix(".png"))
         {
-            return Ok(crate::app_icon::IconChoice::from_id(name)
-                .map(|choice| Cow::Borrowed(choice.preview_bytes())));
+            return crate::app_icon::IconChoice::from_id(name)
+                .map(|choice| choice.preview_png())
+                .transpose();
         }
         match path.strip_prefix(PREFIX) {
             Some(name) => Ok(FileArtwork::get(name).map(|asset| asset.data)),

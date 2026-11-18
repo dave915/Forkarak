@@ -114,6 +114,7 @@ struct SettingsDialog {
     keyboard_filter: Entity<InputState>,
     feedback: String,
     command_details: bool,
+    advanced_language: bool,
     copied: Option<&'static str>,
 }
 #[derive(Clone)]
@@ -420,6 +421,7 @@ impl Pokarak {
                 .new(|cx| InputState::new(window, cx).placeholder("단축키·명령 검색")),
             feedback: String::new(),
             command_details: false,
+            advanced_language: false,
             copied: None,
         }));
         state.borrow_mut().load_inputs(&self.prefs, window, cx);
@@ -457,8 +459,31 @@ impl Pokarak {
             if category==Category::Appearance {
                 content=content.child(appearance(app,&weak,cx)).child(app_icons(app,&weak,&state,cx));
             }
-            for &field in FIELDS.iter().filter(|field|field.category==category) {content=content.child(field_row(field,&app.prefs,&state,&weak,cx));}
-            if category==Category::Language {content=content.child(app.language_manager_settings(weak.clone(),cx)).child(trust_settings(app,&weak,&state,cx));}
+            if category == Category::Language {
+                content = content.child(app.language_manager_settings(weak.clone(), cx));
+            }
+            let fields = FIELDS.iter().filter(|field| field.category == category);
+            for &field in fields.clone().filter(|field| category != Category::Language || !matches!(field.kind, Kind::Json)) {
+                content = content.child(field_row(field, &app.prefs, &state, &weak, cx));
+            }
+            if category == Category::Language {
+                let advanced = state.borrow().advanced_language;
+                let (options, view) = (state.clone(), weak.clone());
+                content = content.child(trust_settings(app, &weak, &state, cx)).child(
+                    div().flex().child(Button::new("advanced-language-settings").small().ghost()
+                        .label(if advanced { "사용자 지정 서버·포맷터 접기" } else { "사용자 지정 서버·포맷터…" })
+                        .selected(advanced)
+                        .on_click(move |_, _, cx| {
+                            options.borrow_mut().advanced_language = !advanced;
+                            notify(&view, cx);
+                        }))
+                );
+                if advanced {
+                    for &field in fields.filter(|field| matches!(field.kind, Kind::Json)) {
+                        content = content.child(field_row(field, &app.prefs, &state, &weak, cx));
+                    }
+                }
+            }
             if category==Category::Keyboard {content=content.child(keyboard_settings(app,&state,cx));}
             if category==Category::Ai {content=content.child(ai_settings(app,&weak,&state,cx));}
             if category==Category::Execution {content=content.children(management_button("forkarak_tasks::ManageTasks","실행 프로필·작업 관리 열기",cx));}

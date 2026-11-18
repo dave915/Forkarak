@@ -7,13 +7,13 @@ impl Pokarak {
         div().v_flex().gap_1().py_2()
             .child(div().flex().items_center().gap_2()
                 .child(div().flex_1().font_weight(FontWeight::MEDIUM).child("언어 지원"))
-                .child(Button::new("manage-language-support").small().label("설치·업데이트 관리…")
+                .child(Button::new("manage-language-support").small().label("언어 서버 선택·설치…")
                     .on_click(move |_, window, cx| {
                         window.close_dialog(cx);
                         let _ = view.update(cx, |app, cx| app.open_language_manager(window, cx));
                     })))
             .child(div().text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
-                .child("앱에 포함된 도구와 첫 사용 다운로드를 구분합니다. 설치는 분석 허용과 별개이며 사용자 지정 경로를 유지합니다."))
+                .child("사용할 언어를 켜고 필요한 서버를 설치하세요. 워크트리에서 분석을 허용하면 해당 서버로 코드 탐색과 자동완성을 사용합니다."))
     }
     pub(in crate::ui) fn open_language_manager(
         &mut self,

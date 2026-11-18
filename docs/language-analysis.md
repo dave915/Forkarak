@@ -6,7 +6,7 @@
 
 File viewing, syntax highlighting and text search work immediately, without installation, indexing or language-server startup. **코드 지원…** provides completion, diagnostics, file symbols, function help, hover/type information and code navigation when the selected server supports them. 작업 화면 선택과 코드 지원은 별개입니다. 작업 파일의 [바로 편집](../README.md#편집과-탐색)은 언어 분석 허용을 뜻하지 않습니다.
 
-설정의 **언어 분석·포맷 → 언어 서버 선택·설치…**에서 사용할 언어를 켜고 서버를 설치하세요. 공개 버전 1.0.3에서는 같은 버튼이 **설치·업데이트 관리…**로 표시됩니다. 도구가 준비되면 대상 워크트리에서 분석을 허용하세요. 기본 서버는 관리 화면에서 구성되며, 직접 실행 경로와 인수를 지정할 때만 **사용자 지정 서버·포맷터…**를 펼치면 됩니다. The manager distinguishes bundled tools, first-use downloads and unsupported/prerequisite-limited entries. Use **설치**, **업데이트 다운로드**, **취소** or **다시 시도** explicitly; version, source, checksum and license/notice details remain inspectable. Failed or cancelled updates retain the previous active installation. A pending code action can be resumed with **원래 요청 계속** only after the original file, source and trust are rechecked.
+설정의 **언어 분석·포맷 → 언어 서버 선택·설치…**에서 사용할 언어를 켜고 서버를 설치하세요. 1.0.3에서는 같은 버튼이 **설치·업데이트 관리…**로 표시됩니다. 도구가 준비되면 대상 워크트리에서 분석을 허용하세요. 기본 서버는 관리 화면에서 구성되며, 직접 실행 경로와 인수를 지정할 때만 **사용자 지정 서버·포맷터…**를 펼치면 됩니다. The manager distinguishes bundled tools, first-use downloads and unsupported/prerequisite-limited entries. Use **설치**, **업데이트 다운로드**, **취소** or **다시 시도** explicitly; version, source, checksum and license/notice details remain inspectable. Failed or cancelled updates retain the previous active installation. A pending code action can be resumed with **원래 요청 계속** only after the original file, source and trust are rechecked.
 
 분석을 켠 코드 편집기에서는 다음 동작을 사용할 수 있습니다.
 

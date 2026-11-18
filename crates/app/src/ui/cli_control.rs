@@ -12,6 +12,7 @@ enum Phase {
     Project(u64),
     File {
         project: u64,
+        reader: u64,
         file: u64,
         snapshot: bool,
     },
@@ -52,6 +53,7 @@ impl Pokarak {
         self.open_file(path, true, None, window, cx);
         opening.phase = Phase::File {
             project: self.request,
+            reader: self.session().expect("CLI file has an open session").id,
             file: self.file_request,
             snapshot: self.pending_cli_file.is_some(),
         };
@@ -111,10 +113,12 @@ impl Pokarak {
                 }
                 Phase::File {
                     project,
+                    reader,
                     file,
                     snapshot,
                 } => {
                     if self.request != project
+                        || self.session().is_none_or(|s| s.id != reader)
                         || self.current.as_ref() != Some(&opening.target.repo)
                         || self.git_history.active
                     {

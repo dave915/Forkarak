@@ -194,7 +194,7 @@ impl Pokarak {
     }
 
     pub(super) fn render_workspace_panes(
-        &self,
+        &mut self,
         root: &Path,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -279,7 +279,7 @@ impl Pokarak {
                     .child(if layout.graph {
                         self.render_git_graph(window, cx)
                     } else {
-                        self.render_reader(window, cx)
+                        self.render_editor_groups(window, cx)
                     }),
             )
             .into_any_element()

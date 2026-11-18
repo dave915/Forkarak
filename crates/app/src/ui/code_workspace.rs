@@ -5,6 +5,7 @@ use super::{
 };
 
 pub(super) struct PendingFile {
+    pub reader: u64,
     pub root: PathBuf,
     pub snapshot_request: u64,
     pub file_request: u64,
@@ -98,18 +99,30 @@ impl Session {
         if !pending_file {
             self.saved.selected = selection.clone();
         }
-        self.saved.tabs.retain(|path| {
-            if self.saved.selected.as_ref() == Some(path) || dirty(path) {
-                true
-            } else if path.is_absolute() {
-                path.is_file()
-            } else {
-                snapshot.files.contains(path) || snapshot.changes.iter().any(|f| &f.path == path)
-            }
+        self.for_each_reader(|reader| {
+            reader.saved.tabs.retain(|path| {
+                if reader.saved.selected.as_ref() == Some(path) || dirty(path) {
+                    true
+                } else if path.is_absolute() {
+                    path.is_file()
+                } else {
+                    snapshot.files.contains(path)
+                        || snapshot.changes.iter().any(|f| &f.path == path)
+                }
+            });
+            reader
+                .reader
+                .documents
+                .retain(|path, _| reader.saved.tabs.contains(path));
+            reader
+                .reader
+                .diffs
+                .retain(|path, _| reader.saved.tabs.contains(path));
+            reader
+                .reader
+                .historical_documents
+                .retain(|path| reader.saved.tabs.contains(path));
         });
-        self.documents
-            .retain(|path, _| self.saved.tabs.contains(path));
-        self.diffs.retain(|path, _| self.saved.tabs.contains(path));
         self.snapshot = Some(snapshot);
         // Retain accepted readers until the matching file candidate succeeds.
         selection
@@ -154,7 +167,7 @@ impl Session {
             .is_some_and(|snapshot| snapshot.compare != self.saved.comparison)
         {
             self.snapshot = None;
-            self.diffs.clear();
+            self.for_each_reader(|s| s.diffs.clear());
         }
         self.snapshot.is_none()
     }
@@ -163,6 +176,9 @@ impl Session {
 impl Pokarak {
     pub(super) fn take_pending_cli_file(&mut self) -> Option<PendingFile> {
         let pending = self.pending_cli_file.take()?;
+        if self.session()?.id != pending.reader {
+            return None;
+        }
         pending
             .accepts(
                 self.current.as_deref(),
@@ -377,6 +393,7 @@ mod tests {
 
     fn pending() -> PendingFile {
         PendingFile {
+            reader: 42,
             root: "/fixture/main".into(),
             snapshot_request: 5,
             file_request: 9,
@@ -385,6 +402,9 @@ mod tests {
             history: true,
             history_restore: Some(ReadingPoint {
                 result_tab: false,
+                split_diff: false,
+                unified_offset: None,
+                side_offset: None,
                 path: "src/선택.kt".into(),
                 code: true,
                 row: 8,

@@ -32,6 +32,7 @@ pub(super) struct Identity {
     path: PathBuf,
     snapshot: u64,
     file: u64,
+    reader_id: Option<u64>,
     history: Option<(String, Option<String>)>,
 }
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -130,6 +131,7 @@ impl Pokarak {
             path,
             snapshot: self.request,
             file: self.file_request,
+            reader_id: (!history).then(|| self.session().map(|s| s.id)).flatten(),
             history: revision,
         })
     }
@@ -385,13 +387,13 @@ impl Pokarak {
                 "변경 · 통합",
                 Command::Diff,
                 view.diff.is_none(),
-                !view.code && !self.prefs.split_diff,
+                !view.code && !self.reader_split_diff(),
             ),
             (
                 "변경 · 좌우",
                 Command::Split,
                 view.diff.is_none() || binary,
-                !view.code && self.prefs.split_diff,
+                !view.code && self.reader_split_diff(),
             ),
         ] {
             modes = identity.item(modes, label, command, busy || disabled, selected);
@@ -507,6 +509,11 @@ impl Pokarak {
     ) -> AnyElement {
         let key = if view.history {
             "history-reader"
+        } else if self
+            .session()
+            .is_some_and(|s| s.active_group == ReaderGroup::Right)
+        {
+            "working-reader-right"
         } else {
             "working-reader"
         };
@@ -571,7 +578,7 @@ impl Pokarak {
                 "변경 · 통합",
                 "통합",
                 Command::Diff,
-                !view.code && !self.prefs.split_diff,
+                !view.code && !self.reader_split_diff(),
                 view.diff.is_none(),
             ),
             (
@@ -580,7 +587,7 @@ impl Pokarak {
                 "변경 · 좌우",
                 "좌우",
                 Command::Split,
-                !view.code && self.prefs.split_diff,
+                !view.code && self.reader_split_diff(),
                 view.diff.is_none_or(|d| d.binary),
             ),
         ] {

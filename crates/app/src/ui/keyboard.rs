@@ -73,6 +73,7 @@ pub(super) static KEYBOARD_DEFAULTS: &[Shortcut] = &[
     shortcut!("run_file_tests", "파일의 테스트 실행", "", "", "cmd-; f", RunFileTests, CODE),
     shortcut!("rerun_test", "마지막 테스트 다시 실행", "ctrl-r", "ctrl-r", "cmd-; l", RerunTest, CODE),
     shortcut!("split_right", "편집기 오른쪽으로 분할", "cmd-\\", "", "cmd-\\", SplitRight, CODE),
+    shortcut!("move_to_other", "다른 쪽으로 이동", "", "", "", MoveToOther, CODE),
     shortcut!("focus_group_1", "왼쪽 그룹으로", "", "", "cmd-1", FocusGroup1, GLOBAL),
     shortcut!("focus_group_2", "오른쪽 그룹으로", "", "", "cmd-2", FocusGroup2, GLOBAL),
     shortcut!("open_to_side", "파일 찾기에서 옆에 열기", "cmd-enter", "shift-enter", "cmd-enter", OpenToSide, FILE_SEARCH),

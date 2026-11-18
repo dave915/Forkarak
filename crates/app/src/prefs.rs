@@ -73,6 +73,10 @@ pub struct SavedProject {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SavedPosition {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unified_offset: Option<[f32; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub side_offset: Option<[f32; 2]>,
     pub diff_row: usize,
     pub line: u32,
     pub column: u32,
@@ -91,9 +95,49 @@ pub enum GraphColumn {
     Hash,
 }
 
+/// The second reader is optional. Its tab list, mode and positions belong only
+/// to this worktree. The first reader keeps its original on-disk field names.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SplitView {
+    pub tabs: Vec<PathBuf>,
+    pub selected: Option<PathBuf>,
+    pub ratio: f32,
+    pub code: bool,
+    pub reader_split_diff: Option<bool>,
+    pub positions: HashMap<PathBuf, SavedPosition>,
+    pub diff_row: usize,
+    pub line: u32,
+    pub column: u32,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+}
+
+impl Default for SplitView {
+    fn default() -> Self {
+        Self {
+            tabs: Vec::new(),
+            selected: None,
+            ratio: 0.5,
+            code: true,
+            reader_split_diff: None,
+            positions: HashMap::new(),
+            diff_row: 0,
+            line: 0,
+            column: 0,
+            scroll_x: 0.,
+            scroll_y: 0.,
+        }
+    }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SavedView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split: Option<SplitView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader_split_diff: Option<bool>,
     pub selected: Option<PathBuf>,
     pub tabs: Vec<PathBuf>,
     pub code: bool,

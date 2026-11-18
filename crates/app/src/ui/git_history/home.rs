@@ -122,8 +122,11 @@ impl Pokarak {
             if !self.loading {
                 self.refresh(window, cx);
             }
-        } else if was_graph && let Some(path) = self.selected() {
-            self.open_file(path, false, None, window, cx);
+        } else if was_graph {
+            self.reload_peer_reader(window, cx);
+            if let Some(path) = self.selected() {
+                self.open_file(path, false, None, window, cx);
+            }
         }
         cx.notify();
     }

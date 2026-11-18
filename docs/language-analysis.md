@@ -1,6 +1,6 @@
 # Language analysis and managed tools
 
-이 문서는 Forkarak **1.0.2**의 언어 지원과 관리 도구를 설명합니다. [설치와 소스 빌드](distribution.md)도 참고하세요.
+이 문서는 Forkarak **1.0.3**의 언어 지원과 관리 도구를 설명합니다. [설치와 소스 빌드](distribution.md)도 참고하세요.
 
 ## Start in the app
 

@@ -107,7 +107,9 @@ fn main() -> anyhow::Result<()> {
             mean < 2.,
             "Default preview does not match actual bundle icon: {mean}"
         );
-        println!("Verified default preview matches actual bundle icon (128px mean RGBA error {mean:.4}/255)");
+        println!(
+            "Verified default preview matches actual bundle icon (128px mean RGBA error {mean:.4}/255)"
+        );
     }
     if let Some(path) = &destination {
         std::fs::write(path.join("bundle-preview.png"), &default_preview)?;

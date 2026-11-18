@@ -215,6 +215,27 @@ mod app_icon_tests {
     use std::path::Path;
 
     #[test]
+    fn reading_default_and_saved_colors_never_rewrites_the_selection() {
+        for value in [None, Some("future-icon"), Some("follow_default")]
+            .into_iter()
+            .chain(IconChoice::ALL.into_iter().map(|choice| Some(choice.id())))
+        {
+            let mut prefs = Preferences::default();
+            if let Some(value) = value {
+                prefs.options.insert(PREFERENCE_KEY.into(), json!(value));
+            }
+            let before = prefs.options.clone();
+            let expected = value.and_then(IconChoice::from_id).unwrap_or_default();
+            assert_eq!(prefs.app_icon(), expected);
+            assert_eq!(prefs.options, before);
+            let next: Preferences =
+                serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
+            assert_eq!(next.app_icon(), expected);
+            assert_eq!(next.options, before);
+        }
+    }
+
+    #[test]
     fn explicit_colors_and_follow_default_survive_real_session_replacement() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("session.json");

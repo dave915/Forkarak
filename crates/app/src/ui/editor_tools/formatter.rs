@@ -257,7 +257,7 @@ impl Pokarak {
             self.status =
                 "포맷터는 프로젝트 신뢰를 허용한 뒤 실행할 수 있습니다. 초안과 파일은 유지됩니다."
                     .into();
-            self.trust_prompt = true;
+            self.show_explicit_analysis_prompt();
             cx.notify();
             return;
         }

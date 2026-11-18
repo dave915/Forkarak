@@ -25,6 +25,39 @@ impl Identity {
     }
 }
 
+/// Only a native symbol gesture may survive the explicit trust prompt. It is
+/// consumed on approval; every ordinary language action retains its old policy.
+pub(super) struct PendingSymbolRequest {
+    identity: Identity,
+    position: Position,
+}
+impl PendingSymbolRequest {
+    fn cursor_position(identity: &Identity) -> Option<Position> {
+        let prefix = identity.snapshot.text().get(..identity.cursor)?;
+        Some(Position::new(
+            prefix.bytes().filter(|b| *b == b'\n').count() as u32,
+            prefix.rsplit('\n').next()?.encode_utf16().count() as u32,
+        ))
+    }
+    pub(super) fn remember(
+        tool: &Tool,
+        identity: Identity,
+        requested: Option<Position>,
+    ) -> Option<Self> {
+        let position = requested?;
+        (matches!(tool, Tool::Symbol)
+            && identity.selection == (identity.cursor..identity.cursor)
+            && Self::cursor_position(&identity) == Some(position))
+        .then_some(Self { identity, position })
+    }
+    pub(super) fn resume(self, current: Option<&Identity>) -> Option<Position> {
+        let current = current?;
+        (self.identity.matches(current, true)
+            && Self::cursor_position(current) == Some(self.position))
+        .then_some(self.position)
+    }
+}
+
 pub(in crate::ui) fn configs(
     value: Option<&serde_json::Value>,
 ) -> Result<Vec<pokarak_navigation::ServerConfig>, String> {

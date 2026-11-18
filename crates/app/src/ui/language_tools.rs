@@ -90,6 +90,7 @@ pub(super) struct LanguageTools {
     markers: Option<(Entity<EditorState>, GutterDecorationCollection)>,
     retry: Option<Tool>,
     result_sources: HashMap<PathBuf, DocumentSnapshot>,
+    trust_symbol: Option<PendingSymbolRequest>,
 }
 
 pub(super) fn bind_keys(cx: &mut App) {
@@ -199,6 +200,7 @@ impl Pokarak {
             snapshot.invalidate();
         }
         self.language_tools.pending = None;
+        self.language_tools.trust_symbol = None;
         self.language_tools.panel = None;
         self.navigating = false;
         self.clear_language_markers(cx);
@@ -265,6 +267,7 @@ impl Pokarak {
                         // A sibling dirty buffer is context for this request as well.
                         a.language_tools.request = a.language_tools.request.wrapping_add(1);
                         a.language_tools.pending = None;
+                        a.language_tools.trust_symbol = None;
                         a.language_tools.panel = None;
                         if a.result_semantic && a.results_root.as_ref() == Some(&observed.root) {
                             a.results_open = false;
@@ -565,6 +568,33 @@ impl Pokarak {
                     .any(|e| e.trim_start_matches('.') == extension)
         })
     }
+    pub(super) fn approve_analysis_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The button is the approval boundary. Construction before this point
+        // never grants trust, launches a server or imports a Java project.
+        let pending = self.language_tools.trust_symbol.take();
+        self.enable_analysis(cx);
+        if self.navigation.is_none() {
+            return;
+        }
+        if let Some(pending) = pending {
+            let current = self.language_identity(cx).ok();
+            if let Some(position) = pending.resume(current.as_ref()) {
+                self.request_language(Tool::Symbol, Some(position), window, cx);
+            } else {
+                self.status = "선택 또는 소스가 변경되어 처음 클릭한 심볼 요청을 취소했습니다. 원하는 심볼을 다시 ⌘클릭하세요.".into();
+                cx.notify();
+            }
+        }
+    }
+    pub(super) fn cancel_analysis_prompt(&mut self, cx: &mut Context<Self>) {
+        self.language_tools.trust_symbol = None;
+        self.trust_prompt = false;
+        cx.notify();
+    }
+    pub(super) fn show_explicit_analysis_prompt(&mut self) {
+        self.language_tools.trust_symbol = None;
+        self.trust_prompt = true;
+    }
     pub(super) fn request_language(
         &mut self,
         tool: Tool,
@@ -572,6 +602,9 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Another explicit action replaces a waiting gesture. Approval takes
+        // the pending request before returning through this ordinary dispatcher.
+        self.language_tools.trust_symbol = None;
         if window.has_active_dialog(cx) || self.git_is_busy() || self.active_worktree_has_git_job()
         {
             return;
@@ -627,8 +660,17 @@ impl Pokarak {
             return;
         }
         if !self.language_trusted() {
+            self.language_tools.trust_symbol = self
+                .language_identity(cx)
+                .ok()
+                .and_then(|identity| PendingSymbolRequest::remember(&tool, identity, requested));
             self.trust_prompt = true;
-            self.status = "이 워크트리의 분석을 허용한 뒤 명령을 다시 실행하세요.".into();
+            self.status = if self.language_tools.trust_symbol.is_some() {
+                "이 워크트리의 분석을 허용하면 클릭한 심볼의 정의와 사용처를 찾습니다."
+            } else {
+                "이 워크트리의 분석을 허용한 뒤 명령을 다시 실행하세요."
+            }
+            .into();
             cx.notify();
             return;
         }

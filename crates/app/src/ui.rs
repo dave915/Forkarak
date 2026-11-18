@@ -1751,7 +1751,8 @@ impl Pokarak {
         self.cancellation = Some(navigator.cancellation_handle());
         self.navigation = Some(Arc::new(Mutex::new(navigator)));
         self.trust_prompt = false;
-        self.status = "심볼을 ⌘클릭하면 정의와 사용처를 찾습니다. 서버는 첫 요청 때 시작합니다.".into();
+        self.status =
+            "심볼을 ⌘클릭하면 정의와 사용처를 찾습니다. 서버는 첫 요청 때 시작합니다.".into();
         cx.notify();
     }
 
@@ -2113,12 +2114,13 @@ impl Pokarak {
                     div()
                         .key_context("ForkarakCode")
                         .size_full()
-                        .capture_any_mouse_down(
-                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        .capture_any_mouse_down(cx.listener(
+                            move |this, event: &MouseDownEvent, window, cx| {
                                 // Run before the editable Editor's native selection/LSP
                                 // handlers. A handled symbol press must not move its
                                 // cursor again after we capture the request identity.
-                                if reader_navigation::is_symbol_click(event) && !deleted
+                                if reader_navigation::is_symbol_click(event)
+                                    && !deleted
                                     && this.request_clicked_definition(
                                         &clicked_editor,
                                         event.position,
@@ -2129,8 +2131,8 @@ impl Pokarak {
                                     window.prevent_default();
                                     cx.stop_propagation();
                                 }
-                            }),
-                        )
+                            },
+                        ))
                         .child(
                             Editor::new(&editor)
                                 .readonly(!editing)
@@ -2458,8 +2460,8 @@ impl Render for Pokarak {
                 .child(div().font_weight(FontWeight::MEDIUM).child("이 워크트리에서 코드 분석을 시작할까요?"))
                 .child(div().text_size(ui_text(12.)).text_color(palette.rgb(MUTED)).child("언어 서버가 Gradle/Maven 설정을 읽거나 실행할 수 있습니다. 신뢰하는 프로젝트에서만 시작하세요. 파일과 diff는 분석 없이도 읽을 수 있습니다."))
                 .child(div().flex().gap_2()
-                    .child(Button::new("trust-start").label("신뢰하고 분석 허용").small().on_click(cx.listener(|this,_,_,cx|this.enable_analysis(cx))))
-                    .child(Button::new("trust-cancel").label("파일만 보기").ghost().small().on_click(cx.listener(|this,_,_,cx|{this.trust_prompt=false;cx.notify();}))))))
+                    .child(Button::new("trust-start").label("신뢰하고 분석 허용").small().on_click(cx.listener(|this,_,w,cx|this.approve_analysis_prompt(w,cx))))
+                    .child(Button::new("trust-cancel").label("파일만 보기").ghost().small().on_click(cx.listener(|this,_,_,cx|this.cancel_analysis_prompt(cx)))))))
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
             .children(self.language_bottom_panel(cx))
             .when(self.error.is_some(), |d| d.child(self.render_error_summary(cx)))

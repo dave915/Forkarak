@@ -1,5 +1,4 @@
 use super::*;
-use gpui_kit::component::tooltip::Tooltip;
 use std::{collections::BTreeMap, ffi::OsString};
 
 #[derive(Clone, Debug)]
@@ -468,31 +467,8 @@ impl Pokarak {
                                 }))
                         }),
                     )
-                    .when(
-                        !all && snapshot.is_some_and(|s| !s.changes.is_empty()),
-                        |row| {
-                            let label = self.review_counts();
-                            row.child(
-                                div()
-                                    .id("files-review-count")
-                                    .flex_1()
-                                    .min_w(ui_px(40.))
-                                    .text_right()
-                                    .whitespace_nowrap()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .text_size(ui_text(11.))
-                                    .text_color(palette.rgb(MUTED))
-                                    .child(label.clone())
-                                    .tooltip(move |w, cx| Tooltip::new(label.clone()).build(w, cx)),
-                            )
-                        },
-                    ),
+                    .when(!all, |row| row.child(self.file_review_menu_button(cx))),
             )
-            .children(snapshot.and_then(|snapshot| {
-                skipped_paths_notice("copy-skipped-files", &snapshot.skipped_paths)
-            }))
-            .when(!all, |d| d.child(self.review_filter_controls(cx)))
             .child(
                 div()
                     .flex_none()
@@ -716,6 +692,9 @@ impl Pokarak {
                         .into_any_element()
                     }),
             )
+            .children(snapshot.and_then(|snapshot| {
+                skipped_paths_notice("copy-skipped-files", &snapshot.skipped_paths)
+            }))
             .into_any_element()
     }
 }

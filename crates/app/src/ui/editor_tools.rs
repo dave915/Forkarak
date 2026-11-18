@@ -438,8 +438,8 @@ impl Pokarak {
 
     pub(super) fn editor_tool_buttons(&self, _path: &Path, cx: &mut Context<Self>) -> AnyElement {
         toolbar::toolbar_icon("editor-palette", IconName::Command, "명령 팔레트")
-            .tooltip("명령 팔레트  ⌘⇧P")
             .on_click(cx.listener(|a, _, w, cx| a.open_command_palette(w, cx)))
+            .shortcut_tooltip("명령 팔레트", &CommandPalette, None)
             .into_any_element()
     }
 
@@ -506,7 +506,13 @@ impl Pokarak {
                 false,
             ),
         ] {
-            menu = identity.item(menu, label, command, disabled, checked);
+            menu = identity.item(
+                menu,
+                keycaps::menu_label(label, &self.prefs, self.current_project.as_deref()),
+                command,
+                disabled,
+                checked,
+            );
         }
         menu
     }

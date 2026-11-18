@@ -675,7 +675,7 @@ fn trust_settings(app: &Pokarak, view: &WeakEntity<Pokarak>, state: &DialogState
     section
 }
 // Defaults include editor/search/worktree commands so conflicts are visible together.
-const KEYBOARD_DEFAULTS: &[(&str, &str, &str)] = &[
+pub(super) const KEYBOARD_DEFAULTS: &[(&str, &str, &str)] = &[
     ("find_file", "파일 찾기", "cmd-p"),
     ("find_text", "프로젝트 검색", "cmd-shift-f"),
     ("find_definition", "정의로 이동", "cmd-b"),
@@ -800,8 +800,16 @@ fn keyboard_settings(app: &Pokarak, state: &DialogState, cx: &App) -> Div {
         }
         section = section.child(
             div()
+                .id(SharedString::from(format!("shortcut-{id}")))
+                .aria_label(format!("{label} · {key}"))
+                .flex()
+                .items_center()
+                .gap_2()
+                .py_1()
                 .text_size(ui_text(11.))
-                .child(format!("{label} · {key} · {id}")),
+                .child(div().min_w(ui_px(150.)).child(label))
+                .child(keycaps::binding(key, Palette::new(cx)))
+                .child(div().text_color(Palette::new(cx).rgb(MUTED)).child(id)),
         );
     }
     let conflicts = binding_conflicts(&value);

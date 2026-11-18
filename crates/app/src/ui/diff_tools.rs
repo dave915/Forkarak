@@ -371,11 +371,11 @@ impl Pokarak {
                         IconName::ChevronUp,
                         "이전 변경 블록",
                     )
-                    .tooltip("이전 변경 블록  ⌥↑")
                     .disabled(empty)
                     .on_click(
                         cx.listener(|app, _, window, cx| app.jump_diff_hunk(false, window, cx)),
-                    ),
+                    )
+                    .keycap_tooltip("이전 변경 블록", "alt-up"),
                 )
                 .child(
                     toolbar::toolbar_icon(
@@ -383,11 +383,11 @@ impl Pokarak {
                         IconName::ChevronDown,
                         "다음 변경 블록",
                     )
-                    .tooltip("다음 변경 블록  ⌥↓")
                     .disabled(empty)
                     .on_click(
                         cx.listener(|app, _, window, cx| app.jump_diff_hunk(true, window, cx)),
-                    ),
+                    )
+                    .keycap_tooltip("다음 변경 블록", "alt-down"),
                 )
                 .when(hidden, |bar| {
                     bar.child(

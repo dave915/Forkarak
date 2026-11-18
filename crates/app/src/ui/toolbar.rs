@@ -32,8 +32,8 @@ impl Pokarak {
                         .ghost()
                         .small()
                         .accessibility_label("프로젝트 열기")
-                        .tooltip_with_action("프로젝트 열기", &OpenRepository, None)
-                        .on_click(cx.listener(|app, _, w, cx| app.choose_repository(w, cx))),
+                        .on_click(cx.listener(|app, _, w, cx| app.choose_repository(w, cx)))
+                        .shortcut_tooltip("프로젝트 열기", &OpenRepository, None),
                 )
             })
             .when(self.current.is_some(), |bar| {
@@ -56,28 +56,28 @@ impl Pokarak {
                     bar.child(
                         toolbar_icon("open-terminal", IconName::SquareTerminal, "워크트리 터미널")
                             .disabled(self.opening_path.is_some())
-                            .tooltip_with_action(
-                                "워크트리 터미널 표시 / 숨기기 · zsh",
-                                &OpenWorktreeTerminal,
-                                None,
-                            )
                             .selected(self.session().is_some_and(|s| s.terminal_visible))
                             .on_click(cx.listener(|app, _, window, cx| {
                                 app.open_worktree_terminal(window, cx)
-                            })),
+                            }))
+                            .shortcut_tooltip(
+                                "워크트리 터미널 표시 / 숨기기 · zsh",
+                                &OpenWorktreeTerminal,
+                                None,
+                            ),
                     );
                 bar.child(
                     toolbar_icon("refresh", IconName::RefreshCw, "저장소 새로고침")
                         .loading(self.loading)
                         .disabled(self.loading || self.git_is_busy())
-                        .tooltip_with_action("저장소 새로고침", &Refresh, None)
-                        .on_click(cx.listener(|app, _, w, cx| app.refresh(w, cx))),
+                        .on_click(cx.listener(|app, _, w, cx| app.refresh(w, cx)))
+                        .shortcut_tooltip("저장소 새로고침", &Refresh, None),
                 )
             })
             .child(
                 toolbar_icon("settings", IconName::Settings, "설정")
-                    .tooltip_with_action("설정", &OpenSettings, None)
-                    .on_click(cx.listener(|app, _, w, cx| app.open_settings(w, cx))),
+                    .on_click(cx.listener(|app, _, w, cx| app.open_settings(w, cx)))
+                    .shortcut_tooltip("설정", &OpenSettings, None),
             );
 
         let title = TitleBar::new()
@@ -107,9 +107,9 @@ impl Pokarak {
                     IconName::GitCommitHorizontal,
                     "Stage / 커밋",
                 )
-                .tooltip_with_action("Stage / 커밋", &OpenGitCommit, None)
                 .disabled(self.loading || self.git_is_busy())
-                .on_click(cx.listener(|a, _, w, cx| a.open_git_commit(w, cx))),
+                .on_click(cx.listener(|a, _, w, cx| a.open_git_commit(w, cx)))
+                .shortcut_tooltip("Stage / 커밋", &OpenGitCommit, None),
             )
             .child(
                 toolbar_icon("compact-git-more", IconName::Ellipsis, "Git 작업 더 보기")
@@ -146,7 +146,7 @@ impl Pokarak {
             ("Git 작업 기록…", "log"),
         ] {
             menu = menu.menu_with_disabled(
-                label,
+                keycaps::menu_label(label, &self.prefs, self.current_project.as_deref()),
                 (busy && !matches!(command, "log" | "graph-detail"))
                     || (command.starts_with("graph-") && !self.git_history.active)
                     || (command == "head" && !branch),
@@ -247,9 +247,9 @@ impl Pokarak {
                     IconName::GitCommitHorizontal,
                     "Stage / 커밋",
                 )
-                .tooltip_with_action("Stage / 커밋", &OpenGitCommit, None)
                 .disabled(busy)
-                .on_click(cx.listener(|app, _, w, cx| app.open_git_commit(w, cx))),
+                .on_click(cx.listener(|app, _, w, cx| app.open_git_commit(w, cx)))
+                .shortcut_tooltip("Stage / 커밋", &OpenGitCommit, None),
             )
             .child(
                 toolbar_icon("toolbar-branch", IconName::GitBranch, "브랜치")
@@ -265,7 +265,7 @@ impl Pokarak {
                             let weak = weak.clone();
                             let root = root.clone();
                             menu =
-                                menu.item(PopupMenuItem::new(label).on_click(move |_, w, cx| {
+                                menu.item(keycaps::popup_item(label).on_click(move |_, w, cx| {
                                     let _ = weak.update(cx, |app, cx| {
                                         if app.current == root {
                                             app.load_git_page(Some(page), w, cx);
@@ -285,7 +285,7 @@ impl Pokarak {
                                 command: command.into(),
                             };
                             menu = menu.item(
-                                PopupMenuItem::new(label)
+                                keycaps::popup_item(label)
                                     .disabled(command == "head" && !branch)
                                     .on_click(move |_, w, cx| {
                                         let _ = weak.update(cx, |app, cx| {
@@ -299,9 +299,9 @@ impl Pokarak {
             )
             .child(
                 toolbar_icon("toolbar-stash", IconName::Archive, "Stash")
-                    .tooltip_with_action("Stash · 변경 보관 및 복원", &OpenGitWorkflow, None)
                     .disabled(busy)
-                    .on_click(cx.listener(|app, _, w, cx| app.open_git_workflow(w, cx))),
+                    .on_click(cx.listener(|app, _, w, cx| app.open_git_workflow(w, cx)))
+                    .shortcut_tooltip("Stash · 변경 보관 및 복원", &OpenGitWorkflow, None),
             )
             .child(
                 toolbar_icon("toolbar-stash-pop", IconName::ArchiveRestore, "Pop")
@@ -358,7 +358,7 @@ impl Pokarak {
                                 command: command.into(),
                             };
                             menu = menu.item(
-                                PopupMenuItem::new(label)
+                                keycaps::popup_item(label)
                                     .disabled(!graph || (busy && command != "graph-detail"))
                                     .on_click(move |_, w, cx| {
                                         let _ = target.update(cx, |app, cx| {
@@ -420,12 +420,12 @@ impl Pokarak {
                             || self.git_is_busy()
                             || (self.loading && graph),
                     )
-                    .tooltip_with_action("Git 그래프", &OpenGitHistory, None)
                     .on_click(cx.listener(|app, _, w, cx| {
                         if !app.git_history.active {
                             app.open_git_history(w, cx);
                         }
-                    })),
+                    }))
+                    .shortcut_tooltip("Git 그래프", &OpenGitHistory, None),
             )
             .child(
                 Button::new("view-code")
@@ -453,21 +453,21 @@ impl Pokarak {
                 Button::new("back")
                     .icon(IconName::ArrowLeft)
                     .accessibility_label("뒤로")
-                    .tooltip_with_action("뒤로", &Back, None)
                     .small()
                     .ghost()
                     .disabled(session.is_none_or(|s| s.history.is_empty()))
-                    .on_click(cx.listener(|app, _, w, cx| app.navigate_history(true, w, cx))),
+                    .on_click(cx.listener(|app, _, w, cx| app.navigate_history(true, w, cx)))
+                    .shortcut_tooltip("뒤로", &Back, None),
             )
             .child(
                 Button::new("forward")
                     .icon(IconName::ArrowRight)
                     .accessibility_label("앞으로")
-                    .tooltip_with_action("앞으로", &Forward, None)
                     .small()
                     .ghost()
                     .disabled(session.is_none_or(|s| s.forward.is_empty()))
-                    .on_click(cx.listener(|app, _, w, cx| app.navigate_history(false, w, cx))),
+                    .on_click(cx.listener(|app, _, w, cx| app.navigate_history(false, w, cx)))
+                    .shortcut_tooltip("앞으로", &Forward, None),
             )
     }
 }

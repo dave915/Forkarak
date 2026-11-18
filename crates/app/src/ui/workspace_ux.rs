@@ -1,6 +1,7 @@
 //! Worktree-scoped screen restoration and searchable native navigation.
 use super::*;
 use crate::prefs::UpdateView;
+use crate::ui::dialogs::DialogWindowExt as _;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -270,7 +271,7 @@ impl Pokarak {
                 _subscription: subscription,
             }
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             dialog
                 .title(title)
                 .width(ui_px(600.))
@@ -445,13 +446,17 @@ impl Render for Picker {
                                 .h(ui_px(48.))
                                 .justify_start()
                                 .selected(index == cursor)
+                                .accessibility_label(format!("{} {}", row.label, row.detail))
                                 .child(
-                                    div().v_flex().min_w_0().child(row.label.clone()).child(
-                                        div()
-                                            .text_size(ui_text(10.))
-                                            .text_ellipsis()
-                                            .child(row.detail.clone()),
-                                    ),
+                                    dialogs::choice_body()
+                                        .v_flex()
+                                        .child(div().text_ellipsis().child(row.label.clone()))
+                                        .child(
+                                            div()
+                                                .text_size(ui_text(10.))
+                                                .text_ellipsis()
+                                                .child(row.detail.clone()),
+                                        ),
                                 )
                                 .on_click(move |_, w, cx| {
                                     let _ = target.update(cx, |this, cx| this.choose(index, w, cx));

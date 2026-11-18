@@ -561,8 +561,9 @@ impl Pokarak {
     }
 
     fn show_commit_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::dialogs::DialogWindowExt as _;
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let Some(view) = weak.upgrade() else {
                 return dialog;
             };

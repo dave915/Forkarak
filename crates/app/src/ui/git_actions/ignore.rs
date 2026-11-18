@@ -1,6 +1,7 @@
 //! Expected-content ignore editing; matching previews run in core's isolated
 //! shadow repository. Merely opening/editing this view writes no source files.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use pokarak_core::operations::ignore::{IgnorePreview, apply_gitignore, preview_gitignore};
 
 fn exact_rule(path: &Path) -> Option<String> {
@@ -51,7 +52,7 @@ impl Pokarak {
         },move |_,(files,expected),w,cx| {
             let weak = cx.entity().downgrade();
             w.close_dialog(cx);
-            w.open_dialog(cx,move |dialog,_,_| {
+            w.open_app_dialog(cx,move |dialog,_,_| {
                 let mut body = div().id("ignore-untracked-list").v_flex().gap_2().max_h(ui_px(340.)).overflow_y_scroll().child(scope(&root,None)).child(note("미추적 파일을 선택하여 저장소 루트 .gitignore에 규칙을 작성하세요. 추적 중인 파일은 이 작업으로 추적 해제되지 않습니다."));
                 if files.is_empty() { body = body.child(note("미추적 파일이 없습니다.")); }
                 for (index,file) in files.iter().enumerate() {
@@ -87,7 +88,7 @@ impl Pokarak {
         });
         let weak = cx.entity().downgrade();
         window.close_dialog(cx);
-        window.open_dialog(cx,move |dialog,_,_| {
+        window.open_app_dialog(cx,move |dialog,_,_| {
             let target = weak.clone(); let root = root.clone(); let expected = expected.clone(); let editor_for_action = editor.clone();
             dialog.on_close({ let owner = weak.clone(); move |_,_,cx| { let _ = owner.update(cx, |app,_| app.invalidate_workflow_read()); } }).title(".gitignore 편집").width(ui_px(780.)).margin_top(ui_px(12.)).child(div().v_flex().gap_2().child(scope(&root,None)).child(format!("선택한 미추적 경로: {}",super::super::git_commit::display_path(&selected)))
                 .child(note("루트 .gitignore의 전체 내용을 편집합니다. 폴더 전체를 제외하려면 /폴더/ 규칙을 입력하세요. 다음 화면에서 실제 영향 경로를 확인한 뒤 적용합니다."))
@@ -112,7 +113,7 @@ impl Pokarak {
         });
         editor.update(cx, |editor, cx| editor.set_readonly(true, cx));
         window.close_dialog(cx);
-        window.open_dialog(cx,move |dialog,_,cx| {
+        window.open_app_dialog(cx,move |dialog,_,cx| {
             let target = weak.clone(); let preview_for_action = preview.clone();
             let disabled = weak.upgrade().is_none_or(|view| { let app = view.read(cx); app.git_is_busy() || app.current.as_ref() != Some(&preview.root) });
             let mut paths = div().id("ignore-affected-paths").v_flex().gap_1().max_h(ui_px(150.)).overflow_y_scroll();

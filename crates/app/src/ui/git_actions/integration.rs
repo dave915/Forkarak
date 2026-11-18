@@ -53,7 +53,7 @@ impl Pokarak {
             cx,
         );
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let choices = Arc::new(choices.clone());
             let empty = choices.is_empty();
             let weak = weak.clone();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use pokarak_core::history::navigation::{Catalog, RefGroup, SearchResults};
 
 #[derive(Default)]
@@ -177,7 +178,7 @@ impl Pokarak {
             .graph_branch()
             .map(|name| format!("커밋 검색 · {}", branch_filter::branch_label(name)))
             .unwrap_or_else(|| "커밋 검색".into());
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             dialog
                 .title(title.clone())
                 .width(ui_px(620.))

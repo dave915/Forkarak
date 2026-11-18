@@ -1,5 +1,6 @@
 //! Explicit reconciliation changes only retained drafts, never working files.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 
 #[derive(Clone)]
 pub(super) struct DraftComparison {
@@ -42,7 +43,7 @@ pub(super) fn open(
     cx: &mut Context<Pokarak>,
 ) {
     let panel = cx.new(|cx| Reconciliation::new(owner, comparison, window, cx));
-    window.open_dialog(cx, move |dialog, window, _| {
+    window.open_app_dialog(cx, move |dialog, window, _| {
         dialog
             .title("외부 수정과 초안 조정")
             .width(ui_px(980.).min(window.viewport_size().width - ui_px(24.)))

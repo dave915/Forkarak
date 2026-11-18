@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 
 impl Pokarak {
     pub(in crate::ui) fn language_manager_settings(&self, view: WeakEntity<Self>, cx: &App) -> Div {
@@ -21,7 +22,7 @@ impl Pokarak {
     ) {
         self.language_manager.refresh();
         let view = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, window, cx| {
+        window.open_app_dialog(cx, move |dialog, window, cx| {
             let Some(entity) = view.upgrade() else { return dialog; };
             let app = entity.read(cx);
             let palette = Palette::new(cx);

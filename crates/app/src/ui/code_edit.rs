@@ -2,6 +2,7 @@
 //! and project sessions; the core operation owns the actual filesystem write.
 use super::draft_reconciliation::DraftComparison;
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use serde::{Deserialize, Serialize};
 use std::{io, path::Component};
 
@@ -1351,7 +1352,7 @@ impl Pokarak {
             return;
         }
         let weak = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             let weak = weak.clone();
             let key = key.clone();
             dialog.title("파일의 편집 초안을 버릴까요?")

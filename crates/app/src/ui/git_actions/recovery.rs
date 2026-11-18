@@ -1,6 +1,7 @@
 //! Explicit exact-endpoint comparison, reflog and reference-only recovery.
 use super::review::{Review, ReviewSource};
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use pokarak_core::operations::recovery::ReflogEntry;
 impl Pokarak {
     pub(super) fn confirm_git_extra(
@@ -19,7 +20,7 @@ impl Pokarak {
         let job = Arc::new(job);
         let weak = cx.entity().downgrade();
         window.close_dialog(cx);
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_app_dialog(cx, move |dialog, _, cx| {
             let target = weak.clone();
             let root_for_job = root.clone();
             let title = label.clone();
@@ -88,7 +89,7 @@ impl Pokarak {
         let right = cx.new(|cx| InputState::new(window, cx).default_value("HEAD"));
         let weak = cx.entity().downgrade();
         window.close_dialog(cx);
-        window.open_dialog(cx,move |dialog,_,cx| {
+        window.open_app_dialog(cx,move |dialog,_,cx| {
             let (target,root,left,right) = (weak.clone(),root.clone(),left.clone(),right.clone());
             let disabled = left.read(cx).value().trim().is_empty() || right.read(cx).value().trim().is_empty();
             dialog.on_close({ let owner = weak.clone(); move |_,_,cx| { let _ = owner.update(cx, |app,_| app.invalidate_workflow_read()); } }).title("두 참조 직접 비교").width(ui_px(640.)).child(div().v_flex().gap_3().child(scope(&root,None))
@@ -110,13 +111,14 @@ impl Pokarak {
         self.workflow_read(root.clone(), |ops| ops.reflog(200), move |app,entries,w,cx| {
             let weak = cx.entity().downgrade();
             w.close_dialog(cx);
-            w.open_dialog(cx,move |dialog,_,_| {
+            w.open_app_dialog(cx,move |dialog,_,_| {
                 let mut body = div().id("reflog-list").v_flex().gap_2().max_h(ui_px(390.)).overflow_y_scroll().child(scope(&root,None))
                     .child(note("이 워크트리 HEAD의 최근 Reflog 최대 200개입니다. 항목을 선택해 커밋 코드와 첫 부모 기준 diff를 확인하세요. 만료되거나 삭제된 객체는 읽을 수 없습니다."));
                 if entries.is_empty() { body = body.child(note("기록된 HEAD Reflog가 없습니다.")); }
                 for (index,entry) in entries.iter().enumerate() {
                     let target = weak.clone(); let entry = entry.clone();
-                    body = body.child(Button::new(("reflog-entry",index)).label(format!("{} · {} · {}",entry.timestamp,&entry.oid[..8],entry.subject)).small().on_click(move |_,w,cx| {
+                    let label = format!("{} · {} · {}",entry.timestamp,&entry.oid[..8],entry.subject);
+                    body = body.child(Button::new(("reflog-entry",index)).accessibility_label(label.clone()).child(dialogs::choice_body().text_ellipsis().child(label)).small().on_click(move |_,w,cx| {
                         let entry = entry.clone(); let read_root = entry.root.clone(); let oid = entry.oid.clone();
                         let _ = target.update(cx, |app,cx| app.workflow_read(entry.root.clone(),move |_| pokarak_core::history::commit_detail(&read_root,&oid,0),move |app,detail,w,cx| app.show_git_review(Review { root:entry.root.clone(),title:"Reflog 커밋".into(),description:entry.subject.clone(),source:ReviewSource::Reflog { entry,detail },write:None },w,cx),w,cx));
                     }));
@@ -135,7 +137,7 @@ impl Pokarak {
         let name = cx.new(|cx| InputState::new(window, cx).placeholder("recovered-work"));
         let weak = cx.entity().downgrade();
         window.close_dialog(cx);
-        window.open_dialog(cx,move |dialog,_,cx| {
+        window.open_app_dialog(cx,move |dialog,_,cx| {
             let (target,entry,name) = (weak.clone(),entry.clone(),name.clone());
             let disabled = name.read(cx).value().trim().is_empty();
             dialog.on_close({ let owner = weak.clone(); move |_,_,cx| { let _ = owner.update(cx, |app,_| app.invalidate_workflow_read()); } }).title("복구 브랜치 만들기").width(ui_px(650.)).child(div().v_flex().gap_3().child(scope(&entry.root,None)).child(format!("{}\n{}\n{}",entry.selector,entry.oid,entry.subject)).child(field("새 로컬 브랜치",&name)).child(note("선택한 커밋에 새 브랜치만 만듭니다. 현재 브랜치 전환, index 또는 작업 파일 변경은 하지 않습니다.")))

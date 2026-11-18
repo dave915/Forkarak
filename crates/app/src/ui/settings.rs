@@ -1,5 +1,6 @@
 use super::*;
 use crate::theme::DisplaySettings;
+use crate::ui::dialogs::DialogWindowExt as _;
 
 #[derive(Clone, Copy)]
 enum Setting {
@@ -435,7 +436,7 @@ impl Pokarak {
         )
         .detach();
         let weak = cx.weak_entity();
-        window.open_dialog(cx,move |dialog,window,cx| {
+        window.open_app_dialog(cx,move |dialog,window,cx| {
             let Some(entity)=weak.upgrade() else{return dialog;};
             let app=entity.read(cx);
             let palette=Palette::new(cx);

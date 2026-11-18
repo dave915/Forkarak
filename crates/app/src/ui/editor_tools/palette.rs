@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 #[derive(Clone)]
 enum Target {
     Action(fn() -> Box<dyn Action>),
@@ -383,13 +384,15 @@ impl Render for Palette {
                             .filter_map(|row| {
                                 let index = *filtered.get(row)?;
                                 let entry = &s.entries[index];
+                                let label = format!("{}   {}", entry.title, entry.key);
                                 Some(
                                     Button::new(("palette-command", row))
                                         .ghost()
                                         .w_full()
                                         .selected(row == s.cursor)
                                         .disabled(!entry.enabled)
-                                        .label(format!("{}   {}", entry.title, entry.key))
+                                        .accessibility_label(label.clone())
+                                        .child(dialogs::choice_body().text_ellipsis().child(label))
                                         .on_click(
                                             cx.listener(move |s, _, w, cx| s.run(index, w, cx)),
                                         )
@@ -505,7 +508,7 @@ impl Pokarak {
                 _subscriptions: vec![subscription],
             }
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             dialog
                 .title("명령 팔레트")
                 .width(ui_px(720.))
@@ -546,7 +549,7 @@ impl Pokarak {
                 _subscription: subscription,
             }
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             dialog
                 .title("줄 번호로 이동")
                 .width(ui_px(380.))

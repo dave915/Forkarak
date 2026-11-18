@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use pokarak_core::history::navigation::{Catalog, GraphRef, RefGroup};
 
 pub(super) fn branch_label(name: &str) -> &str {
@@ -107,7 +108,7 @@ impl Pokarak {
                 _subscription: subscription,
             }
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             dialog
                 .title("그래프 브랜치 필터")
                 .on_ok(|_, _, _| false)

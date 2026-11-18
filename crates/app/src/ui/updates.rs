@@ -1,5 +1,6 @@
 //! One release check and download for the whole window, independent of the open repositories.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use crate::updater::{self, Prepared};
 
 const FIRST_CHECK: Duration = Duration::from_secs(15);
@@ -195,7 +196,7 @@ impl Pokarak {
         }
         let tag = tag.clone();
         let view = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, window, cx| {
+        window.open_app_dialog(cx, move |dialog, window, cx| {
             let Some(entity) = view.upgrade() else {
                 return dialog;
             };
@@ -277,7 +278,7 @@ impl Pokarak {
         };
         self.updates.action_error = None;
         if !confirmed {
-            window.open_dialog(cx, |dialog, _, _| {
+            window.open_app_dialog(cx, |dialog, _, _| {
                 dialog
                     .title("재시작 준비 중…")
                     .width(ui_px(310.))

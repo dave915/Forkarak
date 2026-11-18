@@ -1,5 +1,6 @@
 //! A window-scoped reader. Every query is tied to the file and revision that opened it.
 use super::*;
+use crate::ui::dialogs::DialogWindowExt as _;
 use gpui_kit::component::ActiveTheme;
 use pokarak_core::file_history::{self, BlameLine, FileHistory, FileRevision};
 
@@ -81,7 +82,7 @@ impl Pokarak {
             reader.query(mode, cx);
             reader
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, _, _| {
             dialog
                 .title("파일 이력")
                 .width(ui_px(850.))
@@ -213,19 +214,21 @@ impl Render for Inspector {
                 }
                 for (i, entry) in history.entries.iter().enumerate() {
                     let revision = entry.clone();
+                    let label = format!(
+                        "{}   {}   {}   {}",
+                        &entry.oid[..8],
+                        entry.date.get(..10).unwrap_or(&entry.date),
+                        entry.author,
+                        entry.subject
+                    );
                     list = list.child(
                         Button::new(("file-history-row", i))
                             .ghost()
                             .small()
                             .justify_start()
                             .flex_none()
-                            .label(format!(
-                                "{}   {}   {}   {}",
-                                &entry.oid[..8],
-                                entry.date.get(..10).unwrap_or(&entry.date),
-                                entry.author,
-                                entry.subject
-                            ))
+                            .accessibility_label(label.clone())
+                            .child(dialogs::choice_body().text_ellipsis().child(label))
                             .tooltip(entry.path.display().to_string())
                             .on_click(cx.listener(move |this, _, w, cx| {
                                 this.revision(revision.clone(), w, cx)

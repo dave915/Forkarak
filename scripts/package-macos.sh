@@ -53,8 +53,12 @@ done
 [[ -z "$BINARY" || "$PROFILE" == release ]] || fail "--debug cannot be combined with --binary"
 PLIST="$ROOT_DIR/assets/macos/Info.plist"
 ICON="$ROOT_DIR/assets/icons/Forkarak.icns"
-[[ -f "$ICON" ]] || fail "Missing icon; run ./scripts/build-icons.sh"
+[[ -f "$ICON" ]] || fail "Missing checked ICNS fallback; see assets/icons/app/README.md"
 /usr/bin/plutil -lint "$PLIST"
+command -v python3 >/dev/null 2>&1 || fail 'Python 3 is required on the build machine'
+# Verify checked Apple-compiled resources; packaging never invokes Xcode/Swift or
+# regenerates icons. Stale sources fail instead of silently shipping a flat icon.
+python3 "$ROOT_DIR/scripts/build-liquid-icons.py"
 
 if [[ -z "$BINARY" ]]; then
     command -v cargo >/dev/null 2>&1 || fail "Cargo not found; add \$HOME/.cargo/bin to PATH"
@@ -113,6 +117,7 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 /usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$CONTENTS/Info.plist"
 /usr/bin/plutil -replace CFBundleVersion -string "$VERSION" "$CONTENTS/Info.plist"
 /bin/cp "$ICON" "$CONTENTS/Resources/Forkarak.icns"
+/bin/cp "$ROOT_DIR/assets/icons/app/liquid-compiled/Assets.car" "$CONTENTS/Resources/Assets.car"
 /bin/cp "$ROOT_DIR/assets/icons/spork.svg" "$CONTENTS/Resources/spork.svg"
 /bin/cp "$ROOT_DIR/LICENSE" "$CONTENTS/Resources/LICENSE"
 /usr/bin/ditto "$ROOT_DIR/assets/licenses" "$CONTENTS/Resources/licenses"
@@ -135,6 +140,7 @@ python3 "$ROOT_DIR/scripts/sign-language-resources.py" "$CONTENTS/Resources/lang
 # Nested signing changes code bytes; compute the shipping inventory afterwards.
 python3 "$ROOT_DIR/scripts/prepare-language-resources.py" --inventory "$CONTENTS/Resources/language-tools"
 /bin/bash "$ROOT_DIR/scripts/verify-language-resources.sh" "$CONTENTS/Resources/language-tools"
+python3 "$ROOT_DIR/scripts/build-liquid-icons.py" --bundle "$STAGED_APP"
 
 if [[ -n "${SIGNING_IDENTITY:-}" ]]; then
     /usr/bin/codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$STAGED_APP"

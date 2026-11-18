@@ -1,0 +1,22 @@
+{
+  "provenance": "Forkarak approved original charcoal spork, vector traced in this repository. No third-party artwork.",
+  "platform": "macOS",
+  "rendition": "Default",
+  "light-angle": 45,
+  "foreground-fill": {"linear-gradient": ["srgb:0.96078,0.97255,0.98431,1.00000", "srgb:0.76863,0.79608,0.83137,1.00000"]},
+  "material": {
+    "lighting": "combined",
+    "blur-material": 0.45,
+    "shadow": {"kind": "neutral", "opacity": 0.38},
+    "specular": true,
+    "translucency": {"enabled": true, "value": 0.12}
+  },
+  "presets": {
+    "charcoal": {"catalog-name": "Forkarak", "colors": ["#3b424d", "#20252c"]},
+    "deep-blue": {"catalog-name": "Forkarak-deep-blue", "colors": ["#1d4e70", "#10324d"]},
+    "deep-green": {"catalog-name": "Forkarak-deep-green", "colors": ["#285b51", "#153b34"]},
+    "plum": {"catalog-name": "Forkarak-plum", "colors": ["#634760", "#432d43"]},
+    "ivory": {"catalog-name": "Forkarak-ivory", "colors": ["#eee9df", "#d6cfc2"]},
+    "light-blue": {"catalog-name": "Forkarak-light-blue", "colors": ["#d6eaf6", "#b5d1e6"]}
+  }
+}

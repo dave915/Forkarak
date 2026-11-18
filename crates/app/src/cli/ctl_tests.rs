@@ -100,7 +100,7 @@ fn partial_inspection_lists_readable_changes_and_preserves_the_index() {
     let f = Fixture::new();
     let locked = f.root.join("-option.txt");
     fs::write(f.root.join("file.txt"), "changed and searchable").unwrap();
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
     if fs::File::open(&locked).is_ok() {
         return; // Privileged runners can read mode-000 files.
     }

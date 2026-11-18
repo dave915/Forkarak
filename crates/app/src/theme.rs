@@ -69,6 +69,35 @@ impl Palette {
     pub fn selected_hover(self) -> Rgba {
         self.rgb(0x426886)
     }
+
+    pub(crate) fn is_dark(self) -> bool {
+        self.dark
+    }
+
+    /// Graph identities need a categorical palette, not generic UI accents.
+    /// Light colors retain contrast even on selected rows and tinted ref badges.
+    pub(crate) fn graph_track(self, track: usize) -> Rgba {
+        const DARK: [u32; 8] = [
+            0x7fb8e2, 0x83c4a1, 0xd59ede, 0xe4bb79, 0x7ac8ce, 0xe5a0a5, 0xb0a9ef, 0xa8c483,
+        ];
+        const LIGHT: [u32; 8] = [
+            0x104d99, 0x1c5e29, 0x7b2696, 0x7e4200, 0x005c68, 0x9d1f36, 0x453a94, 0x595708,
+        ];
+        gpui_kit::rgb(if self.dark { DARK } else { LIGHT }[track % LIGHT.len()])
+    }
+
+    pub(crate) fn graph_badge_fill(self, color: Rgba, full: bool) -> Rgba {
+        color.opacity(if self.dark {
+            if full { 0.06 } else { 0.15 }
+        } else {
+            if full { 0.04 } else { 0.05 }
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(dark: bool) -> Self {
+        Self { dark }
+    }
 }
 
 /// Use the same availability for behavior and cursor. Theme tokens supply the
@@ -236,4 +265,127 @@ pub fn apply(choice: ThemeChoice, display: DisplaySettings, window: &mut Window,
         colors.caret = blue;
     });
     apply_display(display, cx);
+}
+
+#[cfg(test)]
+mod graph_contrast_tests {
+    use super::Palette;
+    use gpui_kit::{Rgba, rgb};
+
+    fn linear(channel: f32) -> f32 {
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    fn luminance(color: Rgba) -> f32 {
+        0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+    }
+    fn contrast(a: Rgba, b: Rgba) -> f32 {
+        let a = luminance(a);
+        let b = luminance(b);
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+    fn lab(color: Rgba) -> [f32; 3] {
+        let [r, g, b] = [linear(color.r), linear(color.g), linear(color.b)];
+        let xyz = [
+            (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047,
+            0.2126729 * r + 0.7151522 * g + 0.072175 * b,
+            (0.0193339 * r + 0.119192 * g + 0.9503041 * b) / 1.08883,
+        ];
+        let f = xyz.map(|x| {
+            if x > 0.008856 {
+                x.cbrt()
+            } else {
+                7.787 * x + 16. / 116.
+            }
+        });
+        [
+            116. * f[1] - 16.,
+            500. * (f[0] - f[1]),
+            200. * (f[1] - f[2]),
+        ]
+    }
+
+    #[test]
+    fn light_graph_lines_nodes_and_badge_text_contrast_on_every_row_state() {
+        let p = Palette::for_test(false);
+        // Main, sidebar/alternating, raised, hover, selected, selected+hover,
+        // and white (native overlay) surfaces, using actual app theme tokens.
+        let surfaces = [
+            p.rgb(0x20252c),
+            p.rgb(0x1b2026),
+            p.rgb(0x282f38),
+            p.hover(),
+            p.selected(),
+            p.selected_hover(),
+            rgb(0xffffff),
+        ];
+        let mut min_graph = f32::MAX;
+        let mut min_badge = f32::MAX;
+        for track in 0..8 {
+            let ink = p.graph_track(track);
+            for surface in surfaces {
+                let graph_ratio = contrast(ink, surface);
+                min_graph = min_graph.min(graph_ratio);
+                assert!(
+                    graph_ratio >= 3.,
+                    "track {track}: graph contrast {graph_ratio}"
+                );
+                for full in [false, true] {
+                    // Badge fill alpha-composites over the row, including hover
+                    // and selected rows. Opaque text must meet the text target.
+                    let background = surface.blend(p.graph_badge_fill(ink, full));
+                    let ratio = contrast(ink, background);
+                    min_badge = min_badge.min(ratio);
+                    assert!(
+                        ratio >= 4.5,
+                        "track {track}, full={full}: badge contrast {ratio}"
+                    );
+                }
+            }
+        }
+        println!(
+            "light graph minimum contrast: strokes/nodes {min_graph:.2}:1, badge text {min_badge:.2}:1"
+        );
+    }
+
+    #[test]
+    fn light_graph_hues_are_distinct_and_dark_colors_are_preserved() {
+        let light = Palette::for_test(false);
+        let dark = Palette::for_test(true);
+        let original = [
+            0x7fb8e2, 0x83c4a1, 0xd59ede, 0xe4bb79, 0x7ac8ce, 0xe5a0a5, 0xb0a9ef, 0xa8c483,
+        ];
+        let mut minimum = f32::MAX;
+        for (track, color) in original.into_iter().enumerate() {
+            assert_eq!(dark.graph_track(track), rgb(color));
+            assert_eq!(
+                dark.graph_badge_fill(rgb(color), false),
+                rgb(color).opacity(0.15)
+            );
+            assert_eq!(
+                dark.graph_badge_fill(rgb(color), true),
+                rgb(color).opacity(0.06)
+            );
+            assert_eq!(light.graph_track(track), light.graph_track(track + 8));
+            for other in track + 1..8 {
+                let a = lab(light.graph_track(track));
+                let b = lab(light.graph_track(other));
+                let distance = a
+                    .into_iter()
+                    .zip(b)
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                minimum = minimum.min(distance);
+                assert!(
+                    distance >= 18.,
+                    "tracks {track}/{other} too similar: delta E {distance}"
+                );
+            }
+        }
+        println!("light graph minimum pairwise CIELAB delta E: {minimum:.2}");
+    }
 }

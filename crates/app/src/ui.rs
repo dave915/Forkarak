@@ -16,6 +16,7 @@ mod git_actions;
 mod git_commit;
 mod git_history;
 mod git_workflow;
+mod keycaps;
 mod language_manager;
 mod language_tools;
 mod pane_visibility;
@@ -39,6 +40,7 @@ mod updates;
 mod workspace_ux;
 use analysis_feedback::AnalysisFeedback;
 use file_tree::FileRow;
+use keycaps::ShortcutTooltip as _;
 use split_diff::ReviewDiff;
 
 use crate::prefs::{Preferences, SavedPosition, SavedProject, SavedView};
@@ -617,8 +619,7 @@ impl Pokarak {
         let initial = pending_projects
             .pop_front()
             .or_else(|| prefs.last_root.clone());
-        let search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("파일 이름 검색   ⌘P"));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("파일 이름 검색"));
         let mut subscriptions = vec![cx.subscribe_in(
             &search_input,
             window,
@@ -1005,7 +1006,7 @@ impl Pokarak {
                                 if saved.text_search {
                                     "본문 검색 후 Enter"
                                 } else {
-                                    "파일 이름 검색   ⌘P"
+                                    "파일 이름 검색"
                                 },
                                 window,
                                 cx,
@@ -1965,7 +1966,7 @@ impl Pokarak {
                 if text {
                     "본문 검색 후 Enter"
                 } else {
-                    "파일 이름 검색   ⌘P"
+                    "파일 이름 검색"
                 },
                 window,
                 cx,
@@ -2066,10 +2067,11 @@ impl Pokarak {
                             .icon(IconName::X)
                             .ghost()
                             .small()
-                            .tooltip("파일 닫기  ⌘W")
+                            .accessibility_label("파일 닫기")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.close_file(close.clone(), window, cx)
-                            })),
+                            }))
+                            .shortcut_tooltip("파일 닫기", &CloseFile, None),
                     ),
             );
         }
@@ -2473,8 +2475,8 @@ impl Render for Pokarak {
                 .child(context)
                 .when(self.current.is_some(), |row| row.child(self.git_sync_button(cx)))
                 .child(self.output_button("status-output", cx))
-                .child(div().max_w(ui_px(400.)).min_w_0().text_ellipsis().child(self.git_running_status().unwrap_or_else(|| self.status.clone())))
-                .child(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의·사용처  /  ⌘B 정의  /  ⌥F7 사용처" }))
+                .child(div().max_w(ui_px(400.)).min_w_0().text_ellipsis().child(keycaps::explanation(&self.git_running_status().unwrap_or_else(|| self.status.clone()), &self.prefs, self.current_project.as_deref(), palette)))
+                .child(keycaps::explanation(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의·사용처  /  ⌘B 정의  /  ⌥F7 사용처" }, &self.prefs, self.current_project.as_deref(), palette)))
     }
 }
 

@@ -204,6 +204,7 @@ impl RefBadges {
         width: f32,
         color: Rgba,
         full: bool,
+        palette: Palette,
     ) -> AnyElement {
         let label = format!(
             "{} · {} · 커밋 {}",
@@ -224,7 +225,7 @@ impl RefBadges {
             .px(ui_px(4.))
             .border_0()
             .rounded(ui_px(3.))
-            .bg(color.opacity(if full { 0.06 } else { 0.15 }))
+            .bg(palette.graph_badge_fill(color, full))
             .text_color(color)
             .tooltip(label.clone())
             .accessibility_label(label)
@@ -334,7 +335,15 @@ impl RefBadges {
             .items_center()
             .gap(ui_px(GAP));
         for (i, &width) in layout.widths.iter().enumerate() {
-            cell = cell.child(badges.badge(&commit.oid, &refs[i], i, width, color, false));
+            cell = cell.child(badges.badge(
+                &commit.oid,
+                &refs[i],
+                i,
+                width,
+                color,
+                false,
+                Palette::new(cx),
+            ));
         }
         if layout.hidden > 0 {
             let trigger_width = overflow_width(layout.hidden).min(width);
@@ -447,8 +456,8 @@ impl Render for RefOverflow {
                 let refs = refs.clone();
                 let count = refs.len();
                 let list_width = content_width.max(theme::logical_px(width));
-                let list = uniform_list("graph-overflow-refs", count, move |range, _, _| {
-                    range.map(|i| badges.badge(&oid, &refs[i], i, list_width, color, true)).collect()
+                let list = uniform_list("graph-overflow-refs", count, move |range, _, cx| {
+                    range.map(|i| badges.badge(&oid, &refs[i], i, list_width, color, true, Palette::new(cx))).collect()
                 }).w(ui_px(list_width)).h(ui_px((count.min(10) * 28) as f32)).track_scroll(&scroll);
                 div().v_flex().gap_1().w(width)
                     .child(div().text_size(ui_text(12.)).child(format!("{} · 브랜치 / 태그 {}개", short(&commit.oid), count)))

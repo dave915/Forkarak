@@ -145,8 +145,8 @@ impl Pokarak {
                     .selected(sidebar)
                     .toggled(sidebar)
                     .disabled(pending)
-                    .tooltip_with_action(sidebar_label, &ToggleSidebar, None)
-                    .on_click(cx.listener(|app, _, w, cx| app.toggle_pane(Pane::Sidebar, w, cx))),
+                    .on_click(cx.listener(|app, _, w, cx| app.toggle_pane(Pane::Sidebar, w, cx)))
+                    .shortcut_tooltip(sidebar_label, &ToggleSidebar, None),
             )
             .child(
                 toolbar::toolbar_icon("toggle-files", IconName::FolderTree, files_label)
@@ -154,14 +154,18 @@ impl Pokarak {
                     .toggled(!self.git_history.active && files)
                     .disabled(pending || self.git_history.active)
                     .when(self.git_history.active, |button| {
-                        button
-                            .accessibility_label("파일 목록 표시 / 숨기기 · 코드 보기에서 사용")
-                            .tooltip("파일 목록 패널은 코드 보기에서 표시 / 숨길 수 있습니다")
+                        button.accessibility_label("파일 목록 표시 / 숨기기 · 코드 보기에서 사용")
                     })
-                    .when(!self.git_history.active, |button| {
-                        button.tooltip_with_action(files_label, &ToggleFiles, None)
-                    })
-                    .on_click(cx.listener(|app, _, w, cx| app.toggle_pane(Pane::Files, w, cx))),
+                    .on_click(cx.listener(|app, _, w, cx| app.toggle_pane(Pane::Files, w, cx)))
+                    .shortcut_tooltip(
+                        if self.git_history.active {
+                            "파일 목록 패널 · 코드 보기에서 표시 / 숨기기"
+                        } else {
+                            files_label
+                        },
+                        &ToggleFiles,
+                        None,
+                    ),
             )
     }
 

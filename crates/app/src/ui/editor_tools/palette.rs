@@ -372,8 +372,26 @@ impl Render for Palette {
             .child(Input::new(&self.input))
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
                     .text_size(ui_text(11.))
-                    .child(format!("{count}개 명령 · ↑↓ 선택 · Return 실행 · Esc 닫기")),
+                    .child(format!("{count}개 명령 ·"))
+                    .child(keycaps::hint(
+                        "선택",
+                        "up down",
+                        crate::theme::Palette::new(cx),
+                    ))
+                    .child(keycaps::hint(
+                        "실행",
+                        "enter",
+                        crate::theme::Palette::new(cx),
+                    ))
+                    .child(keycaps::hint(
+                        "닫기",
+                        "escape",
+                        crate::theme::Palette::new(cx),
+                    )),
             )
             .when(count == 0, |body| body.child("일치하는 명령이 없습니다."))
             .child(
@@ -392,7 +410,23 @@ impl Render for Palette {
                                         .selected(row == s.cursor)
                                         .disabled(!entry.enabled)
                                         .accessibility_label(label.clone())
-                                        .child(dialogs::choice_body().text_ellipsis().child(label))
+                                        .child(
+                                            dialogs::choice_body()
+                                                .flex()
+                                                .items_center()
+                                                .gap_3()
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .min_w_0()
+                                                        .text_ellipsis()
+                                                        .child(entry.title.clone()),
+                                                )
+                                                .child(keycaps::binding(
+                                                    &entry.key,
+                                                    crate::theme::Palette::new(cx),
+                                                )),
+                                        )
                                         .on_click(
                                             cx.listener(move |s, _, w, cx| s.run(index, w, cx)),
                                         )

@@ -121,15 +121,15 @@ impl Pokarak {
         }
     }
 
-    pub(in crate::ui) fn graph_search_control(&self, cx: &mut Context<Self>) -> Button {
+    pub(in crate::ui) fn graph_search_control(&self, cx: &mut Context<Self>) -> AnyElement {
         Button::new("graph-search")
             .small()
             .ghost()
             .icon(IconName::Search)
             .accessibility_label("커밋 검색")
-            .tooltip_with_action("커밋 검색", &SearchGitGraph, Some("GitGraph"))
             .disabled(self.git_history.nav.catalog.is_none() || self.loading || self.git_is_busy())
             .on_click(cx.listener(|app, _, w, cx| app.open_graph_search(w, cx)))
+            .shortcut_tooltip("커밋 검색", &SearchGitGraph, Some("GitGraph"))
     }
 
     pub(in crate::ui) fn open_graph_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {

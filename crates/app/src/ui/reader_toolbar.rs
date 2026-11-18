@@ -273,7 +273,13 @@ impl Pokarak {
             ("함수 도움말  ⌃⇧Space", Command::Signature),
             ("타입 · 설명  ⌥F1", Command::Hover),
         ] {
-            menu = identity.item(menu, label, command, !ready, false);
+            menu = identity.item(
+                menu,
+                keycaps::menu_label(label, &self.prefs, self.current_project.as_deref()),
+                command,
+                !ready,
+                false,
+            );
         }
         menu = menu.separator();
         for (label, command) in [
@@ -281,7 +287,13 @@ impl Pokarak {
             ("사용처  ⌥F7", Command::References),
             ("구현체", Command::Implementation),
         ] {
-            menu = identity.item(menu, label, command, !navigation, false);
+            menu = identity.item(
+                menu,
+                keycaps::menu_label(label, &self.prefs, self.current_project.as_deref()),
+                command,
+                !navigation,
+                false,
+            );
         }
         menu = identity.item(
             menu.separator(),
@@ -369,14 +381,22 @@ impl Pokarak {
         );
         modes = identity.item(
             modes,
-            "이전 변경  ⌥↑",
+            keycaps::menu_label(
+                "이전 변경  ⌥↑",
+                &self.prefs,
+                self.current_project.as_deref(),
+            ),
             Command::PreviousChange,
             view.code || view.diff.is_none(),
             false,
         );
         modes = identity.item(
             modes,
-            "다음 변경  ⌥↓",
+            keycaps::menu_label(
+                "다음 변경  ⌥↓",
+                &self.prefs,
+                self.current_project.as_deref(),
+            ),
             Command::NextChange,
             view.code || view.diff.is_none(),
             false,
@@ -411,7 +431,11 @@ impl Pokarak {
                 .is_some_and(|s| matches!(s.saved.comparison, CompareMode::Branch(_)));
             let mut workspace = identity.item(
                 NativeMenu::new(),
-                "워크트리 선택…  ⌘⇧J",
+                keycaps::menu_label(
+                    "워크트리 선택…  ⌘⇧J",
+                    &self.prefs,
+                    self.current_project.as_deref(),
+                ),
                 Command::Worktree,
                 busy,
                 false,
@@ -439,7 +463,11 @@ impl Pokarak {
         }
         menu = identity.item(
             menu.separator(),
-            "명령 팔레트…  ⌘⇧P",
+            keycaps::menu_label(
+                "명령 팔레트…  ⌘⇧P",
+                &self.prefs,
+                self.current_project.as_deref(),
+            ),
             Command::Palette,
             false,
             false,

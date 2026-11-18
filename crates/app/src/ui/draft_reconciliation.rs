@@ -185,6 +185,15 @@ impl Reconciliation {
 impl Render for Reconciliation {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let height = ((f32::from(window.viewport_size().height) - 260.) / 2.).clamp(72., 180.);
+        let save_help = self.owner.upgrade().map(|owner| {
+            let app = owner.read(cx);
+            keycaps::explanation(
+                "반영은 초안만 변경합니다. 파일 저장은 반영 후 ⌘S로 직접 실행하세요.",
+                &app.prefs,
+                app.current_project.as_deref(),
+                Palette::new(cx),
+            )
+        });
         let pane = |label: &'static str, editor: &Entity<EditorState>, readonly: bool| {
             div()
                 .v_flex()
@@ -219,11 +228,7 @@ impl Render for Reconciliation {
                     .child(pane("현재 디스크", &self.disk, true)),
             )
             .child(pane("조정 결과 · 직접 편집", &self.result, self.busy))
-            .child(
-                div()
-                    .text_size(ui_text(11.))
-                    .child("반영은 초안만 변경합니다. 파일 저장은 반영 후 ⌘S로 직접 실행하세요."),
-            )
+            .child(div().text_size(ui_text(11.)).children(save_help))
             .when_some(self.error.clone(), |body, error| {
                 body.child(
                     div()

@@ -281,12 +281,10 @@ impl Render for TerminalSessions {
                             .ghost()
                             .small()
                             .icon(IconName::X)
-                            .tooltip(format!(
-                                "터미널 {id} 닫기 · 이 세션의 셸과 실행 중인 명령 종료 (선택 탭 ⌘⌥W)"
-                            ))
+
                             .accessibility_label(format!("터미널 {id} 닫기"))
                             .tab_stop(true)
-                            .on_click(cx.listener(move |this, _, w, cx| this.close(id, w, cx))),
+                            .on_click(cx.listener(move |this, _, w, cx| this.close(id, w, cx))).explanation_tooltip(&format!("터미널 {id} 닫기 · 이 세션의 셸과 실행 중인 명령 종료 (선택 탭 ⌘⌥W)"), &Preferences::default(), None),
                     )
             })
             .collect::<Vec<_>>();
@@ -336,9 +334,13 @@ impl Render for TerminalSessions {
                             .label("+ 터미널")
                             .track_focus(&self.controls_focus)
                             .tab_stop(true)
-                            .tooltip("새 터미널 (⌘⌥T) · 탭 버튼에 포커스 (⌘⌥0)")
                             .accessibility_label("새 터미널")
-                            .on_click(cx.listener(|this, _, w, cx| this.add(w, cx))),
+                            .on_click(cx.listener(|this, _, w, cx| this.add(w, cx)))
+                            .explanation_tooltip(
+                                "새 터미널 (⌘⌥T) · 탭 버튼에 포커스 (⌘⌥0)",
+                                &Preferences::default(),
+                                None,
+                            ),
                     )
                     .child(
                         Button::new("previous-terminal")
@@ -346,9 +348,9 @@ impl Render for TerminalSessions {
                             .small()
                             .label("‹")
                             .disabled(self.tabs.entries.len() < 2)
-                            .tooltip("이전 터미널 (⌘⇧[)")
                             .accessibility_label("이전 터미널")
-                            .on_click(cx.listener(|this, _, w, cx| this.cycle(false, w, cx))),
+                            .on_click(cx.listener(|this, _, w, cx| this.cycle(false, w, cx)))
+                            .keycap_tooltip("이전 터미널", "cmd-shift-["),
                     )
                     .child(
                         Button::new("next-terminal")
@@ -356,9 +358,9 @@ impl Render for TerminalSessions {
                             .small()
                             .label("›")
                             .disabled(self.tabs.entries.len() < 2)
-                            .tooltip("다음 터미널 (⌘⇧])")
                             .accessibility_label("다음 터미널")
-                            .on_click(cx.listener(|this, _, w, cx| this.cycle(true, w, cx))),
+                            .on_click(cx.listener(|this, _, w, cx| this.cycle(true, w, cx)))
+                            .keycap_tooltip("다음 터미널", "cmd-shift-]"),
                     )
                     .child(
                         Button::new("hide-terminals")

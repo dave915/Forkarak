@@ -1538,7 +1538,6 @@ impl Pokarak {
             .icon(IconName::Save)
             .when(!minimal, |b| b.label(name))
             .accessibility_label(name)
-            .tooltip("파일 저장  ⌘S")
             .ghost()
             .small()
             .flex_none()
@@ -1547,6 +1546,7 @@ impl Pokarak {
             .loading(buffer.saving)
             .disabled(busy || self.code_edits.unreadable_storage || !buffer.dirty())
             .on_click(cx.listener(move |app, _, w, cx| app.save_code_file(false, w, cx)))
+            .shortcut_tooltip("파일 저장", &SaveCodeFile, None)
             .into_any_element()
     }
 
@@ -1588,7 +1588,13 @@ impl Pokarak {
                 busy || buffer.is_none_or(|b| !b.dirty()),
             ),
         ] {
-            menu = identity.item(menu, label, command, disabled, false);
+            menu = identity.item(
+                menu,
+                keycaps::menu_label(label, &self.prefs, self.current_project.as_deref()),
+                command,
+                disabled,
+                false,
+            );
         }
         menu
     }

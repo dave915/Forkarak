@@ -132,7 +132,7 @@ impl Pokarak {
                     |app, w, cx| app.submit_index_commit(CommitMode::New, w, cx),
                 )
                 .primary()
-                .tooltip_with_action("Staged 변경 커밋", &SubmitCommit, None),
+                .shortcut_tooltip("Staged 변경 커밋", &SubmitCommit, None),
             );
         let mut composer = div()
             .flex_none()

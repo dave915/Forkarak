@@ -381,10 +381,10 @@ impl Pokarak {
                             .icon(IconName::TextSearch)
                             .ghost()
                             .small()
-                            .tooltip("본문 검색  ⌘⇧F")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.focus_search(true, window, cx)
-                            })),
+                            }))
+                            .shortcut_tooltip("본문 검색", &FindText, None),
                     ),
             )
             .child(

@@ -424,17 +424,7 @@ pub(crate) fn diff_entries(
     }
     let old_mode = old_entry.map(|entry| entry.mode.as_str());
     let new_mode = new_entry.map(|entry| entry.mode.as_str());
-    if old_mode != new_mode
-        && (document.patch.is_empty() || old_mode.is_some() && new_mode.is_some())
-    {
-        document.patch = format!(
-            "File mode: {} → {}\n{}",
-            old_mode.unwrap_or("absent"),
-            new_mode.unwrap_or("absent"),
-            document.patch
-        );
-        document.lines = text::parse_patch(&document.patch);
-    }
+    text::prepend_mode_change(&mut document, old_mode, new_mode);
     Ok(document)
 }
 

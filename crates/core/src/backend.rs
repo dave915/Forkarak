@@ -24,6 +24,20 @@ struct Capture {
     fingerprint: String,
 }
 
+fn trusts_filemode(root: &Path) -> Result<bool> {
+    let filemode = git::run(
+        root,
+        &[
+            "config".as_ref(),
+            "--bool".as_ref(),
+            "--get".as_ref(),
+            "core.filemode".as_ref(),
+        ],
+        256,
+    )?;
+    Ok(!filemode.success || git::line(&filemode.bytes)? != "false")
+}
+
 impl Capture {
     fn read(root: &Path, extra: &Tree) -> Result<Self> {
         let head = git::head(root)?;
@@ -32,17 +46,7 @@ impl Capture {
         let untracked = git::untracked(root)?;
         let sha256 =
             git::line(&git::words(root, &["rev-parse", "--show-object-format"])?)? == "sha256";
-        let filemode = git::run(
-            root,
-            &[
-                "config".as_ref(),
-                "--bool".as_ref(),
-                "--get".as_ref(),
-                "core.filemode".as_ref(),
-            ],
-            256,
-        )?;
-        let filemode = !filemode.success || git::line(&filemode.bytes)? != "false";
+        let filemode = trusts_filemode(root)?;
         let listed = index
             .keys()
             .cloned()
@@ -258,10 +262,14 @@ fn snapshot_inner(path: &Path, compare: &CompareMode, scope: SnapshotScope) -> R
     if scope != SnapshotScope::CurrentInventory {
         let mut batch = git::BlobBatch::new(&root);
         for change in &mut changes {
-            let (old, new) =
-                comparison_bytes(&root, change, &base_tree, Some(&capture), |entry| {
-                    batch.read(entry)
-                })?;
+            let (old, new) = comparison_bytes(
+                &root,
+                change,
+                &base_tree,
+                Some(&capture),
+                filesystem::open(&root, &change.path)?,
+                |entry| batch.read(entry),
+            )?;
             text::set_statistics(change, old, new);
         }
     }
@@ -349,7 +357,16 @@ pub(crate) fn diff(root: &Path, file: &ChangedFile, compare: &CompareMode) -> Re
     let head = git::head(&root)?;
     let baseline = git::baseline(&root, compare, head.as_deref())?;
     let baseline = git::tree(&root, baseline.as_deref())?;
-    let (old, new) = comparison_bytes(&root, &file, &baseline, None, |entry| {
+    let node = filesystem::open(&root, &file.path)?;
+    let new_mode = working_mode(
+        &node,
+        &root,
+        &file.path,
+        &baseline,
+        head.as_deref(),
+        compare,
+    )?;
+    let (old, new) = comparison_bytes(&root, &file, &baseline, None, node, |entry| {
         git::blob(&root, entry)
     })?;
     let mut document = DiffDocument {
@@ -357,8 +374,60 @@ pub(crate) fn diff(root: &Path, file: &ChangedFile, compare: &CompareMode) -> Re
         old_path: file.old_path.clone(),
         ..DiffDocument::default()
     };
+    let old_mode = baseline
+        .get(file.old_path.as_ref().unwrap_or(&file.path))
+        .map(|e| e.mode.as_str());
+
+    let same_bytes = !old.1 && !new.1 && old.0 == new.0;
     text::render(&mut document, old, new);
+    if old_mode != new_mode.as_deref() {
+        if same_bytes && document.binary {
+            document.patch.clear();
+        }
+        text::prepend_mode_change(&mut document, old_mode, new_mode.as_deref());
+    }
     Ok(document)
+}
+
+fn working_mode(
+    node: &Node,
+    root: &Path,
+    path: &Path,
+    baseline: &Tree,
+    head: Option<&str>,
+    compare: &CompareMode,
+) -> Result<Option<String>> {
+    match node {
+        Node::Missing => Ok(None),
+        Node::Link(_) => Ok(Some("120000".into())),
+        Node::Directory => Ok(git::index(root)?
+            .get(path)
+            .and_then(|s| s.get(&0))
+            .filter(|e| e.mode == "160000")
+            .map(|e| e.mode.clone())),
+        Node::File(file) => {
+            let mode = if trusts_filemode(root)? {
+                filesystem::regular_mode(&file.metadata()?)
+            } else {
+                let index = git::index(root)?;
+                let head_tree;
+                let tracked = if let Some(entry) = index.get(path).and_then(|s| s.get(&0)) {
+                    Some(entry)
+                } else if matches!(compare, CompareMode::Uncommitted) {
+                    baseline.get(path)
+                } else {
+                    head_tree = git::tree(root, head)?;
+                    head_tree.get(path)
+                };
+                if tracked.is_some_and(|entry| entry.mode == "100755") {
+                    "100755"
+                } else {
+                    "100644"
+                }
+            };
+            Ok(Some(mode.into()))
+        }
+    }
 }
 
 type PreviewBytes = (Vec<u8>, bool);
@@ -368,6 +437,7 @@ fn comparison_bytes(
     file: &ChangedFile,
     baseline: &Tree,
     capture: Option<&Capture>,
+    node: Node,
     mut read_blob: impl FnMut(&Entry) -> Result<PreviewBytes>,
 ) -> Result<(PreviewBytes, PreviewBytes)> {
     let old = baseline
@@ -377,6 +447,7 @@ fn comparison_bytes(
     let new = working_preview(
         root,
         &file.path,
+        node,
         capture.map(|c| &c.index),
         capture.map(|c| c.normalized.contains(&file.path)),
     )?;
@@ -397,10 +468,11 @@ fn comparison_bytes(
 fn working_preview(
     root: &Path,
     path: &Path,
+    node: Node,
     index: Option<&Index>,
     normalized: Option<bool>,
 ) -> Result<Option<(Vec<u8>, bool)>> {
-    match filesystem::open(root, path)? {
+    match node {
         Node::Missing => Ok(None),
         Node::Link(target) => Ok(Some((target, false))),
         Node::Directory => {
@@ -571,6 +643,7 @@ fn detect_renames(
                 && let Some(bytes) = working_preview(
                     root,
                     &changes[i].path,
+                    filesystem::open(root, &changes[i].path)?,
                     Some(index),
                     Some(normalized.contains(&changes[i].path)),
                 )?

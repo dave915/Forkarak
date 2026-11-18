@@ -108,6 +108,21 @@ pub struct DiffDocument {
     pub truncated: bool,
 }
 
+impl DiffLine {
+    pub fn is_file_mode_change(&self) -> bool {
+        self.kind == DiffKind::Header && self.text.starts_with("File mode: ")
+    }
+}
+
+impl DiffDocument {
+    pub fn file_mode_header(&self) -> Option<&str> {
+        self.lines
+            .first()
+            .filter(|line| line.is_file_mode_change())
+            .map(|line| line.text.as_str())
+    }
+}
+
 /// Zero-based line and UTF-16 column. Absolute path for navigation/search hits.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SourceLocation {

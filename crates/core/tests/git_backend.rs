@@ -1459,10 +1459,32 @@ fn sha256_repository_and_executable_mode_changes() {
     let snap = repo.snap();
     assert_eq!(snap.changes.len(), 1);
     assert!(change(&snap, "src/code.rs").unstaged);
+    let working_diff = || {
+        let snap = repo.snap();
+        diff(
+            &repo.root,
+            change(&snap, "src/code.rs"),
+            &CompareMode::Uncommitted,
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        working_diff().file_mode_header(),
+        Some("File mode: 100644 → 100755")
+    );
     repo.git(&["config", "core.filemode", "false"]);
     assert!(repo.snap().changes.is_empty());
     repo.write("src/code.rs", "modified\n");
     assert_eq!(repo.snap().changes.len(), 1);
+    assert!(working_diff().file_mode_header().is_none());
+    repo.git(&["update-index", "--chmod=+x", "--", "src/code.rs"]);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let staged_mode = working_diff();
+    assert_eq!(
+        staged_mode.file_mode_header(),
+        Some("File mode: 100644 → 100755")
+    );
+    assert!(staged_mode.patch.contains("+modified"));
 }
 
 #[test]

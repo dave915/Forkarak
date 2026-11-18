@@ -116,6 +116,24 @@ pub(crate) fn render(document: &mut DiffDocument, old: (Vec<u8>, bool), new: (Ve
     document.lines = parse_patch(&document.patch);
 }
 
+pub(crate) fn prepend_mode_change(
+    document: &mut DiffDocument,
+    old_mode: Option<&str>,
+    new_mode: Option<&str>,
+) {
+    if old_mode != new_mode
+        && (document.patch.is_empty() || old_mode.is_some() && new_mode.is_some())
+    {
+        document.patch = format!(
+            "File mode: {} → {}\n{}",
+            old_mode.unwrap_or("absent"),
+            new_mode.unwrap_or("absent"),
+            document.patch
+        );
+        document.lines = parse_patch(&document.patch);
+    }
+}
+
 pub(crate) fn parse_patch(patch: &str) -> Vec<DiffLine> {
     let mut old = 0;
     let mut new = 0;

@@ -151,6 +151,14 @@ impl BlobHash {
     }
 }
 
+pub(crate) fn regular_mode(metadata: &std::fs::Metadata) -> &'static str {
+    if metadata.permissions().mode() & 0o100 != 0 {
+        "100755"
+    } else {
+        "100644"
+    }
+}
+
 pub(crate) fn inspect(
     root: &Path,
     path: &Path,
@@ -196,8 +204,8 @@ pub(crate) fn inspect(
                 "{} changed while reading; refresh and retry",
                 path.display()
             );
-            let mode = if filemode && metadata.permissions().mode() & 0o111 != 0 {
-                "100755"
+            let mode = if filemode {
+                regular_mode(&metadata)
             } else {
                 "100644"
             };

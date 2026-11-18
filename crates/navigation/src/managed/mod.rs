@@ -242,6 +242,29 @@ fn failure_summary(phase: &InstallPhase) -> &'static str {
     }
 }
 
+// Legacy attempts have no response headers. Only recover an HTTP code that
+// curl explicitly identified as a response, never its exit code or a URL digit.
+fn legacy_http_failure(detail: &str) -> Option<String> {
+    let status = detail.lines().rev().find_map(|line| {
+        let (_, curl) = line.split_once("curl: (")?;
+        let (exit, message) = curl.split_once(") ")?;
+        exit.parse::<u32>().ok()?;
+        let code = message
+            .strip_prefix("The requested URL returned error: ")?
+            .split_ascii_whitespace()
+            .next()?;
+        code.parse::<u16>()
+            .ok()
+            .filter(|n| code.len() == 3 && (400..=599).contains(n))
+    })?;
+    let summary = if status == 403 {
+        "다운로드 요청 거부"
+    } else {
+        "다운로드 실패"
+    };
+    Some(format!("{summary} · HTTP {status}"))
+}
+
 // Subprocesses and provider metadata can echo whole signed URLs or credentials.
 // Keep safe diagnostic lines, including the independently recorded exit/HTTP status.
 fn safe_diagnostic(detail: &str) -> String {
@@ -440,7 +463,8 @@ impl ManagedTools {
                 progress.message = if progress.phase == InstallPhase::Cancelled {
                     "설치를 취소했습니다.".into()
                 } else {
-                    failure_summary(&progress.phase).into()
+                    legacy_http_failure(&progress.message)
+                        .unwrap_or_else(|| failure_summary(&progress.phase).into())
                 };
             }
             progress.error = progress.error.map(|detail| {
@@ -936,17 +960,27 @@ mod tests {
         assert!(saved.message.contains("체크섬"));
         assert_eq!(saved.error.as_deref(), Some("Pinned checksum mismatch"));
 
-        saved.message = "Tool installer failed (Language server exited: exit code 22): curl failed\nhttps://user:pass@cdn.invalid/download?sig=PRIVATE".into();
+        saved.message = "Tool installer failed (Language server exited: exit code 22): curl failed\nhttps://user:pass@cdn.invalid/403?sig=PRIVATE".into();
         saved.error = Some(saved.message.clone());
         atomic_json(&path, &saved).unwrap();
         let old = fs::read(&path).unwrap();
         let loaded = tools.last_attempt("kotlin").unwrap().unwrap();
         assert!(loaded.message.contains("설치"));
+        assert!(!loaded.message.contains("403"));
         let detail = loaded.error.unwrap();
         assert!(detail.contains("exit code 22"));
         assert!(!detail.contains("PRIVATE"));
         assert!(!detail.contains("Language server exited"));
-        assert_eq!(fs::read(path).unwrap(), old);
+        assert_eq!(fs::read(&path).unwrap(), old);
+
+        saved.message = "Tool installer failed (Language server exited: exit code 56): curl: (56) The requested URL returned error: 403\nhttps://user:pass@cdn.invalid/download?sig=PRIVATE".into();
+        saved.error = Some(saved.message.clone());
+        atomic_json(&path, &saved).unwrap();
+        let loaded = tools.last_attempt("kotlin").unwrap().unwrap();
+        assert_eq!(loaded.message, "다운로드 요청 거부 · HTTP 403");
+        let detail = loaded.error.unwrap();
+        assert!(detail.contains("curl: (56) The requested URL returned error: 403"));
+        assert!(!detail.contains("PRIVATE"));
     }
     #[test]
     fn bundle_requires_internal_resources_and_preserves_distribution() {

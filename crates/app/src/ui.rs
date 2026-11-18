@@ -193,6 +193,7 @@ fn app_menus(keyboard: keyboard::Keyboard) -> [Menu; 6] {
             MenuItem::action("워크트리 터미널 표시 / 숨기기", OpenWorktreeTerminal),
             MenuItem::action("새로고침", Refresh),
             MenuItem::action("파일 저장", SaveCodeFile),
+            MenuItem::action("모두 저장", editor_tools::SaveAll),
             MenuItem::action("Stash / 충돌 해결…", OpenGitWorkflow),
             MenuItem::separator(),
             MenuItem::action("파일 닫기", CloseFile),
@@ -219,6 +220,8 @@ fn app_menus(keyboard: keyboard::Keyboard) -> [Menu; 6] {
             MenuItem::action("긴 줄 화면 줄바꿈", editor_tools::ToggleWordWrap),
             MenuItem::action("미리보기 탭 고정", editor_tools::PinTab),
             MenuItem::action("파일 포맷", editor_tools::FormatFile),
+            MenuItem::action("이름 바꾸기…", editor_tools::RenameSymbol),
+            MenuItem::action("빠른 수정…", editor_tools::QuickFix),
             MenuItem::action("자동완성", language_tools::Complete),
             MenuItem::action("오류 확인", language_tools::Diagnostics),
             MenuItem::action("함수 도움말", language_tools::Signature),
@@ -2284,6 +2287,8 @@ impl Pokarak {
         } else if code {
             if let Some(editor) = editor {
                 let clicked_editor = editor.clone();
+                let menu_owner = cx.weak_entity();
+                let menu_editor = editor.clone();
                 self.with_inline_blame(
                     &editor,
                     div()
@@ -2310,10 +2315,21 @@ impl Pokarak {
                         ))
                         .child(
                             Editor::new(&editor)
+                                .when(editing && !deleted, |ed| {
+                                    ed.context_menu(move |menu, _, cx| {
+                                        let Some(owner) = menu_owner.upgrade() else {
+                                            return menu;
+                                        };
+                                        owner.update(cx, |app, cx| {
+                                            app.editor_context_menu(menu, &menu_editor, cx)
+                                        })
+                                    })
+                                })
                                 .readonly(!editing)
                                 .bordered(false)
                                 .h(relative(1.)),
                         )
+                        .children(self.diagnostic_bulbs(&editor, cx))
                         .into_any_element(),
                     cx,
                 )
@@ -2586,6 +2602,9 @@ impl Render for Pokarak {
         #[cfg(target_os = "macos")]
         let body = self.with_terminal_dock(body, window);
         let body = self.with_execution_manager(body, window, cx);
+        let trust_root = self.current.clone();
+        let batch_status = self.workspace_edit_status(cx);
+        let has_batch = batch_status.is_some();
         let root = editor_tools::actions(self, div().id("pokarak"), cx);
         let root = language_tools::actions(self, root, cx);
         #[cfg(target_os = "macos")]
@@ -2654,7 +2673,7 @@ impl Render for Pokarak {
                 .child(div().font_weight(FontWeight::MEDIUM).child("이 워크트리에서 코드 분석을 시작할까요?"))
                 .child(div().text_size(ui_text(12.)).text_color(palette.rgb(MUTED)).child("언어 서버가 Gradle/Maven 설정을 읽거나 실행할 수 있습니다. 신뢰하는 프로젝트에서만 시작하세요. 파일과 diff는 분석 없이도 읽을 수 있습니다."))
                 .child(div().flex().gap_2()
-                    .child(Button::new("trust-start").label("신뢰하고 분석 허용").small().on_click(cx.listener(|this,_,w,cx|this.approve_analysis_prompt(w,cx))))
+                    .child(Button::new("trust-start").label("신뢰하고 분석 허용").small().on_click(cx.listener(move |this,_,w,cx|{ if this.trust_prompt && this.current == trust_root { this.approve_analysis_prompt(w,cx) } })))
                     .child(Button::new("trust-cancel").label("파일만 보기").ghost().small().on_click(cx.listener(|this,_,_,cx|this.cancel_analysis_prompt(cx)))))))
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
             .children(self.language_bottom_panel(cx))
@@ -2665,11 +2684,12 @@ impl Render for Pokarak {
             .children(self.language_popover(window, cx))
             .child(div().h(ui_px(27.)).flex_none().px_3().flex().items_center().gap_4().border_t_1().border_color(palette.rgb(LINE)).bg(palette.rgb(SIDE)).text_size(ui_text(11.)).text_color(palette.rgb(MUTED))
                 .child(context)
+                .children(batch_status)
                 .when(self.current.is_some(), |row| row.child(self.git_sync_button(cx)))
                 // An empty Output panel has nothing to show; keep the bar quiet.
                 .when(self.analysis_feedback.has_output(), |row| row.child(self.output_button("status-output", cx)))
                 .child(div().max_w(ui_px(400.)).min_w_0().text_ellipsis().child(keycaps::explanation(&self.git_running_status().unwrap_or_else(|| self.status.clone()), &self.prefs, self.current_project.as_deref(), palette)))
-                .when(!narrow || self.current.is_none(), |row| row.child(keycaps::explanation(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의·사용처  /  ⌘B 정의  /  ⌥F7 사용처" }, &self.prefs, self.current_project.as_deref(), palette))))
+                .when(!has_batch && (!narrow || self.current.is_none()), |row| row.child(keycaps::explanation(if self.current.is_none() { "⌘O 프로젝트 열기" } else if self.git_history.active { "⌘⌥H Git 그래프  /  ⌘P 파일 찾기" } else { "⌘클릭 정의·사용처  /  ⌘B 정의  /  ⌥F7 사용처" }, &self.prefs, self.current_project.as_deref(), palette))))
     }
 }
 

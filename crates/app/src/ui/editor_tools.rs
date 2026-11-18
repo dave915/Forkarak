@@ -2,7 +2,7 @@
 mod changes;
 mod edit;
 mod files;
-mod formatter;
+pub(in crate::ui) mod formatter;
 mod indent;
 mod palette;
 mod shortcuts;
@@ -80,6 +80,11 @@ pub(super) fn actions(
                 && !app.git_is_busy(),
             |root| {
                 root.on_action(cx.listener(|a, _: &ManageFiles, w, cx| a.open_file_tools(w, cx)))
+                    .on_action(cx.listener(|a, _: &SaveAll, w, cx| {
+                        if !w.has_active_dialog(cx) {
+                            a.save_all_code_files(w, cx);
+                        }
+                    }))
             },
         )
         .when(code, |root| {

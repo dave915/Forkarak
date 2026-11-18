@@ -2,6 +2,7 @@ use super::*;
 use gpui_kit::component::input::{Enter, Escape, MoveDown, MoveUp};
 
 mod completion;
+mod edits;
 mod signature;
 pub(super) use completion::resolved_candidate;
 
@@ -9,7 +10,11 @@ impl Panel {
     pub(super) fn is_caret_popup(&self) -> bool {
         matches!(
             self.value,
-            Reply::Complete(_) | Reply::Signature(_) | Reply::Hover(_)
+            Reply::Complete(_)
+                | Reply::Signature(_)
+                | Reply::Hover(_)
+                | Reply::RenameInput(..)
+                | Reply::Actions(..)
         )
     }
 }
@@ -17,6 +22,7 @@ impl Panel {
 impl LanguageTools {
     pub(super) fn dismiss_panel(&mut self) {
         self.on_type_task = None;
+        self.rename_input = None;
         if self.panel.take().is_some_and(|p| p.is_caret_popup()) {
             self.documentation_request = self.documentation_request.wrapping_add(1);
             // Invalidate in-flight or debounced popup requests, even at the same caret.
@@ -42,13 +48,45 @@ enum PopupKey {
 
 #[derive(Debug, PartialEq, Eq)]
 enum PopupCommand {
+    Stay,
     Dismiss,
     Accept,
     Select(usize),
 }
 
 impl PopupKey {
+    fn action_command(
+        self,
+        cursor: usize,
+        count: usize,
+        enabled: impl Fn(usize) -> bool,
+    ) -> PopupCommand {
+        match self {
+            Self::Escape => PopupCommand::Dismiss,
+            Self::Enter if cursor < count && enabled(cursor) => PopupCommand::Accept,
+            Self::Up => (0..cursor.min(count))
+                .rev()
+                .find(|i| enabled(*i))
+                .map_or(PopupCommand::Stay, PopupCommand::Select),
+            Self::Down => (cursor.saturating_add(1)..count)
+                .find(|i| enabled(*i))
+                .map_or(PopupCommand::Stay, PopupCommand::Select),
+            Self::Enter => PopupCommand::Stay,
+        }
+    }
     fn command(self, value: &Reply, cursor: usize) -> Option<PopupCommand> {
+        if let Reply::Actions(actions, _) = value {
+            return Some(self.action_command(cursor, actions.items.len(), |i| {
+                actions.items[i].disabled.is_none()
+            }));
+        }
+        if matches!(value, Reply::RenameInput(..)) {
+            return match self {
+                Self::Escape => Some(PopupCommand::Dismiss),
+                Self::Enter => Some(PopupCommand::Accept),
+                _ => None,
+            };
+        }
         let count = match value {
             Reply::Complete(result) => result.items.len(),
             Reply::Signature(Some(help)) => help.signatures.len(),
@@ -117,14 +155,24 @@ impl Pokarak {
             && state.cursor() == id.cursor
             && state.selected_range() == id.selection
             && window.is_window_active()
-            && state.focus_handle(cx).is_focused(window))
+            && (state.focus_handle(cx).is_focused(window)
+                || (matches!(panel.value, Reply::RenameInput(..))
+                    && self
+                        .language_tools
+                        .rename_input
+                        .as_ref()
+                        .is_some_and(|i| i.read(cx).focus_handle(cx).is_focused(window)))))
         .then_some(editor)
     }
 
     fn popup_space(&self, window: &Window, cx: &App) -> Option<PopupSpace> {
         let editor = self.popup_editor(window, cx)?;
         let editor = editor.read(cx);
-        let caret = editor.range_to_bounds(&(editor.cursor()..editor.cursor()))?;
+        let anchor = match &self.language_tools.panel.as_ref()?.value {
+            Reply::RenameInput(range, _) => offset(editor.text(), range.start)?,
+            _ => editor.cursor(),
+        };
+        let caret = editor.range_to_bounds(&(anchor..anchor))?;
         let input = editor.input_bounds();
         if !input.contains(&caret.center())
             || caret.left() < input.left() + editor.text_origin_offset()?
@@ -135,23 +183,27 @@ impl Pokarak {
     }
 
     fn popup_key(&mut self, key: PopupKey, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(command) = self
-            .language_tools
-            .panel
-            .as_ref()
-            .and_then(|p| key.command(&p.value, p.cursor))
-        else {
+        let Some(panel) = self.language_tools.panel.as_ref() else {
             return;
         };
-        if self.popup_space(window, cx).is_none() {
+        let Some(command) = key.command(&panel.value, panel.cursor) else {
+            return;
+        };
+        if self.popup_space(window, cx).is_none() && !matches!(command, PopupCommand::Dismiss) {
             return;
         }
         match command {
+            PopupCommand::Stay => {}
             PopupCommand::Dismiss => {
-                self.language_tools.dismiss_panel();
-                cx.notify();
+                self.dismiss_language(window, cx);
             }
-            PopupCommand::Accept => self.apply_completion(window, cx),
+            PopupCommand::Accept => match &panel.value {
+                Reply::RenameInput(..) => self.submit_rename(window, cx),
+                Reply::Actions(..) => {
+                    self.pick_code_action(self.language_tools.request, panel.cursor, window, cx);
+                }
+                _ => self.apply_completion(window, cx),
+            },
             PopupCommand::Select(index) => self.select_popup_item(index, window, cx),
         }
         cx.stop_propagation();
@@ -165,6 +217,11 @@ impl Pokarak {
             return;
         }
         panel.cursor = index;
+        if let Reply::Actions(actions, _) = &panel.value {
+            self.language_tools
+                .scroll
+                .scroll_to_item(actions.row_for(index), ScrollStrategy::Nearest);
+        }
         if matches!(panel.value, Reply::Complete(_)) {
             self.language_tools
                 .scroll
@@ -184,6 +241,10 @@ impl Pokarak {
                         let space = app.popup_space(window, cx)?;
                         let panel = app.language_tools.panel.as_ref()?;
                         let body = match &panel.value {
+                            Reply::RenameInput(..) => app.rename_popup(&space)?,
+                            Reply::Actions(actions, _) => {
+                                app.code_actions_popup(panel, actions, &space, cx)
+                            }
                             Reply::Complete(result) => {
                                 app.completion_popup(panel, result, &space, cx)
                             }
@@ -197,7 +258,9 @@ impl Pokarak {
                         let element = div()
                             .id("caret-language-popup")
                             .occlude()
-                            .on_any_mouse_down(|_, w, _| w.prevent_default())
+                            .when(!matches!(panel.value, Reply::RenameInput(..)), |d| {
+                                d.on_any_mouse_down(|_, w, _| w.prevent_default())
+                            })
                             .on_scroll(|_, _, cx| cx.stop_propagation())
                             .on_mouse_down_out(cx.listener(|app, _, _, cx| {
                                 if app
@@ -222,7 +285,11 @@ impl Pokarak {
                             .overflow_hidden()
                             .child(body)
                             .into_any_element();
-                        Some((space, !matches!(panel.value, Reply::Complete(_)), element))
+                        Some((
+                            space,
+                            matches!(panel.value, Reply::Signature(_) | Reply::Hover(_)),
+                            element,
+                        ))
                     })?;
                     let measured = element.layout_as_root(AvailableSpace::min_size(), window, cx);
                     element.prepaint_at(space.origin(measured, above), window, cx);
@@ -392,6 +459,43 @@ mod tests {
         let full_height = size(short.width, short.max_height());
         assert_eq!(short.origin(full_height, false).y, px(6.));
         assert!(PopupSpace::new(Bounds::default(), size(px(20.), px(20.))).is_none());
+    }
+
+    #[test]
+    fn quick_fix_keyboard_skips_disabled_actions_and_never_edits_source_at_list_boundaries() {
+        let enabled = |index| matches!(index, 0 | 2);
+        assert_eq!(
+            PopupKey::Down.action_command(0, 4, enabled),
+            PopupCommand::Select(2)
+        );
+        assert_eq!(
+            PopupKey::Up.action_command(2, 4, enabled),
+            PopupCommand::Select(0)
+        );
+        assert_eq!(
+            PopupKey::Up.action_command(0, 4, enabled),
+            PopupCommand::Stay
+        );
+        assert_eq!(
+            PopupKey::Down.action_command(2, 4, enabled),
+            PopupCommand::Stay
+        );
+        assert_eq!(
+            PopupKey::Enter.action_command(1, 4, enabled),
+            PopupCommand::Stay
+        );
+        assert_eq!(
+            PopupKey::Enter.action_command(0, 0, |_| true),
+            PopupCommand::Stay
+        );
+        assert_eq!(
+            PopupKey::Enter.action_command(2, 4, enabled),
+            PopupCommand::Accept
+        );
+        assert_eq!(
+            PopupKey::Escape.action_command(0, 0, enabled),
+            PopupCommand::Dismiss
+        );
     }
 
     #[test]

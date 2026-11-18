@@ -51,6 +51,8 @@ pub(super) enum Command {
     Definition,
     References,
     Implementation,
+    RenameSymbol,
+    QuickFix,
     Complete,
     Diagnostics,
     Symbols,
@@ -188,6 +190,10 @@ impl Pokarak {
             Implementation => {
                 self.request_navigation(NavigationKind::Implementation, None, window, cx)
             }
+            RenameSymbol => {
+                self.request_language(language_tools::Tool::PrepareRename, None, window, cx)
+            }
+            QuickFix => self.request_language(language_tools::Tool::QuickFix, None, window, cx),
             Complete | Diagnostics | Symbols | Signature | Hover => {
                 let tool = match action.command {
                     Complete => language_tools::Tool::Complete,
@@ -271,6 +277,19 @@ impl Pokarak {
         let ready = self.code_support_available(cx);
         let navigation = ready && !self.navigating;
         let mut menu = NativeMenu::new();
+        for (label, id, command) in [
+            ("이름 바꾸기…", "rename_symbol", Command::RenameSymbol),
+            ("빠른 수정…", "quick_fix", Command::QuickFix),
+        ] {
+            menu = identity.item(
+                menu,
+                keycaps::command_label(label, id, &self.prefs, self.current_project.as_deref()),
+                command,
+                !ready,
+                false,
+            );
+        }
+        menu = menu.separator();
         for (label, command) in [
             ("자동완성  ⌃Space", Command::Complete),
             ("오류 확인", Command::Diagnostics),

@@ -8,14 +8,15 @@ mod real;
 #[cfg(test)]
 mod tests;
 mod views;
+mod workspace;
 use super::*;
 use code_edit::FileKey;
 use gpui_kit::component::input::{GutterDecoration, GutterDecorationCollection};
 use model::*;
 pub(super) use model::{Identity as RequestIdentity, configs as formatter_configs};
 use pokarak_navigation::{
-    CompletionItem, Diagnostic, DocumentSnapshot, DocumentSymbol, FormattingOptions, HoverResult,
-    Position as LspPosition, SignatureHelp, TextEdit, TextRange,
+    CodeAction, CompletionItem, Diagnostic, DocumentSnapshot, DocumentSymbol, FormattingOptions,
+    HoverResult, Position as LspPosition, SignatureHelp, TextEdit, TextRange, WorkspaceEdit,
 };
 
 actions!(
@@ -25,6 +26,10 @@ actions!(
 
 #[derive(Clone, Debug)]
 pub(super) enum Tool {
+    PrepareRename,
+    Rename(String),
+    QuickFix,
+    Resolve(Arc<CodeAction>),
     Complete,
     Diagnostics,
     Symbols,
@@ -37,6 +42,8 @@ pub(super) enum Tool {
 impl Tool {
     pub(super) fn title(&self) -> &'static str {
         match self {
+            Self::PrepareRename | Self::Rename(_) => "이름 바꾸기",
+            Self::QuickFix | Self::Resolve(_) => "빠른 수정",
             Self::Complete => "자동완성",
             Self::Diagnostics => "오류 확인",
             Self::Symbols => "파일 구조",
@@ -51,6 +58,9 @@ impl Tool {
     }
 }
 enum Reply {
+    RenameInput(TextRange, String),
+    Actions(workspace::GroupedActions, Vec<Diagnostic>),
+    Workspace(WorkspaceEdit),
     Complete(pokarak_navigation::CompletionResult),
     Diagnostics(Vec<Diagnostic>),
     Symbols(Vec<DocumentSymbol>),
@@ -93,7 +103,9 @@ pub(super) struct LanguageTools {
     markers: Option<(Entity<EditorState>, GutterDecorationCollection)>,
     retry: Option<Tool>,
     result_sources: HashMap<PathBuf, DocumentSnapshot>,
-    trust_symbol: Option<PendingSymbolRequest>,
+    trust_request: Option<PendingAnalysis>,
+    rename_input: Option<Entity<InputState>>,
+    diagnostics: Option<(Identity, Vec<Diagnostic>)>,
 }
 
 pub(super) fn bind_keys(cx: &mut App) {
@@ -113,6 +125,13 @@ pub(super) fn actions(
         root.on_action(
             cx.listener(|a, _: &Complete, w, cx| a.request_language(Tool::Complete, None, w, cx)),
         )
+        .on_action(cx.listener(|a, action: &workspace::EditAt, w, cx| a.edit_at(action, w, cx)))
+        .on_action(cx.listener(|a, _: &editor_tools::RenameSymbol, w, cx| {
+            a.request_language(Tool::PrepareRename, None, w, cx)
+        }))
+        .on_action(cx.listener(|a, _: &editor_tools::QuickFix, w, cx| {
+            a.request_language(Tool::QuickFix, None, w, cx)
+        }))
         .on_action(cx.listener(|a, _: &FindImplementation, w, cx| {
             a.request_navigation(NavigationKind::Implementation, None, w, cx)
         }))
@@ -131,7 +150,7 @@ pub(super) fn actions(
 }
 
 impl Pokarak {
-    fn language_settings(&self) -> serde_json::Value {
+    pub(super) fn language_settings(&self) -> serde_json::Value {
         let preferences = serde_json::Value::Array(
             [
                 "language.servers",
@@ -206,12 +225,16 @@ impl Pokarak {
             snapshot.invalidate();
         }
         self.language_tools.pending = None;
-        self.language_tools.trust_symbol = None;
+        if self.language_tools.trust_request.take().is_some() {
+            self.trust_prompt = false;
+        }
         self.language_tools.panel = None;
+        self.language_tools.rename_input = None;
         self.navigating = false;
         self.clear_language_markers(cx);
     }
     fn clear_language_markers(&mut self, cx: &mut Context<Self>) {
+        self.language_tools.diagnostics = None;
         if let Some((editor, collection)) = self.language_tools.markers.take() {
             collection.dispose(cx);
             editor.update(cx, |e, cx| {
@@ -257,23 +280,28 @@ impl Pokarak {
                     {
                         return;
                     }
-                    let changed = a
+                    let changed = a.language_tools.snapshots.get(&observed).is_some_and(|s| {
+                        s.is_current() && s.text() != editor.read(cx).value().as_ref()
+                    }) || a
                         .language_tools
-                        .snapshots
-                        .get(&observed)
-                        .is_some_and(|s| s.text() != editor.read(cx).value().as_ref())
-                        || a.language_tools
-                            .result_sources
-                            .get(&observed.root.join(&observed.path))
-                            .is_some_and(|s| s.text() != editor.read(cx).value().as_ref());
+                        .result_sources
+                        .get(&observed.root.join(&observed.path))
+                        .is_some_and(|s| {
+                            s.is_current() && s.text() != editor.read(cx).value().as_ref()
+                        });
                     if changed {
-                        if let Some(snapshot) = a.language_tools.snapshots.remove(&observed) {
+                        if let Some(snapshot) = a.language_tools.snapshots.get(&observed) {
                             snapshot.invalidate();
+                        }
+                        if a.current.as_ref() != Some(&observed.root) {
+                            return;
                         }
                         // A sibling dirty buffer is context for this request as well.
                         a.language_tools.request = a.language_tools.request.wrapping_add(1);
                         a.language_tools.pending = None;
-                        a.language_tools.trust_symbol = None;
+                        if a.language_tools.trust_request.take().is_some() {
+                            a.trust_prompt = false;
+                        }
                         a.language_tools.panel = None;
                         if a.result_semantic && a.results_root.as_ref() == Some(&observed.root) {
                             a.results_open = false;
@@ -293,7 +321,11 @@ impl Pokarak {
             }
         }
     }
-    fn snapshot_for(&mut self, key: &FileKey, text: String) -> Result<DocumentSnapshot, String> {
+    pub(super) fn snapshot_for(
+        &mut self,
+        key: &FileKey,
+        text: String,
+    ) -> Result<DocumentSnapshot, String> {
         if let Some(s) = self
             .language_tools
             .snapshots
@@ -367,7 +399,13 @@ impl Pokarak {
         {
             // Explicit Continue may follow a new installation. The old
             // Navigator's immutable defaults must not survive that change.
+            let edit_approved = self.navigation.is_some()
+                && self.language_trusted()
+                && matches!(tool, Tool::PrepareRename | Tool::QuickFix);
             self.stop_analysis(cx);
+            if edit_approved {
+                self.enable_analysis(cx);
+            }
             self.request_language(tool, requested, window, cx);
         } else {
             self.status =
@@ -614,28 +652,33 @@ impl Pokarak {
     pub(super) fn approve_analysis_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The button is the approval boundary. Construction before this point
         // never grants trust, launches a server or imports a Java project.
-        let pending = self.language_tools.trust_symbol.take();
-        self.enable_analysis(cx);
-        if self.navigation.is_none() {
-            return;
-        }
-        if let Some(pending) = pending {
+        let pending = self.language_tools.trust_request.take();
+        let resume = if let Some(pending) = pending {
             let current = self.language_identity(cx).ok();
-            if let Some(position) = pending.resume(current.as_ref()) {
-                self.request_language(Tool::Symbol, Some(position), window, cx);
-            } else {
-                self.status = "선택 또는 소스가 변경되어 처음 클릭한 심볼 요청을 취소했습니다. 원하는 심볼을 다시 ⌘클릭하세요.".into();
-                cx.notify();
-            }
+            let Some(request) = pending.resume(current.as_ref()) else {
+                self.cancel_analysis_prompt(cx);
+                self.status =
+                    "선택 또는 소스가 변경되었습니다. 원하는 위치에서 다시 요청하세요.".into();
+                return;
+            };
+            Some(request)
+        } else {
+            None
+        };
+        self.enable_analysis(cx);
+        if self.navigation.is_some()
+            && let Some((tool, position)) = resume
+        {
+            self.request_language(tool, position, window, cx);
         }
     }
     pub(super) fn cancel_analysis_prompt(&mut self, cx: &mut Context<Self>) {
-        self.language_tools.trust_symbol = None;
+        self.language_tools.trust_request = None;
         self.trust_prompt = false;
         cx.notify();
     }
     pub(super) fn show_explicit_analysis_prompt(&mut self) {
-        self.language_tools.trust_symbol = None;
+        self.language_tools.trust_request = None;
         self.trust_prompt = true;
     }
     pub(super) fn request_language(
@@ -648,7 +691,7 @@ impl Pokarak {
         self.language_tools.on_type_task = None;
         // Another explicit action replaces a waiting gesture. Approval takes
         // the pending request before returning through this ordinary dispatcher.
-        self.language_tools.trust_symbol = None;
+        self.language_tools.trust_request = None;
         if window.has_active_dialog(cx) || self.git_is_busy() || self.active_worktree_has_git_job()
         {
             return;
@@ -698,18 +741,30 @@ impl Pokarak {
             cx.notify();
             return;
         }
+        if matches!(tool, Tool::PrepareRename | Tool::QuickFix)
+            && (self.navigation.is_none() || !self.language_trusted())
+        {
+            if let Ok(identity) = self.language_identity(cx) {
+                self.language_tools.trust_request = Some(PendingAnalysis::Edit(identity, tool));
+                self.trust_prompt = true;
+                self.status = "이 워크트리의 분석을 허용하면 요청을 계속합니다.".into();
+                cx.notify();
+            }
+            return;
+        }
         if !self.extension_tool_for(&tool, &key.path)
             && self.prepare_managed_language_request(tool.clone(), requested, window, cx)
         {
             return;
         }
         if !self.language_trusted() {
-            self.language_tools.trust_symbol = self
+            self.language_tools.trust_request = self
                 .language_identity(cx)
                 .ok()
-                .and_then(|identity| PendingSymbolRequest::remember(&tool, identity, requested));
+                .and_then(|identity| PendingSymbolRequest::remember(&tool, identity, requested))
+                .map(PendingAnalysis::Symbol);
             self.trust_prompt = true;
-            self.status = if self.language_tools.trust_symbol.is_some() {
+            self.status = if self.language_tools.trust_request.is_some() {
                 "이 워크트리의 분석을 허용하면 클릭한 심볼의 정의와 사용처를 찾습니다."
             } else {
                 "이 워크트리의 분석을 허용한 뒤 명령을 다시 실행하세요."
@@ -824,11 +879,15 @@ impl Pokarak {
         if matches!(tool, Tool::Navigate(_) | Tool::Symbol) {
             self.navigation_request += 1;
         }
+        // A fresh explicit request supersedes any open edit list or preview.
+        if !automatic {
+            self.language_tools.panel = None;
+        }
         let release: Vec<_> = self
             .language_tools
             .snapshots
             .values()
-            .filter(|s| !s.is_current())
+            .filter(|s| !s.is_current() && s.root() == identity.snapshot.root())
             .map(|s| s.path().to_owned())
             .collect();
         self.language_tools.request = self.language_tools.request.wrapping_add(1);
@@ -837,7 +896,11 @@ impl Pokarak {
         self.language_tools.pending = Some(tool.clone());
         self.navigating = matches!(tool, Tool::Navigate(_) | Tool::Symbol);
         if !automatic {
-            self.language_tools.retry = Some(tool.clone());
+            self.language_tools.retry = Some(match &tool {
+                Tool::Rename(_) => Tool::PrepareRename,
+                Tool::Resolve(_) => Tool::QuickFix,
+                other => other.clone(),
+            });
             self.status = format!("{} 요청 중…", tool.title());
         }
         let expected = identity.clone();
@@ -898,6 +961,16 @@ impl Pokarak {
                     cx.notify();
                     return;
                 }
+                if matches!(
+                    tool,
+                    Tool::PrepareRename | Tool::QuickFix | Tool::Rename(_) | Tool::Resolve(_)
+                ) && (window.has_active_dialog(cx)
+                    || a.git_is_busy()
+                    || a.active_worktree_has_git_job())
+                {
+                    cx.notify();
+                    return;
+                }
                 if automatic {
                     if !a.can_show_input_assistance(&identity.key, &editor, &tool, window, cx)
                         || matches!(&result, Err(_) | Ok(Reply::Signature(None)))
@@ -911,6 +984,10 @@ impl Pokarak {
                     a.analysis_feedback.append(&output);
                 }
                 match result {
+                    Ok(Reply::Workspace(edit)) => {
+                        a.error = None;
+                        a.present_workspace_edit(identity, tool, edit, window, cx);
+                    }
                     Ok(Reply::Format(edits)) => {
                         let result = TextEdit::apply_all(identity.snapshot.text(), &edits)
                             .map_err(|e| format!("{e:#}"))
@@ -977,8 +1054,9 @@ impl Pokarak {
                         a.show_symbol_navigation(result, anchor, window, cx);
                     }
                     Ok(value) => {
-                        if let Reply::Diagnostics(items) = &value {
+                        if let Reply::Diagnostics(items) | Reply::Actions(_, items) = &value {
                             a.install_language_diagnostics(items, cx);
+                            a.language_tools.diagnostics = Some((identity.clone(), items.clone()));
                         }
                         if !automatic {
                             a.error = None;
@@ -1247,6 +1325,48 @@ fn execute(
     }
     anyhow::ensure!(snapshot.is_current(), "요청한 소스가 변경되었습니다");
     Ok(match tool {
+        Tool::PrepareRename => {
+            let (range, name) = nav
+                .prepare_rename_buffer(snapshot, position.line, position.character)?
+                .value
+                .ok_or_else(|| {
+                    anyhow::anyhow!("이 위치에서 이름을 바꿀 수 있는 심볼이 없습니다.")
+                })?;
+            Reply::RenameInput(range, name)
+        }
+        Tool::Rename(name) => Reply::Workspace(
+            nav.rename_buffer(snapshot, position.line, position.character, &name)?
+                .value,
+        ),
+        Tool::QuickFix => {
+            let capabilities = nav.capabilities_buffer(snapshot)?.value;
+            let provider = &capabilities["codeActionProvider"];
+            anyhow::ensure!(
+                provider == true || provider.is_object(),
+                "이 언어 서버는 빠른 수정을 지원하지 않습니다"
+            );
+            let diagnostics = nav
+                .diagnostics(snapshot)
+                .map(|r| r.value)
+                .unwrap_or_default();
+            anyhow::ensure!(snapshot.is_current(), "요청한 소스가 변경되었습니다");
+            let (range, context) = workspace::action_context(position, &diagnostics);
+            let actions = nav.code_actions_buffer(snapshot, range, &context)?.value;
+            Reply::Actions(workspace::GroupedActions::new(actions), diagnostics)
+        }
+        Tool::Resolve(action) => {
+            let action = nav.resolve_code_action_buffer(snapshot, &action)?.value;
+            anyhow::ensure!(
+                action.disabled.is_none(),
+                "{}",
+                action.disabled.as_deref().unwrap_or_default()
+            );
+            Reply::Workspace(
+                action
+                    .edit
+                    .ok_or_else(|| anyhow::anyhow!("이 항목에 적용할 수정이 없습니다."))?,
+            )
+        }
         Tool::Complete => Reply::Complete(
             nav.complete_buffer(snapshot, position.line, position.character)?
                 .value,

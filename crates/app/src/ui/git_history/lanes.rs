@@ -69,7 +69,10 @@ fn node_shape(track: usize, palette: Palette) -> (f32, bool) {
     } else {
         // Independent cues for neighboring hues and line crossings: round or
         // square, hollow or filled, always keyed by track rather than column.
-        (if track % 2 == 0 { 4. } else { 1. }, track % 4 >= 2)
+        (
+            if track.is_multiple_of(2) { 4. } else { 1. },
+            track % 4 >= 2,
+        )
     }
 }
 

@@ -164,6 +164,99 @@ mod tests {
     }
 
     #[test]
+    fn file_picker_preserves_enter_and_only_intercepts_its_presets_side_key() {
+        use super::OpenToSide;
+        use gpui_kit::base::input::Enter;
+        let picker = ["Pokarak", "ForkarakFileSearch", "Input"];
+        let text_search = ["Pokarak", "Input"];
+        let editor = ["Pokarak", "ForkarakCode", "Input"];
+        for (preset, side, other) in [
+            ("forkarak", "cmd-enter", "shift-enter"),
+            ("intellij", "shift-enter", "cmd-enter"),
+            ("vscode", "cmd-enter", "shift-enter"),
+        ] {
+            let mut prefs = Preferences::default();
+            prefs.set_option(None, "keyboard.preset", json!(preset));
+            let active = requests(&prefs, None);
+            let binding = active
+                .iter()
+                .find(|r| r.action.name() == OpenToSide.name())
+                .unwrap();
+            assert_eq!(binding.keys, side);
+
+            // GPUI's Input registers all three Enter variants before our keymap is installed.
+            let primary = Enter {
+                secondary: false,
+                shift: false,
+            };
+            let mut map = Keymap::new(vec![
+                KeyBinding::new("enter", primary.clone(), Some("Input")),
+                KeyBinding::new(
+                    "cmd-enter",
+                    Enter {
+                        secondary: true,
+                        shift: false,
+                    },
+                    Some("Input"),
+                ),
+                KeyBinding::new(
+                    "shift-enter",
+                    Enter {
+                        secondary: false,
+                        shift: true,
+                    },
+                    Some("Input"),
+                ),
+            ]);
+            replace_managed(
+                &mut map,
+                vec![KeyBinding::new(side, OpenToSide, binding.context)],
+            );
+            assert_eq!(resolves(&map, "enter", &picker), [primary.name()]);
+            assert_eq!(
+                resolves(&map, side, &picker).first(),
+                Some(&OpenToSide.name())
+            );
+            assert_eq!(resolves(&map, other, &picker), [primary.name()]);
+            for input in [&text_search[..], &editor] {
+                assert_eq!(resolves(&map, side, input), [primary.name()]);
+            }
+        }
+    }
+
+    #[test]
+    fn move_to_other_uses_the_same_action_in_the_view_menu_and_custom_bindings() {
+        use super::{MoveToOther, app_menus, keyboard::Keyboard};
+        use gpui_kit::MenuItem;
+        let mut prefs = Preferences::default();
+        for preset in ["forkarak", "intellij", "vscode"] {
+            prefs.set_option(None, "keyboard.preset", json!(preset));
+            assert!(
+                requests(&prefs, None)
+                    .iter()
+                    .all(|r| r.action.name() != MoveToOther.name())
+            );
+            let menus = app_menus(Keyboard::new(&prefs, None));
+            let view = menus.iter().find(|m| m.name.as_ref() == "보기").unwrap();
+            assert!(view.items.iter().any(|item| {
+                matches!(item, MenuItem::Action { action, .. } if action.name() == MoveToOther.name())
+            }));
+        }
+        prefs.set_option(
+            None,
+            "keyboard.bindings",
+            json!({"move_to_other": "alt-f9"}),
+        );
+        let active = requests(&prefs, None);
+        let binding = active
+            .iter()
+            .find(|r| r.action.name() == MoveToOther.name())
+            .unwrap();
+        assert_eq!(binding.keys, "alt-f9");
+        assert_eq!(binding.context, Some("ForkarakCode"));
+    }
+
+    #[test]
     fn every_persisted_root_command_consumes_canonical_project_overrides_and_reset() {
         let fixture = tempfile::tempdir().unwrap();
         let project = fixture.path().canonicalize().unwrap();

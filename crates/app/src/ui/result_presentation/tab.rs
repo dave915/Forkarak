@@ -56,6 +56,9 @@ impl Pokarak {
 
     pub(in crate::ui) fn result_tab_active(&self) -> bool {
         self.results_open
+            && self
+                .session()
+                .is_some_and(|s| s.active_group == s.focused_group)
             && self.result_surface == Surface::Editor
             && self.current.is_some()
             && self.results_root == self.current
@@ -346,6 +349,9 @@ mod tests {
         let file = ReadingPoint {
             path: "same.ts".into(),
             result_tab: false,
+            split_diff: false,
+            unified_offset: None,
+            side_offset: None,
             code: true,
             row: 0,
             line: 0,

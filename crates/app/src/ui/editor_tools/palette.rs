@@ -4,6 +4,12 @@ use crate::ui::dialogs::DialogWindowExt as _;
 enum Target {
     Action(fn() -> Box<dyn Action>),
     Worktree(PathBuf),
+    OpenTabToSide {
+        root: PathBuf,
+        path: PathBuf,
+        reader: u64,
+        request: u64,
+    },
 }
 #[derive(Clone)]
 struct Entry {
@@ -126,6 +132,24 @@ fn entries(app: &Pokarak, window: &Window, cx: &App) -> Vec<Entry> {
     command!("보기: 코드 / 변경사항 전환", "toggle_code", ready);
     command!("보기: 긴 줄 화면 줄바꿈 전환", "word_wrap", code);
     command!("보기: 미리보기 탭 고정", "pin_tab", code);
+    if !window.is_action_available(&OpenToSide, cx)
+        && let (Some(root), Some(path), Some(reader)) =
+            (app.current.clone(), app.active_file_tab(), app.session())
+    {
+        list.push(Entry {
+            shortcut: None,
+            title: "파일 탭: 옆에 열기".into(),
+            keywords: "open to side".into(),
+            key: String::new(),
+            target: Target::OpenTabToSide {
+                root,
+                path,
+                reader: reader.id,
+                request: app.request,
+            },
+            enabled: true,
+        });
+    }
     command!(
         "보기: 현재 변경 구간의 이전 코드 펼치기",
         "previous_code",
@@ -260,9 +284,21 @@ impl Palette {
         }
         window.close_dialog(cx);
         let _ = self.owner.update(cx, |app, cx| {
-            if entry.shortcut.is_some_and(|s| s.id == "open_to_side") {
+            let command = entry.shortcut.map(|s| s.id);
+            if command == Some("open_to_side") {
                 app.search_input.focus_handle(cx).focus(window, cx);
-            } else if let Some(editor) = app.active_editor() {
+            } else if matches!(entry.target, Target::OpenTabToSide { .. })
+                || matches!(
+                    command,
+                    Some("move_to_other" | "split_right" | "focus_group_1" | "focus_group_2")
+                )
+            {
+                // A restored focus in the originating editor would reactivate that
+                // group while a command is opening its destination.
+                app.focus.focus(window, cx);
+            } else if !app.result_tab_active()
+                && let Some((_, _, editor)) = app.code_tools_target(cx)
+            {
                 editor.read(cx).focus_handle(cx).focus(window, cx);
             } else {
                 app.focus.focus(window, cx);
@@ -270,6 +306,20 @@ impl Palette {
             match entry.target {
                 Target::Action(action) => window.dispatch_action(action(), cx),
                 Target::Worktree(root) => app.open_repository(root, window, cx),
+                Target::OpenTabToSide {
+                    root,
+                    path,
+                    reader,
+                    request,
+                } => {
+                    if app.current.as_ref() == Some(&root)
+                        && app.request == request
+                        && app.session().is_some_and(|s| s.id == reader)
+                        && app.active_file_tab().as_ref() == Some(&path)
+                    {
+                        app.open_to_side(path, window, cx);
+                    }
+                }
             }
         });
     }
@@ -470,7 +520,6 @@ impl Pokarak {
                         cx.notify();
                     }
                 });
-            input.read(cx).focus_handle(cx).focus(window, cx);
             Palette {
                 owner,
                 input,
@@ -481,6 +530,7 @@ impl Pokarak {
                 _subscriptions: vec![subscription],
             }
         });
+        let focus = palette.read(cx).input.focus_handle(cx);
         window.open_app_dialog(cx, move |dialog, _, _| {
             dialog
                 .title("명령 팔레트")
@@ -488,6 +538,7 @@ impl Pokarak {
                 .keyboard(false)
                 .child(palette.clone())
         });
+        focus.focus(window, cx);
     }
     pub(in crate::ui) fn open_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {

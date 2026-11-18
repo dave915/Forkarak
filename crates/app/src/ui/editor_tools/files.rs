@@ -230,36 +230,47 @@ impl Pokarak {
         });
     }
     fn remap_clean_editor_paths(&mut self, root: &Path, source: &Path, destination: &Path) {
-        fn remap(path: &Path, source: &Path, destination: &Path) -> PathBuf {
-            path.strip_prefix(source)
-                .map(|suffix| destination.join(suffix))
-                .unwrap_or_else(|_| path.to_owned())
-        }
         self.code_edits.forget_clean_under(root, source);
-        if let Some(preview) = self.code_edits.tools.preview.get_mut(root) {
-            *preview = remap(preview, source, destination);
-        }
         if let Some(session) = self.sessions.get_mut(root) {
-            session.saved.tabs = session
-                .saved
-                .tabs
-                .iter()
-                .map(|p| remap(p, source, destination))
-                .collect();
-            session.saved.selected = session
-                .saved
-                .selected
-                .as_ref()
-                .map(|p| remap(p, source, destination));
-            session.saved.positions = std::mem::take(&mut session.saved.positions)
-                .into_iter()
-                .map(|(p, v)| (remap(&p, source, destination), v))
-                .collect();
-            session.documents.retain(|p, _| !p.starts_with(source));
-            session.diffs.retain(|p, _| !p.starts_with(source));
-            for point in session.history.iter_mut().chain(session.forward.iter_mut()) {
-                point.path = remap(&point.path, source, destination);
+            session.for_each_reader(|reader| reader.remap_clean_reader_paths(source, destination));
+        }
+    }
+}
+
+impl Session {
+    fn remap_clean_reader_paths(&mut self, source: &Path, destination: &Path) {
+        let remap = |path: &mut PathBuf| {
+            if let Ok(suffix) = path.strip_prefix(source) {
+                *path = destination.join(suffix);
             }
+        };
+        for path in self
+            .saved
+            .tabs
+            .iter_mut()
+            .chain(&mut self.saved.selected)
+            .chain(&mut self.reader.preview_tab)
+        {
+            remap(path);
+        }
+        self.saved.positions = std::mem::take(&mut self.saved.positions)
+            .into_iter()
+            .map(|(mut path, position)| {
+                remap(&mut path);
+                (path, position)
+            })
+            .collect();
+        self.documents.retain(|path, _| !path.starts_with(source));
+        self.historical_documents
+            .retain(|path| !path.starts_with(source));
+        self.diffs.retain(|path, _| !path.starts_with(source));
+        for point in self
+            .reader
+            .history
+            .iter_mut()
+            .chain(&mut self.reader.forward)
+        {
+            remap(&mut point.path);
         }
     }
 }

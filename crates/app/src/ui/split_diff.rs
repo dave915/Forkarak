@@ -131,24 +131,21 @@ impl ReviewDiff {
         })
     }
 
-    pub(super) fn split_position(&self, cx: &App) -> Option<(usize, f32)> {
+    pub(super) fn side_offset(&self, cx: &App) -> Option<[f32; 2]> {
         let split = self.split[self.active_split.get()].get()?.read(cx);
-        Some((scroll_row_at(&split.scroll, cx), split.horizontal))
+        let [_, y] = editor_groups::list_offset(&split.scroll)?;
+        Some([split.horizontal, y])
     }
 
-    pub(super) fn restore_split_position(
+    pub(super) fn restore_side_offset(
         &self,
         app: &Pokarak,
-        position: (usize, f32),
+        offset: [f32; 2],
         cx: &mut Context<Pokarak>,
     ) {
-        let split = self.split_entity(app, cx);
-        split.update(cx, |split, cx| {
-            split.scroll.scroll_to_item_strict(
-                position.0.min(split.rows.len().saturating_sub(1)),
-                ScrollStrategy::Top,
-            );
-            split.horizontal = position.1.max(0.);
+        self.split_entity(app, cx).update(cx, |split, cx| {
+            editor_groups::restore_list_offset(&split.scroll, [0., offset[1]]);
+            split.horizontal = offset[0].max(0.);
             cx.notify();
         });
     }
@@ -189,7 +186,7 @@ impl ReviewDiff {
         {
             return;
         }
-        if app.prefs.split_diff {
+        if app.reader_split_diff() {
             self.split_entity(app, cx).update(cx, |split, cx| {
                 let hunks: Vec<_> = split
                     .rows

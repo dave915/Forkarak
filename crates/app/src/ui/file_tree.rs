@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::base::TestSupportExt as _;
 use std::{collections::BTreeMap, ffi::OsString};
 
 #[derive(Clone, Debug)]
@@ -17,6 +18,12 @@ struct FileTree {
     // Counts and controls must include files hidden by collapsed ancestors.
     file_count: usize,
     directories: HashSet<PathBuf>,
+}
+
+fn picker_file(rows: &[FileRow], cursor: usize) -> Option<&Path> {
+    rows.get(cursor)
+        .filter(|row| !row.directory)
+        .map(|row| row.path.as_path())
 }
 
 fn file_mode_labels(snapshot: Option<&Snapshot>, all: bool, visible: usize) -> [String; 2] {
@@ -258,6 +265,15 @@ impl Pokarak {
         self.file_tree().rows
     }
 
+    fn open_picker_file_to_side(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.text_search || self.git_history.active || self.opening_path.is_some() {
+            return;
+        }
+        if let Some(path) = picker_file(&self.file_rows(), self.file_cursor) {
+            self.open_to_side(path.to_owned(), window, cx);
+        }
+    }
+
     pub(super) fn toggle_folder(&mut self, path: &Path, cx: &mut Context<Self>) {
         if let Some(session) = self
             .current
@@ -417,6 +433,14 @@ impl Pokarak {
         let has_folders = !tree.directories.is_empty();
         let filtering = !self.text_search && !self.filter.is_empty();
         let rows = Arc::new(tree.rows);
+        let side_hint = keycaps::command_label(
+            "옆에 열기",
+            "open_to_side",
+            &self.prefs,
+            self.current_project.as_deref(),
+        );
+        let root = self.current.clone();
+        let request = self.request;
         let reviewed = rows
             .iter()
             .filter(|row| !row.directory)
@@ -472,7 +496,11 @@ impl Pokarak {
             .child(
                 div()
                     .when(!self.text_search, |row| {
-                        row.key_context("ForkarakFileSearch")
+                        row.key_context("ForkarakFileSearch").on_action(cx.listener(
+                            |app, _: &editor_tools::OpenToSide, w, cx| {
+                                app.open_picker_file_to_side(w, cx)
+                            },
+                        ))
                     })
                     .flex_none()
                     .px(ui_px(4.))
@@ -482,6 +510,12 @@ impl Pokarak {
                     .gap(ui_px(2.))
                     .child(
                         Input::new(&self.search_input)
+                            .accessibility_id("file-search-input")
+                            .aria_label(if self.text_search {
+                                "프로젝트 본문 검색".into()
+                            } else {
+                                format!("파일 찾기 · Enter 열기 · {side_hint}")
+                            })
                             .small()
                             .flex_1()
                             .min_w_0()
@@ -497,32 +531,69 @@ impl Pokarak {
                             }))
                             .shortcut_tooltip("본문 검색", &FindText, None),
                     )
-                    .child(
-                        Button::new("expand-all-folders")
-                            .icon(IconName::ChevronsUpDown)
-                            .accessibility_label("모든 폴더 펼치기")
-                            .ghost()
-                            .with_size(ui_px(24.))
-                            .disabled(!has_folders || filtering)
-                            .tooltip("모든 폴더 펼치기 · 트리에서 → 펼치기 / Enter 전환")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_folders_expanded(true, cx);
-                                this.file_tree_focus.focus(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("collapse-all-folders")
-                            .icon(IconName::ChevronsDownUp)
-                            .accessibility_label("모든 폴더 접기")
-                            .ghost()
-                            .with_size(ui_px(24.))
-                            .disabled(!has_folders || filtering)
-                            .tooltip("모든 폴더 접기 · 트리에서 ← 접기 / Enter 전환")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_folders_expanded(false, cx);
-                                this.file_tree_focus.focus(window, cx);
-                            })),
-                    ),
+                    .when(filtering, |row| {
+                        let path = picker_file(&rows, self.file_cursor);
+                        let label = path.map_or_else(
+                            || "옆에 열기".into(),
+                            |p| format!("{} 옆에 열기", p.display()),
+                        );
+                        row.child(
+                            Button::new("file-search-open-to-side")
+                                .icon(IconName::Columns2)
+                                .ghost()
+                                .with_size(ui_px(24.))
+                                .disabled(path.is_none())
+                                .on_click(
+                                    cx.listener(|app, _, w, cx| {
+                                        app.open_picker_file_to_side(w, cx)
+                                    }),
+                                )
+                                .keycap_tooltip(
+                                    label,
+                                    keycaps::effective(
+                                        &self.prefs,
+                                        self.current_project.as_deref(),
+                                        "open_to_side",
+                                        "",
+                                    ),
+                                ),
+                        )
+                    })
+                    .when(!filtering, |row| {
+                        row.children(
+                            [
+                                (
+                                    true,
+                                    "expand-all-folders",
+                                    IconName::ChevronsUpDown,
+                                    "모든 폴더 펼치기",
+                                    "모든 폴더 펼치기 · 트리에서 → 펼치기 / Enter 전환",
+                                ),
+                                (
+                                    false,
+                                    "collapse-all-folders",
+                                    IconName::ChevronsDownUp,
+                                    "모든 폴더 접기",
+                                    "모든 폴더 접기 · 트리에서 ← 접기 / Enter 전환",
+                                ),
+                            ]
+                            .map(
+                                |(expand, id, icon, label, tooltip)| {
+                                    Button::new(id)
+                                        .icon(icon)
+                                        .accessibility_label(label)
+                                        .ghost()
+                                        .with_size(ui_px(24.))
+                                        .disabled(!has_folders)
+                                        .tooltip(tooltip)
+                                        .on_click(cx.listener(move |app, _, window, cx| {
+                                            app.set_folders_expanded(expand, cx);
+                                            app.file_tree_focus.focus(window, cx);
+                                        }))
+                                },
+                            ),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -569,8 +640,10 @@ impl Pokarak {
                                         );
                                     let status =
                                         row.change.as_ref().map(|c| file_status(&c.status));
-                                    div()
+                                    let menu_path = (!row.directory).then(|| row.path.clone());
+                                    let entry = div()
                                         .id(("file", ix))
+                                        .test_support()
                                         .w_full()
                                         .min_w_0()
                                         .role(accesskit::Role::TreeItem)
@@ -685,8 +758,19 @@ impl Pokarak {
                                                 this.file_tree_focus.focus(window, cx);
                                                 this.activate_row(row.clone(), window, cx);
                                             });
-                                        })
-                                        .into_any_element()
+                                        });
+                                    if let Some(path) = menu_path {
+                                        entry
+                                            .context_menu(editor_tools::tree_side_menu(
+                                                weak.clone(),
+                                                root.clone(),
+                                                request,
+                                                path,
+                                            ))
+                                            .into_any_element()
+                                    } else {
+                                        entry.into_any_element()
+                                    }
                                 })
                                 .collect::<Vec<_>>()
                         })
@@ -704,7 +788,9 @@ impl Pokarak {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileTree, TreeMove, build_tree, file_mode_labels, tree_move, visible_cursor};
+    use super::{
+        FileTree, TreeMove, build_tree, file_mode_labels, picker_file, tree_move, visible_cursor,
+    };
     use crate::prefs::{Preferences, SavedView};
     use pokarak_core::{ChangedFile, CompareMode, FileStatus, Snapshot};
     use std::{
@@ -769,6 +855,26 @@ mod tests {
             .iter()
             .map(|r| r.path.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn file_picker_side_target_follows_the_highlighted_match_and_skips_folders() {
+        let repo = fixture();
+        let snapshot = pokarak_core::snapshot(repo.path(), &CompareMode::Uncommitted).unwrap();
+        let results = build_tree(&snapshot, true, ".rs", &HashSet::new());
+        assert_eq!(
+            picker_file(&results.rows, 0),
+            Some(Path::new("src/main.rs"))
+        );
+        assert_eq!(
+            picker_file(&results.rows, 1),
+            Some(Path::new("src/nested/deep.rs"))
+        );
+        assert_eq!(picker_file(&results.rows, 2), None);
+        let unfiltered = build_tree(&snapshot, true, "", &HashSet::new());
+        let folder = unfiltered.rows.iter().position(|r| r.directory).unwrap();
+        assert_eq!(picker_file(&unfiltered.rows, folder), None);
+        assert!(tree_move(&unfiltered.rows, folder, "enter").unwrap().toggle);
     }
 
     #[test]

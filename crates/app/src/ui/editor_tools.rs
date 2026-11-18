@@ -6,6 +6,7 @@ pub(in crate::ui) mod formatter;
 mod indent;
 mod palette;
 mod shortcuts;
+mod split_actions;
 mod wrap;
 use super::*;
 use code_edit::FileKey;
@@ -13,6 +14,7 @@ use gpui_kit::component::input::{GutterDecoration, GutterDecorationCollection};
 use std::ops::Range;
 
 use edit::LineCommand;
+pub(super) use split_actions::{tab_side_menu, tree_side_menu};
 actions!(
     forkarak_editor,
     [
@@ -39,13 +41,13 @@ actions!(
         SplitRight,
         FocusGroup1,
         FocusGroup2,
-        OpenToSide
+        OpenToSide,
+        MoveToOther
     ]
 );
 
 #[derive(Default)]
 pub(super) struct Tools {
-    preview: HashMap<PathBuf, PathBuf>,
     wrap: HashMap<FileKey, bool>,
     gutters: HashMap<FileKey, (EntityId, GutterDecorationCollection)>,
     changes: HashMap<FileKey, Vec<changes::Change>>,
@@ -73,6 +75,15 @@ pub(super) fn actions(
         .is_some_and(|(root, path)| app.code_edits.can_edit(root, path))
         && code;
     root.on_action(cx.listener(|a, _: &CommandPalette, w, cx| a.open_command_palette(w, cx)))
+        .when(app.active_file_tab().is_some(), |root| {
+            root.on_action(cx.listener(|app, _: &MoveToOther, w, cx| {
+                if !w.has_active_dialog(cx)
+                    && let Some(path) = app.active_file_tab()
+                {
+                    app.move_to_other(path, w, cx);
+                }
+            }))
+        })
         .when(
             app.current.is_some()
                 && app.opening_path.is_none()
@@ -281,7 +292,7 @@ impl Pokarak {
         root: &Path,
         path: &Path,
         history: bool,
-        cx: &App,
+        _cx: &App,
     ) {
         if !history
             || !self
@@ -290,38 +301,35 @@ impl Pokarak {
         {
             return;
         }
-        let Some(session) = self.sessions.get(root) else {
+        let Some(session) = self.sessions.get_mut(root) else {
             return;
         };
         if session.saved.tabs.iter().any(|p| p == path) {
             return;
         }
-        if let Some(previous) = self.code_edits.tools.preview.remove(root)
+        if let Some(previous) = session.preview_tab.take()
             && !self.code_edits.dirty(root, &previous)
-            && let Some(session) = self.sessions.get_mut(root)
         {
             // Positions/history are retained; only the reusable tab is replaced.
             session.saved.tabs.retain(|p| p != &previous);
             session.documents.remove(&previous);
+            session.historical_documents.remove(&previous);
             session.diffs.remove(&previous);
         }
-        let _ = cx;
-        self.code_edits
-            .tools
-            .preview
-            .insert(root.to_owned(), path.to_owned());
+        session.preview_tab = Some(path.to_owned());
     }
 
     pub(super) fn is_preview_tab(&self, root: &Path, path: &Path) -> bool {
-        self.code_edits
-            .tools
-            .preview
+        self.sessions
             .get(root)
-            .is_some_and(|p| p == path)
+            .and_then(|s| s.preview_tab.as_deref())
+            == Some(path)
     }
     pub(super) fn pin_preview(&mut self, root: &Path, path: &Path) {
-        if self.is_preview_tab(root, path) {
-            self.code_edits.tools.preview.remove(root);
+        if let Some(session) = self.sessions.get_mut(root)
+            && session.preview_tab.as_deref() == Some(path)
+        {
+            session.preview_tab = None;
         }
     }
     pub(super) fn pin_code_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {

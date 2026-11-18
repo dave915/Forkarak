@@ -177,23 +177,6 @@ impl CodeEdits {
 }
 
 impl Pokarak {
-    pub(super) fn bound_draft_editor(&self, key: &FileKey) -> Option<Entity<EditorState>> {
-        let (id, _) = self.code_edits.bindings.get(key)?;
-        let documents = &self.sessions.get(&key.root)?.documents;
-        if !self.code_edits.buffers.get(key)?.editing {
-            return None;
-        }
-        documents
-            .get(&key.path)
-            .filter(|e| e.entity_id() == *id)
-            .or_else(|| {
-                documents
-                    .get(&key.root.join(&key.path))
-                    .filter(|e| e.entity_id() == *id)
-            })
-            .cloned()
-    }
-
     pub(in crate::ui) fn apply_workspace_edit(
         &mut self,
         root: &Path,
@@ -214,8 +197,12 @@ impl Pokarak {
         self.capture_code_buffers(cx);
         let replacements = self.code_edits.prepare_workspace_edit(root, edit)?;
         if replacements.iter().any(|f| {
-            self.bound_draft_editor(&f.key)
-                .is_some_and(|editor| editor.read(cx).value().as_ref() != f.before)
+            !self.bound_draft_editors(&f.key).is_empty()
+                && self
+                    .code_edits
+                    .buffers
+                    .get(&f.key)
+                    .is_some_and(|b| b.draft.text != f.before)
         }) {
             return Err(STALE.into());
         }
@@ -229,7 +216,7 @@ impl Pokarak {
         self.code_edits
             .install_workspace_edit(root, label, replacements);
         for key in keys {
-            self.sync_draft_editor(&key, window, cx);
+            self.sync_draft_editors(&key, window, cx);
             self.pin_preview(root, &key.path);
         }
         self.checkpoint_code_drafts(cx);
@@ -252,7 +239,7 @@ impl Pokarak {
         match self.code_edits.undo_transaction(&root) {
             Ok(keys) => {
                 for key in keys {
-                    self.sync_draft_editor(&key, window, cx);
+                    self.sync_draft_editors(&key, window, cx);
                 }
                 self.checkpoint_code_drafts(cx);
                 self.status = "초안 수정을 되돌렸습니다.".into();
@@ -343,34 +330,6 @@ impl Pokarak {
         }
         Some(row.into_any_element())
     }
-
-    pub(super) fn sync_draft_editor(
-        &mut self,
-        key: &FileKey,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(editor) = self.bound_draft_editor(key) else {
-            return;
-        };
-        let text = &self.code_edits.buffers[key].draft.text;
-        editor.update(cx, |e, cx| {
-            let old = e.value();
-            if old.as_ref() == text {
-                return;
-            }
-            let cursor = e.cursor_position();
-            let scroll = e.scroll_offset();
-            // One native range replacement gives one undo step even for a
-            // multi-location rename. Preserve the unaffected prefix and suffix.
-            let (range, replacement) = changed_range(&old, text);
-            e.set_selected_range(range, cx);
-            e.replace(replacement.to_owned(), window, cx);
-            e.set_cursor_position(cursor, window, cx);
-            e.set_scroll_offset(scroll, cx);
-        });
-        self.refresh_inline_tools(&key.root, &key.path, &editor, cx);
-    }
 }
 
 pub(super) fn changed_range<'a>(before: &str, after: &'a str) -> (std::ops::Range<usize>, &'a str) {
@@ -380,6 +339,13 @@ pub(super) fn changed_range<'a>(before: &str, after: &'a str) -> (std::ops::Rang
         .take_while(|(a, b)| a == b)
         .map(|(ch, _)| ch.len_utf8())
         .sum::<usize>();
+    // A native caret cannot sit between CR and LF. Include the full
+    // newline when a format or disk reload changes the line-ending style.
+    let splits_crlf = |offset: usize| {
+        before.as_bytes().get(offset.wrapping_sub(1)) == Some(&b'\r')
+            && before.as_bytes().get(offset) == Some(&b'\n')
+    };
+    let start = start - usize::from(splits_crlf(start));
     let suffix = before[start..]
         .chars()
         .rev()
@@ -387,6 +353,7 @@ pub(super) fn changed_range<'a>(before: &str, after: &'a str) -> (std::ops::Rang
         .take_while(|(a, b)| a == b)
         .map(|(ch, _)| ch.len_utf8())
         .sum::<usize>();
+    let suffix = suffix - usize::from(splits_crlf(before.len() - suffix));
     (
         start..before.len() - suffix,
         &after[start..after.len() - suffix],

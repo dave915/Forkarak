@@ -287,8 +287,10 @@ impl Pokarak {
                     }
                 }
                 if let Some(session) = this.sessions.get_mut(&root) {
-                    session.diffs.clear();
-                    session.documents.clear();
+                    session.for_each_reader(|s| {
+                        s.diffs.clear();
+                        s.documents.clear();
+                    });
                 }
                 if this.current.as_ref() == Some(&root) && this.opening_path.is_none() {
                     if this.request == token {

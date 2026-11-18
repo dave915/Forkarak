@@ -198,7 +198,7 @@ impl Pokarak {
             });
         self.opening_path.is_some()
             || self.loading
-            || self.file_loading
+            || self.reader_load_pending()
             || self.navigating
             || self.git_is_busy()
             || self.commit_defers_auto_refresh(window, cx)

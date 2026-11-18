@@ -219,7 +219,7 @@ impl Pokarak {
                 let (submitted, write) = view
                     .update_in(cx, |app, _, cx| {
                         app.check_batch_context(&target.key.root)?;
-                        app.capture_batch_target(target, cx);
+                        app.capture_draft_editors(&target.key, cx);
                         let replacement = if let Some((text, source, settings)) = formatted {
                             if !source.is_current()
                                 || !app.batch_format_trusted(&target.key.root)
@@ -235,9 +235,7 @@ impl Pokarak {
                             None
                         };
                         let submission = app.code_edits.begin_batch_write(target, replacement)?;
-                        if let Some(editor) = app.bound_draft_editor(&target.key) {
-                            editor.update(cx, |e, cx| e.set_readonly(true, cx));
-                        }
+                        app.sync_editor_readonly(&target.key, cx);
                         let submitted = submission.text.clone();
                         let write =
                             cx.background_spawn(async move { submission.write_working_file() });
@@ -247,16 +245,11 @@ impl Pokarak {
                     .map_err(|e| e.to_string())??;
                 let result = write.await;
                 view.update_in(cx, |app, window, cx| {
-                    app.capture_batch_target(target, cx);
+                    app.capture_draft_editors(&target.key, cx);
                     let result = app
                         .code_edits
                         .finish_batch_write(target, &submitted, result);
-                    if let Some(editor) = app.bound_draft_editor(&target.key) {
-                        editor.update(cx, |e, cx| e.set_readonly(false, cx));
-                        if result.is_ok() {
-                            app.sync_draft_editor(&target.key, window, cx);
-                        }
-                    }
+                    app.sync_draft_editors(&target.key, window, cx);
                     app.checkpoint_code_drafts(cx);
                     result
                 })
@@ -289,14 +282,6 @@ impl Pokarak {
         Ok(())
     }
 
-    fn capture_batch_target(&mut self, target: &SaveTarget, cx: &App) {
-        if let Some(editor) = self.bound_draft_editor(&target.key)
-            && let Some(buffer) = self.code_edits.buffers.get_mut(&target.key)
-        {
-            buffer.changed(editor.read(cx).value().to_string());
-        }
-    }
-
     fn batch_format_trusted(&self, root: &Path) -> bool {
         self.prefs
             .trusted
@@ -311,7 +296,7 @@ impl Pokarak {
     ) -> Result<Option<PendingFormat>, String> {
         let key = &target.key;
         self.check_batch_context(&key.root)?;
-        self.capture_batch_target(target, cx);
+        self.capture_draft_editors(&target.key, cx);
         let buffer = self.code_edits.target_buffer(target)?;
         let project = self.current_project.as_deref();
         if !self

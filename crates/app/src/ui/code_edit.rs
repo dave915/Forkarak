@@ -1,5 +1,6 @@
 //! Direct working-file editor. Drafts outlive reader entities
 //! and project sessions; the core operation owns the actual filesystem write.
+mod mirrors;
 mod save_all;
 mod storage;
 mod workspace;
@@ -41,7 +42,7 @@ mod tests {
         buffer.changed(text.into());
     }
 
-    fn comparison_fixture() -> (tempfile::TempDir, CodeEdits, std::path::PathBuf) {
+    pub(super) fn comparison_fixture() -> (tempfile::TempDir, CodeEdits, std::path::PathBuf) {
         let (temp, mut state) = state();
         let root = temp.path().join("authored comparison 한글");
         fs::create_dir(&root).unwrap();
@@ -790,7 +791,7 @@ impl Buffer {
 pub(super) struct CodeEdits {
     pub(super) tools: editor_tools::Tools,
     buffers: HashMap<FileKey, Buffer>,
-    bindings: HashMap<FileKey, (EntityId, Subscription)>,
+    bindings: HashMap<FileKey, HashMap<EntityId, mirrors::EditorBinding>>,
     storage: Arc<DraftStorage>,
     alternatives: Alternatives,
     generation: u64,
@@ -879,7 +880,6 @@ impl CodeEdits {
             io::Error::other("선택한 초안 버전이 변경되었습니다. 보관된 다른 버전을 확인하세요.")
         })?;
         self.buffers.insert(key.clone(), Buffer::new(draft));
-        self.bindings.remove(key);
         Ok(())
     }
 
@@ -897,7 +897,6 @@ impl CodeEdits {
             self.buffers.insert(key.clone(), buffer);
             return Err(error);
         }
-        self.bindings.remove(key);
         Ok(())
     }
 
@@ -925,7 +924,8 @@ impl CodeEdits {
                 .is_some_and(|b| !b.dirty() && !b.saving)
             {
                 self.buffers.remove(&key);
-                self.bindings.remove(&key);
+                // Both open readers remain subscribed. A later disk validation
+                // can make this same path editable again in either group.
             }
             if let Some(buffer) = self.buffers.get_mut(&key) {
                 buffer.editing = false;
@@ -1068,25 +1068,6 @@ impl CodeEdits {
 }
 
 impl Pokarak {
-    pub(super) fn capture_code_buffers(&mut self, cx: &App) {
-        // Capture synchronously too: close/quit can precede a queued Change event.
-        for (root, session) in &self.sessions {
-            for (path, editor) in &session.documents {
-                if let Some(key) = FileKey::new(root, path)
-                    && self
-                        .code_edits
-                        .bindings
-                        .get(&key)
-                        .is_some_and(|(id, _)| *id == editor.entity_id())
-                    && let Some(buffer) = self.code_edits.buffers.get_mut(&key)
-                    && buffer.editing
-                {
-                    buffer.changed(editor.read(cx).value().to_string());
-                }
-            }
-        }
-    }
-
     pub(super) fn retain_code_drafts(&mut self, cx: &App) -> bool {
         self.capture_code_buffers(cx);
         self.code_edits.persist().is_ok()
@@ -1205,87 +1186,6 @@ impl Pokarak {
         editor.update(cx, |state, cx| state.set_readonly(readonly, cx));
     }
 
-    pub(super) fn bind_code_editor(
-        &mut self,
-        root: &Path,
-        path: &Path,
-        editor: &Entity<EditorState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(key) = FileKey::new(root, path) else {
-            return;
-        };
-        if !self.code_edits.buffers.contains_key(&key)
-            || self
-                .code_edits
-                .bindings
-                .get(&key)
-                .is_some_and(|(id, _)| *id == editor.entity_id())
-        {
-            return;
-        }
-        let changed_key = key.clone();
-        let subscription = cx.subscribe_in(
-            editor,
-            window,
-            move |app, editor, event: &gpui_kit::component::input::InputEditsEvent, window, cx| {
-                // A replaced editor can still have a queued Change event. It must
-                // never write its old text over a reconciled replacement buffer.
-                if !app
-                    .code_edits
-                    .bindings
-                    .get(&changed_key)
-                    .is_some_and(|(id, _)| *id == editor.entity_id())
-                {
-                    return;
-                }
-                let Some(buffer) = app.code_edits.buffers.get_mut(&changed_key) else {
-                    return;
-                };
-                if !buffer.editing {
-                    return;
-                }
-                let state = editor.read(cx);
-                // Change events may be queued together (e.g. type then undo).
-                // The immutable event still identifies an intervening revision.
-                if event
-                    .edits()
-                    .last()
-                    .is_some_and(|(_, after)| after != state.text())
-                {
-                    buffer.revision = next_revision();
-                }
-                let text = state.value().to_string();
-                let typed = if app.navigation.is_some() && state.focus_handle(cx).is_focused(window)
-                {
-                    language_tools::on_type::inserted_character(
-                        &buffer.draft.text,
-                        &text,
-                        state.cursor(),
-                    )
-                } else {
-                    None
-                };
-                buffer.changed(text);
-                let status = buffer.status();
-                if app.current.as_ref() == Some(&changed_key.root)
-                    && app.selected().as_ref() == Some(&changed_key.path)
-                {
-                    app.status = status.into();
-                    app.schedule_input_assistance(&changed_key, editor, typed, window, cx);
-                }
-                app.pin_preview(&changed_key.root, &changed_key.path);
-                app.refresh_inline_tools(&changed_key.root, &changed_key.path, editor, cx);
-                app.checkpoint_code_drafts(cx);
-                cx.notify();
-            },
-        );
-        self.code_edits
-            .bindings
-            .insert(key, (editor.entity_id(), subscription));
-    }
-
     pub(super) fn start_code_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.code_edits.unreadable_storage
             || self.git_history.active
@@ -1312,7 +1212,7 @@ impl Pokarak {
             return;
         }
         self.pin_preview(&root, &path);
-        editor.update(cx, |state, cx| state.set_readonly(false, cx));
+        self.sync_editor_readonly(&key, cx);
         editor.read(cx).focus_handle(cx).focus(window, cx);
         cx.notify();
     }
@@ -1358,7 +1258,7 @@ impl Pokarak {
         {
             return;
         }
-        let (Some(root), Some(path), Some(editor)) =
+        let (Some(root), Some(path), Some(origin)) =
             (self.current.clone(), self.selected(), self.active_editor())
         else {
             return;
@@ -1379,7 +1279,7 @@ impl Pokarak {
         let replacement = buffer.draft.text.clone();
         buffer.saving = true;
         buffer.error = None;
-        editor.update(cx, |editor, cx| editor.set_readonly(true, cx));
+        self.sync_draft_editors(&key, window, cx);
         let target = key.clone();
         let submitted = replacement.clone();
         let task = cx.background_spawn(async move {
@@ -1388,6 +1288,7 @@ impl Pokarak {
         cx.spawn_in(window, async move |view, cx| {
             let result = task.await;
             let _ = view.update_in(cx, |app, window, cx| {
+                app.capture_draft_editors(&key, cx);
                 let Some(buffer) = app.code_edits.buffers.get_mut(&key) else {
                     return;
                 };
@@ -1402,15 +1303,14 @@ impl Pokarak {
                         false
                     }
                 };
-                let editing = buffer.editing;
-                editor.update(cx, |editor, cx| editor.set_readonly(!editing, cx));
+                app.sync_draft_editors(&key, window, cx);
                 let _ = app.code_edits.persist();
                 if app.current.as_ref() == Some(&root) && app.opening_path.is_none() {
                     if success {
                         app.status = format!("{} 저장됨", path.display());
                         let open_commit = commit
                             && !app.git_history.active
-                            && app.selected().as_ref() == Some(&path);
+                            && app.active_editor().as_ref() == Some(&origin);
                         app.refresh(window, cx);
                         if open_commit {
                             app.code_edits.commit_after_refresh = Some((root, app.request));
@@ -1510,43 +1410,10 @@ impl Pokarak {
         {
             return Err("작업 위치나 초안이 변경되었습니다. 최신 초안으로 다시 비교하세요.".into());
         }
-        let selected = self.selected().ok_or("선택한 파일이 없습니다.")?;
-        let position = self
-            .session()
-            .and_then(|session| session.documents.get(&selected))
-            .map(|editor| {
-                (
-                    editor.read(cx).cursor_position(),
-                    editor.read(cx).scroll_offset(),
-                )
-            });
-        self.code_edits
-            .reconcile(comparison, result.clone(), fresh_disk)?;
-        // Replace and rebind instead of changing the old editor underneath a
-        // queued input callback. The binding identity check above rejects it.
+        self.code_edits.reconcile(comparison, result, fresh_disk)?;
         let key = FileKey::new(&comparison.root, &comparison.path).unwrap();
-        self.code_edits.bindings.remove(&key);
-        let editor = cx.new(|cx| {
-            EditorState::new(window, cx)
-                .language(language(&comparison.path))
-                .line_number(true)
-                .soft_wrap(false)
-                .default_value(result)
-        });
-        editor.update(cx, |editor, cx| {
-            editor.set_readonly(false, cx);
-            if let Some((cursor, scroll)) = position {
-                editor.set_cursor_position(cursor, window, cx);
-                editor.set_scroll_offset(scroll, cx);
-            }
-        });
-        let session = self
-            .sessions
-            .get_mut(&comparison.root)
-            .ok_or("워크트리가 닫혔습니다.")?;
-        session.documents.insert(selected.clone(), editor.clone());
-        self.bind_code_editor(&comparison.root, &selected, &editor, window, cx);
-        self.configure_code_tools(&comparison.root, &selected, &editor, window, cx);
+        self.invalidate_language_view(cx);
+        self.sync_draft_editors(&key, window, cx);
         self.file_request += 1;
         self.status = "조정 결과를 초안에 반영했습니다. ⌘S로 파일을 저장하세요.".into();
         cx.notify();
@@ -1581,11 +1448,10 @@ impl Pokarak {
             cx.notify();
             return;
         }
-        // Reopen through normal disk validation. Drop the old binding and
-        // editor so neither a queued Change nor a formatter can target the replacement.
-        self.capture_positions(cx);
+        // All open copies show the chosen version, read-only until the load
+        // validates its saved baseline against the current working file.
+        self.sync_draft_editors(&key, window, cx);
         if let Some(session) = self.sessions.get_mut(&key.root) {
-            session.documents.remove(&path);
             session.saved.code = true;
         }
         self.open_file(path, false, None, window, cx);
@@ -1630,9 +1496,16 @@ impl Pokarak {
                             cx.notify();
                             return;
                         }
-                        if let Some(session) = app.sessions.get_mut(&expected.key.root) {
-                            session.documents.remove(&path);
-                        }
+                        // Stop displaying the discarded draft while the guarded
+                        // reload fetches the latest disk contents.
+                        app.prepare_code_buffer(
+                            &expected.key.root,
+                            &expected.key.path,
+                            expected.expected.clone(),
+                            false,
+                            true,
+                        );
+                        app.sync_draft_editors(&expected.key, window, cx);
                         app.open_file(path.clone(), false, None, window, cx);
                     });
                 });

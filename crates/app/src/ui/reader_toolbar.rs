@@ -272,7 +272,7 @@ impl Pokarak {
             ("자동완성  ⌃Space", Command::Complete),
             ("오류 확인", Command::Diagnostics),
             ("파일 구조 검색  ⌘⇧O", Command::Symbols),
-            ("함수 도움말  ⌃⇧Space", Command::Signature),
+            ("함수 도움말  ⌘I", Command::Signature),
             ("타입 · 설명  ⌥F1", Command::Hover),
         ] {
             menu = identity.item(

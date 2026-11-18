@@ -16,6 +16,7 @@ impl Panel {
 
 impl LanguageTools {
     pub(super) fn dismiss_panel(&mut self) {
+        self.on_type_task = None;
         if self.panel.take().is_some_and(|p| p.is_caret_popup()) {
             self.documentation_request = self.documentation_request.wrapping_add(1);
             // Invalidate in-flight or debounced popup requests, even at the same caret.

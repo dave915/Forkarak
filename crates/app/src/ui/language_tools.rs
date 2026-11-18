@@ -100,7 +100,6 @@ pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-space", Complete, Some("ForkarakCode")),
         KeyBinding::new("cmd-shift-o", Symbols, Some("ForkarakCode")),
-        KeyBinding::new("ctrl-shift-space", Signature, Some("ForkarakCode")),
         KeyBinding::new("alt-f1", Hover, Some("ForkarakCode")),
         KeyBinding::new("escape", Dismiss, Some("ForkarakLanguage")),
     ]);

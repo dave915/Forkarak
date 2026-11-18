@@ -35,6 +35,24 @@ fn requests(prefs: &Preferences, project: Option<&Path>) -> Vec<Request> {
     }
     bind!("command_palette", "cmd-shift-p", CommandPalette, None);
     bind!(
+        "language_signature",
+        "cmd-i",
+        language_tools::Signature,
+        Some("ForkarakCode")
+    );
+    if !overrides.is_some_and(|keys| {
+        keys.contains_key("language_signature")
+            || keys
+                .values()
+                .any(|value| value.as_str() == Some("ctrl-shift-space"))
+    }) {
+        result.push(Request {
+            keys: "ctrl-shift-space".into(),
+            action: Box::new(language_tools::Signature),
+            context: Some("ForkarakCode"),
+        });
+    }
+    bind!(
         "toggle_comment",
         "cmd-/",
         ToggleComment,

@@ -163,7 +163,7 @@ fn entries(app: &Pokarak, cx: &App) -> Vec<Entry> {
     add!(
         "코드 지원: 함수 도움말",
         "language_signature",
-        "ctrl-shift-space",
+        "cmd-i",
         language_tools::Signature
     );
     add!(

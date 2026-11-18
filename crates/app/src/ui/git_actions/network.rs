@@ -1,8 +1,10 @@
 //! Local sync reads and explicitly confirmed, immutable network destinations.
 use super::*;
 use crate::ui::dialogs::DialogWindowExt as _;
-use gpui_kit::component::{checkbox::Checkbox, select::SelectEvent};
+use gpui_kit::component::checkbox::Checkbox;
+mod push;
 use pokarak_core::operations::{branches::BranchStart, sync::BranchSync};
+pub(super) use push::PushTarget;
 
 type GitJob = Arc<dyn Fn(GitOperations) -> anyhow::Result<OperationOutput> + Send + Sync>;
 
@@ -304,6 +306,10 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if matches!(page, Page::Push) {
+            self.open_branch_push(state.root.clone(), None, window, cx);
+            return;
+        }
         self.workflow_read(
             state.root.clone(),
             |git| Ok((git.state()?, git.branch_sync()?, git.branch_starts()?)),
@@ -325,98 +331,37 @@ impl Pokarak {
         cx: &mut Context<Self>,
     ) {
         let fetch = matches!(page, Page::Fetch);
-        let push = matches!(page, Page::Push);
-        let title = if fetch {
-            "Fetch"
-        } else if push {
-            "Push"
-        } else {
-            "Pull (ff-only)"
-        };
+        let title = if fetch { "Fetch" } else { "Pull (ff-only)" };
         let defaults = network_defaults(&state, &sync, state.current_branch.as_deref());
         let remote_values = state.remotes.iter().map(|r| r.name.clone()).collect();
         let remote = optional_choice(remote_values, defaults.remote.as_deref(), window, cx);
-        let source = optional_choice(
-            state.local_branches.clone(),
-            state.current_branch.as_deref(),
-            window,
-            cx,
-        );
         let destination = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(defaults.branch)
                 .placeholder("원격 브랜치 이름")
         });
-        let upstream = cx.new(|_| defaults.set_upstream);
-        let subscription = if push {
-            let state = state.clone();
-            let sync = sync.clone();
-            let destination = destination.clone();
-            let remote = remote.clone();
-            let upstream = upstream.clone();
-            Some(cx.subscribe_in(
-                &source,
-                window,
-                move |_: &mut Pokarak, _, event: &SelectEvent<SearchableVec<String>>, w, cx| {
-                    let SelectEvent::Confirm(selected) = event;
-                    let defaults = network_defaults(&state, &sync, selected.as_deref());
-                    destination.update(cx, |input, cx| input.set_value(defaults.branch, w, cx));
-                    remote.update(cx, |input, cx| {
-                        if let Some(remote) = defaults.remote {
-                            input.set_selected_value(&remote, w, cx);
-                        } else {
-                            input.set_selected_index(None, w, cx);
-                        }
-                    });
-                    upstream.update(cx, |value, cx| {
-                        *value = defaults.set_upstream;
-                        cx.notify();
-                    });
-                    cx.notify();
-                },
-            ))
-        } else {
-            None
-        };
         let weak = cx.entity().downgrade();
         window.open_app_dialog(cx, move |dialog, _, cx| {
-            let _keep_subscription = &subscription;
             let mut body = div().id("git-network-form").max_h(ui_px(340.)).overflow_y_scroll().v_flex().gap_3().child(scope(&state.root, state.current_branch.as_deref())).child(note(&sync_detail(&sync))).child(select_field("원격 저장소", &remote));
-            if push {
-                body = body.child(select_field("보낼 로컬 브랜치", &source)).child(field("보낼 원격 브랜치", &destination)).child(check_field("push-upstream", "이 로컬 브랜치의 upstream 설정 (-u)", &upstream, cx)).child(note("현재 브랜치는 upstream을 기본값으로 씁니다. 다른 로컬 브랜치를 고르면 원격 선택과 목적지를 초기화합니다. 해당 브랜치의 추적 상태는 확인되지 않았으므로 직접 검토하세요."));
-            } else if !fetch { body = body.child(field("가져올 원격 브랜치", &destination)).child(note("Fast-forward만 적용합니다. 이력이 갈라졌거나 로컬 변경을 덮어쓰면 중단합니다.")); }
+            if !fetch { body = body.child(field("가져올 원격 브랜치", &destination)).child(note("Fast-forward만 적용합니다. 이력이 갈라졌거나 로컬 변경을 덮어쓰면 중단합니다.")); }
             else { body = body.child(note("원격 추적 참조만 가져옵니다. 작업 파일과 현재 브랜치는 유지합니다.")); }
             if sync.upstream.as_ref().is_some_and(|u| u.remote == ".") { body = body.child(note("현재 upstream은 로컬 브랜치입니다. 네트워크 원격을 직접 선택하세요.")); }
             if state.remotes.is_empty() { body = body.child(note("등록된 원격이 없습니다. Git 작업의 원격 저장소 관리에서 추가하세요.")); }
-            if !fetch && !push && state.current_branch.is_none() { body = body.child(note("Detached HEAD에서는 Pull할 수 없습니다. 먼저 로컬 브랜치를 체크아웃하세요.")); }
+            if !fetch && state.current_branch.is_none() { body = body.child(note("Detached HEAD에서는 Pull할 수 없습니다. 먼저 로컬 브랜치를 체크아웃하세요.")); }
             if !fetch && head(&starts).is_none() { body = body.child(note("현재 HEAD에 커밋이 없습니다. 먼저 커밋을 만들거나 기존 브랜치를 확인하세요.")); }
             let mut buttons = div().flex().flex_wrap().justify_end().gap_2().child(close_button());
             for prune in if fetch { vec![true, false] } else { vec![false] } {
-                let target = weak.clone(); let state = state.clone(); let starts = starts.clone(); let remote = remote.clone(); let source = source.clone(); let destination = destination.clone(); let upstream = upstream.clone();
+                let target = weak.clone(); let state = state.clone(); let starts = starts.clone(); let remote = remote.clone(); let destination = destination.clone();
                 let disabled = state.remotes.is_empty()
                     || remote.read(cx).selected_value().is_none()
                     || (!fetch && destination.read(cx).value().trim().is_empty())
-                    || (push && source.read(cx).selected_value().is_none())
-                    || (!fetch && !push && (state.current_branch.is_none() || head(&starts).is_none()));
+                    || (!fetch && (state.current_branch.is_none() || head(&starts).is_none()));
                 buttons = buttons.child(theme::action_button(if prune { "git-fetch-prune" } else { "git-network-next" }, disabled).label(if prune { "Fetch + 원격 추적 정리…" } else { "대상 확인…" }).on_click(move |_, w, cx| {
                     let Some(remote_name) = remote.read(cx).selected_value().cloned() else { return; };
                     let Some(config) = state.remotes.iter().find(|r| r.name == remote_name).cloned() else { return; };
                     let branch = destination.read(cx).value().trim().to_owned();
-                    let local = source.read(cx).selected_value().cloned();
-                    let track = *upstream.read(cx);
                     let expected_current = state.current_branch.clone(); let expected_head = head(&starts).map(str::to_owned);
-                    let urls = if push { config.push_urls.join("\n") } else { config.fetch_urls.join("\n") };
-                    if push {
-                        let Some(local) = local else { return; };
-                        let Some(selected) = starts.iter().find(|s| s.reference == format!("refs/heads/{local}")).cloned() else { return; };
-                        let root = state.root.clone(); let preview_root = root.clone();
-                        let description = format!("원격: {remote_name}\nPush URL:\n{urls}\n로컬 브랜치: {local}\n원격 브랜치: {branch}\nUpstream 설정: {}\n확인한 커밋 하나의 이력만 보냅니다. 강제 Push와 태그 전송은 사용하지 않습니다. 서버의 최종 수락 여부는 실행 시 결정됩니다.", if track { "설정 / 기존 값 변경" } else { "유지" });
-                        let _ = target.update(cx, |app,cx| app.workflow_read(root, move |ops| {
-                            verify_network_target(&ops, &config, expected_current.as_deref(), expected_head.as_deref(), Some(&selected))?;
-                            ops.preview_push(&remote_name, &local, &branch)
-                        }, move |app,preview,w,cx| app.show_git_review(super::review::Review { root: preview_root, title: "Push".into(), description, source: super::review::ReviewSource::Operation(preview), write: Some(super::review::ReviewWrite::Push(track)) },w,cx), w,cx));
-                        return;
-                    }
+                    let urls = config.fetch_urls.join("\n");
                     let (label, detail, job): (String, String, GitJob) = if fetch {
                         let label = if prune { "Fetch + 원격 추적 정리" } else { "Fetch" }.to_owned();
                         let detail = format!("원격: {remote_name}\nFetch URL:\n{urls}\n{}", if prune { "사라진 원격 추적 참조를 정리합니다 (--prune)." } else { "원격 추적 참조를 갱신합니다. Prune은 하지 않습니다." });
@@ -424,13 +369,12 @@ impl Pokarak {
                         (label, detail, job)
                     } else {
                         if branch.is_empty() { return; }
-                        let Some(local) = (if push { local } else { state.current_branch.clone() }) else { return; };
+                        let Some(local) = state.current_branch.clone() else { return; };
                         let Some(selected) = starts.iter().find(|s| s.reference == format!("refs/heads/{local}")).cloned() else { return; };
-                        let detail = format!("원격: {remote_name}\n{} URL:\n{urls}\n로컬: {local} @ {}\n원격 브랜치: {branch}\n{}", if push { "Push" } else { "Fetch" }, selected.oid, if push { format!("이 브랜치 하나만 보냅니다. 강제 푸시와 태그 전송은 하지 않습니다.\nUpstream 설정: {}", if track { "설정 / 기존 값 변경 (-u)" } else { "유지" }) } else { "원격 → 현재 로컬 브랜치에 fast-forward만 적용합니다.".into() });
+                        let detail = format!("원격: {remote_name}\nFetch URL:\n{urls}\n로컬: {local} @ {}\n원격 브랜치: {branch}\n원격 → 현재 로컬 브랜치에 fast-forward만 적용합니다.", selected.oid);
                         let job = Arc::new(move |git: GitOperations| {
                             verify_network_target(&git, &config, expected_current.as_deref(), expected_head.as_deref(), Some(&selected))?;
-                            if push { git.push_branch(&remote_name, &local, &branch, track) }
-                            else { git.execute(&Operation::Pull { remote: remote_name.clone(), remote_branch: branch.clone(), local_branch: local.clone() }) }
+                            git.execute(&Operation::Pull { remote: remote_name.clone(), remote_branch: branch.clone(), local_branch: local.clone() })
                         });
                         (title.into(), detail, job)
                     };
@@ -589,6 +533,27 @@ mod tests {
     }
 
     #[test]
+    fn direct_push_requires_a_configured_network_upstream_for_this_source() {
+        use super::PushTarget;
+        let (state, mut sync) = data();
+        let target = PushTarget::configured(&state, &sync).unwrap();
+        assert_eq!(target.local, "main");
+        assert_eq!(target.destination(), "origin/trunk");
+        assert!(!target.set_upstream);
+
+        sync.upstream.as_mut().unwrap().missing = true;
+        assert!(PushTarget::configured(&state, &sync).is_none());
+        sync.upstream.as_mut().unwrap().missing = false;
+        sync.branch = Some("other".into());
+        assert!(PushTarget::configured(&state, &sync).is_none());
+        sync.branch = state.current_branch.clone();
+        sync.upstream.as_mut().unwrap().remote = ".".into();
+        assert!(PushTarget::configured(&state, &sync).is_none());
+        sync.upstream = None;
+        assert!(PushTarget::configured(&state, &sync).is_none());
+    }
+
+    #[test]
     fn confirmation_rejects_external_source_commit_and_remote_url_edits() {
         use pokarak_core::operations::GitOperations;
         use std::fs;
@@ -626,6 +591,34 @@ mod tests {
             .unwrap();
         super::verify_network_target(&git, &remote, Some("main"), expected_head, Some(source))
             .unwrap();
+        // A custom destination with no local tip reviews the source tree. Once a
+        // tracking ref is known, the same UI route compares the exact two tips.
+        let state = git.state().unwrap();
+        let push = super::PushTarget {
+            local: "unpublished".into(),
+            remote: "origin".into(),
+            branch: "custom".into(),
+            set_upstream: true,
+        };
+        let review = push.review(&git, &state, &starts).unwrap();
+        let super::super::review::ReviewSource::Operation(preview) = review.source else {
+            panic!("expected a Push preview")
+        };
+        assert!(!preview.remote_state_known);
+        assert_eq!(preview.commits.len(), 1);
+        assert_eq!(preview.head_oid, source.oid);
+        fixture_git(
+            &root,
+            &global,
+            &["update-ref", "refs/remotes/origin/custom", &source.oid],
+        );
+        let review = push.review(&git, &state, &starts).unwrap();
+        let super::super::review::ReviewSource::Operation(preview) = review.source else {
+            panic!("expected a Push preview")
+        };
+        assert!(preview.remote_state_known);
+        assert_eq!(preview.base_oid.as_ref(), Some(&source.oid));
+        assert!(preview.commits.is_empty());
         // Move only the selected source; the current main HEAD stays unchanged.
         let tree = fixture_git(&root, &global, &["rev-parse", "HEAD^{tree}"]);
         let next = fixture_git(

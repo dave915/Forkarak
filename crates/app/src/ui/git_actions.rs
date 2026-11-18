@@ -1,6 +1,7 @@
 //! Explicit Git actions; sidebar selection navigates without mutating Git.
 mod activity;
 mod branch_forms;
+mod compact;
 mod contextual;
 mod history;
 mod ignore;

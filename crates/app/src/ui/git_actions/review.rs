@@ -20,8 +20,9 @@ pub(super) enum ReviewSource {
 }
 #[derive(Clone)]
 pub(super) enum ReviewWrite {
-    Push(bool),
-    Integrate,
+    Push(network::PushTarget),
+    Merge { source: String, destination: String },
+    Rebase,
 }
 #[derive(Clone)]
 pub(super) struct Review {
@@ -63,60 +64,102 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.present_git_review(Arc::new(review), false, window, cx);
+    }
+
+    fn present_git_review(
+        &mut self,
+        review: Arc<Review>,
+        show_details: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.close_dialog(cx);
         let weak = cx.entity().downgrade();
-        let review = Arc::new(review);
+        let expanded = Rc::new(Cell::new(show_details));
         window.open_app_dialog(cx, move |dialog, _, cx| {
-            let busy = weak.upgrade().is_none_or(|view| {
-                let app = view.read(cx);
-                app.git_is_busy() || app.current.as_ref() != Some(&review.root) || app.opening_path.is_some()
-            });
-            let mut body = div().id("git-immutable-review").v_flex().gap_2().max_h(ui_px(450.)).overflow_y_scroll()
-                .child(scope(&review.root, None)).child(review.description.clone());
-            if let ReviewSource::Operation(p) = &review.source {
-                body = body.child(note(&p.baseline_description))
-                    .child(note(&format!("기준: {}\n대상: {}", p.base_oid.as_deref().unwrap_or("로컬에 알려진 기준 없음"), p.head_oid)));
-                if p.commits_truncated { body = body.child(note("커밋 목록은 처음 200개까지만 표시합니다. 파일 목록은 두 끝점의 차이입니다.")); }
+            let busy = super::branch_forms::branch_form_disabled(&weak, &review.root, cx);
+            let compact = matches!(review.write, Some(ReviewWrite::Push(_) | ReviewWrite::Merge { .. }));
+            let mut body = div().v_flex().min_w_0().gap_2();
+            let mut footer = div().flex().items_center().justify_end().gap_2();
+            if let (Some(write), ReviewSource::Operation(p)) = (&review.write, &review.source) && compact {
+                match write {
+                    ReviewWrite::Push(push) => {
+                        body = body.child(compact::row("보낼 브랜치", push.local.clone(), cx))
+                            .child(compact::row("받을 브랜치", push.destination(), cx))
+                            .when(push.set_upstream, |body| body.child(note("Push 후 받을 브랜치를 업스트림으로 설정합니다.")));
+                        let owner = weak.clone();
+                        let root = review.root.clone();
+                        let push = push.clone();
+                        footer = footer.child(theme::action_button("push-change-destination", busy)
+                            .label("대상 변경…").on_click(move |_, w, cx| {
+                                let _ = owner.update(cx, |app, cx| app.open_branch_push(root.clone(), Some(push.clone()), w, cx));
+                            })).child(div().flex_1());
+                    }
+                    ReviewWrite::Merge { source, destination } => {
+                        body = body.child(compact::row("가져올 브랜치", source.clone(), cx))
+                            .child(compact::row("병합할 위치", destination.clone(), cx));
+                    }
+                    ReviewWrite::Rebase => unreachable!(),
+                }
+                body = body.child(compact::worktree(&review.root, cx))
+                    .child(div().border_t_1().border_color(Palette::new(cx).rgb(LINE)).pt_2()
+                        .child(preview_summary(write, p)))
+                    .child(div().flex().child(compact::disclosure("git-review-details", "커밋·파일 상세".into(), &expanded)));
+                if expanded.get() {
+                    body = body.child(scope(&review.root, None)).child(note(&review.description))
+                        .child(note(&format!("소스 커밋 · {}\n대상 기준 · {}", p.head_oid, p.base_oid.as_deref().unwrap_or("알 수 없음"))));
+                }
+            } else {
+                body = body.child(scope(&review.root, None)).child(review.description.clone());
+                match &review.source {
+                    ReviewSource::Operation(p) => {
+                        body = body.child(note(&p.baseline_description))
+                            .child(note(&format!("기준: {}\n대상: {}", p.base_oid.as_deref().unwrap_or("로컬에 알려진 기준 없음"), p.head_oid)));
+                    }
+                    ReviewSource::Comparison(p) => {
+                        body = body.child(note(&format!("직접 비교 (공통 조상 사용 안 함)\n이전: {}\n이후: {}\n작업 파일 변경은 포함하지 않습니다.", p.left_oid, p.right_oid)));
+                    }
+                    ReviewSource::Reflog { entry, detail } => {
+                        body = body.child(note(&format!("{} · {}\n{}\n부모 기준: {}", entry.selector, entry.timestamp, entry.oid, detail.parent.as_deref().unwrap_or("최초 커밋 · 빈 트리"))));
+                    }
+                }
             }
-            if let ReviewSource::Comparison(p) = &review.source {
-                body = body.child(note(&format!("직접 비교 (공통 조상 사용 안 함)\n이전: {}\n이후: {}\n작업 파일 변경은 포함하지 않습니다.", p.left_oid, p.right_oid)));
+            if !compact || expanded.get() {
+                body = body.child(review_lists(&review, &weak, compact, busy, cx));
             }
-            if let ReviewSource::Reflog { entry, detail } = &review.source {
-                body = body.child(note(&format!("{} · {}\n{}\n부모 기준: {}", entry.selector, entry.timestamp, entry.oid, detail.parent.as_deref().unwrap_or("최초 커밋 · 빈 트리"))));
-            }
-            let mut commits = div().id("git-review-commits").max_h(ui_px(125.)).overflow_y_scroll().v_flex().gap_1();
-            for commit in review.commits() {
-                commits = commits.child(div().child(format!("{} · {} · {}", &commit.oid[..8], commit.author, commit.subject)));
-            }
-            if !matches!(&review.source, ReviewSource::Comparison(_)) {
-                body = body.child(format!("커밋 {}개", review.commits().len())).child(commits);
-            }
-            let mut files = div().id("git-review-files").max_h(ui_px(190.)).overflow_y_scroll().v_flex().gap_1();
-            for (index, file) in review.files().iter().enumerate() {
-                let target = weak.clone(); let source = review.clone(); let path = file.path.clone();
-                files = files.child(theme::action_button(("git-review-file", index), busy).label(format!("{} · {:?}", super::super::git_commit::display_path(&file.path), file.status)).small().on_click(move |_,w,cx| {
-                    let source = source.clone(); let path = path.clone();
-                    let _ = target.update(cx, |app,cx| app.read_git_review_file(source, path, w,cx));
-                }));
-            }
-            body = body.child(format!("변경 파일 {}개 · 선택하여 코드 / diff 확인", review.files().len())).child(files);
-            let mut footer = div().flex().flex_wrap().justify_end().gap_2().child(super::recovery::review_close(&weak));
+
+            footer = footer.child(super::recovery::review_close(&weak));
             if let ReviewSource::Reflog { entry, .. } = &review.source {
                 let target = weak.clone(); let entry = entry.clone();
                 footer = footer.child(theme::action_button("reflog-create-recovery", busy).label("복구 브랜치 만들기…").on_click(move |_,w,cx| { let _ = target.update(cx, |app,cx| app.show_recovery_branch(entry.clone(),w,cx)); }));
             }
             if let Some(write) = &review.write {
                 let target = weak.clone(); let review = review.clone(); let write = write.clone();
-                footer = footer.child(theme::action_button("git-review-execute", busy).label(format!("{} 실행", review.title)).primary().on_click(move |_,w,cx| {
+                let label = match &write {
+                    ReviewWrite::Push(_) => "푸시",
+                    ReviewWrite::Merge { .. } => "병합",
+                    ReviewWrite::Rebase => "Rebase 실행",
+                };
+                footer = footer.child(theme::action_button("git-review-execute", busy).label(label).primary().on_click(move |_,w,cx| {
                     let ReviewSource::Operation(preview) = &review.source else { return; };
                     let preview = preview.clone(); let write = write.clone();
                     let _ = target.update(cx, |app,cx| {
                         w.close_dialog(cx);
-                        app.run_git_job(review.root.clone(), review.title.clone(), move |ops| match write { ReviewWrite::Push(upstream) => ops.execute_push_preview(&preview, upstream), ReviewWrite::Integrate => ops.execute_integration_preview(&preview) }, w,cx);
+                        app.run_git_job(review.root.clone(), review.title.clone(), move |ops| match write {
+                            ReviewWrite::Push(push) => ops.execute_push_preview(&preview, push.set_upstream),
+                            ReviewWrite::Merge { .. } | ReviewWrite::Rebase => ops.execute_integration_preview(&preview),
+                        }, w,cx);
                     });
                 }));
             }
-            dialog.on_close({ let owner = weak.clone(); move |_,_,cx| { let _ = owner.update(cx, |app,_| app.invalidate_workflow_read()); } }).title(format!("{} · 대상과 변경 확인", review.title)).width(ui_px(780.)).margin_top(ui_px(12.)).child(body).footer(footer)
+            let dialog = if compact {
+                compact::dialog(dialog, &weak).title(format!("{} 확인", review.title))
+            } else {
+                dialog.on_close({ let owner = weak.clone(); move |_,_,cx| { let _ = owner.update(cx, |app,_| app.invalidate_workflow_read()); } })
+                    .title(format!("{} · 대상과 변경 확인", review.title)).width(ui_px(780.)).margin_top(ui_px(12.))
+            };
+            dialog.child(body.id("git-immutable-review").max_h(ui_px(410.)).overflow_y_scroll()).footer(footer)
         });
     }
 
@@ -157,7 +200,7 @@ impl Pokarak {
         let selected = Rc::new(Cell::new(0));
         let weak = cx.entity().downgrade();
         window.close_dialog(cx);
-        window.open_app_dialog(cx, move |dialog, _, _| {
+        window.open_app_dialog(cx, move |dialog, window, _| {
             let mut tabs = div().flex().gap_2();
             for (index, label) in ["Diff", "이전 코드", "이후 코드"].into_iter().enumerate()
             {
@@ -208,7 +251,9 @@ impl Pokarak {
                         .child(
                             Editor::new(&editors[selected.get()])
                                 .aria_label("변경 코드 읽기 전용")
-                                .h(ui_px(350.)),
+                                .h(ui_px(350.)
+                                    .min(window.viewport_size().height - ui_px(220.))
+                                    .max(ui_px(60.))),
                         ),
                 )
                 .footer(
@@ -222,13 +267,111 @@ impl Pokarak {
                                 .label("대상 목록으로")
                                 .on_click(move |_, w, cx| {
                                     let _ = back.update(cx, |app, cx| {
-                                        app.show_git_review((*review).clone(), w, cx)
+                                        app.present_git_review(review.clone(), true, w, cx)
                                     });
                                 }),
                         ),
                 )
         });
     }
+}
+
+fn preview_summary(write: &ReviewWrite, preview: &OperationPreview) -> String {
+    let commits = preview.commits.len();
+    let files = preview.files.len();
+    let count = if preview.commits_truncated {
+        format!("{commits}개 초과")
+    } else {
+        format!("{commits}개")
+    };
+    match write {
+        ReviewWrite::Push(_) if !preview.remote_state_known => format!(
+            "원격 기준을 알 수 없습니다. 소스 전체를 표시합니다.\n커밋 {count} · 파일 {files}개"
+        ),
+        ReviewWrite::Push(_) => format!("로컬 원격 추적 기준 · 커밋 {count} · 변경 파일 {files}개"),
+        ReviewWrite::Merge { .. } => format!("가져올 커밋 {count} · 브랜치 간 파일 차이 {files}개"),
+        ReviewWrite::Rebase => unreachable!(),
+    }
+}
+
+fn review_lists(
+    review: &Arc<Review>,
+    weak: &WeakEntity<Pokarak>,
+    compact: bool,
+    busy: bool,
+    cx: &App,
+) -> Div {
+    let mut lists = div().v_flex().min_w_0().gap_1();
+    if !matches!(&review.source, ReviewSource::Comparison(_)) {
+        let truncated = matches!(&review.source, ReviewSource::Operation(p) if p.commits_truncated);
+        lists = lists.child(if truncated {
+            format!("커밋 · 처음 {}개 표시", review.commits().len())
+        } else {
+            format!("커밋 {}개", review.commits().len())
+        });
+        let mut commits = div()
+            .id("git-review-commits")
+            .max_h(ui_px(125.))
+            .overflow_y_scroll()
+            .v_flex()
+            .gap_1();
+        for commit in review.commits() {
+            let line = if compact {
+                div()
+                    .v_flex()
+                    .child(format!("{} · {}", commit.subject, commit.author))
+                    .child(note(&commit.oid).text_color(Palette::new(cx).rgb(MUTED)))
+            } else {
+                div().child(format!(
+                    "{} · {} · {}",
+                    &commit.oid[..8],
+                    commit.author,
+                    commit.subject
+                ))
+            };
+            commits = commits.child(line.flex_none());
+        }
+        lists = lists.child(commits);
+    }
+    lists = lists.child(format!(
+        "파일 {}개 · 선택하여 Diff 보기",
+        review.files().len()
+    ));
+    let mut files = div()
+        .id("git-review-files")
+        .max_h(ui_px(170.))
+        .overflow_y_scroll()
+        .v_flex()
+        .gap_1();
+    for (index, file) in review.files().iter().enumerate() {
+        let target = weak.clone();
+        let source = review.clone();
+        let path = file.path.clone();
+        let display = super::super::git_commit::display_path(&path);
+        let display = match &file.old_path {
+            Some(old) if old != &path => format!(
+                "{} → {display}",
+                super::super::git_commit::display_path(old)
+            ),
+            _ => display,
+        };
+        let (status, _) = file_status(&file.status);
+        let label = format!("{status}  {display}");
+        files = files.child(
+            theme::action_button(("git-review-file", index), busy)
+                .accessibility_label(label.clone())
+                .tooltip(label.clone())
+                .child(dialogs::choice_body().text_ellipsis().child(label))
+                .small()
+                .flex_none()
+                .on_click(move |_, w, cx| {
+                    let _ = target.update(cx, |app, cx| {
+                        app.read_git_review_file(source.clone(), path.clone(), w, cx)
+                    });
+                }),
+        );
+    }
+    lists.child(files)
 }
 
 #[cfg(test)]

@@ -399,7 +399,7 @@ impl Pokarak {
     }
 }
 
-fn branch_form_disabled(weak: &WeakEntity<Pokarak>, root: &Path, cx: &App) -> bool {
+pub(super) fn branch_form_disabled(weak: &WeakEntity<Pokarak>, root: &Path, cx: &App) -> bool {
     weak.upgrade().is_none_or(|view| {
         let app = view.read(cx);
         app.current.as_deref() != Some(root)

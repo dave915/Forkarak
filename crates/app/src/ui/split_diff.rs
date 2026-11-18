@@ -562,6 +562,45 @@ impl SplitDiff {
         }
     }
 
+    /// Replace accepted index-preview data inside the existing entity. Its
+    /// viewport, horizontal reading offset and divider interaction stay local.
+    pub(super) fn refresh_data(&mut self, prepared: PreparedDiff) -> bool {
+        let doc = &prepared.document;
+        if self.doc.path == doc.path
+            && self.doc.old_path == doc.old_path
+            && self.doc.old_text == doc.old_text
+            && self.doc.new_text == doc.new_text
+            && self.doc.patch == doc.patch
+            && self.doc.binary == doc.binary
+            && self.doc.truncated == doc.truncated
+            && self.doc.lines.len() == doc.lines.len()
+            && self.doc.lines.iter().zip(&doc.lines).all(|(a, b)| {
+                a.old_line == b.old_line
+                    && a.new_line == b.new_line
+                    && a.kind == b.kind
+                    && a.text == b.text
+            })
+        {
+            return false;
+        }
+        let view = Arc::new(prepared.analysis.view(&doc.lines, false));
+        let fresh = Self::new(
+            prepared.document,
+            prepared.syntax,
+            prepared.analysis,
+            view,
+            self.owner.clone(),
+            self.worktree.clone(),
+        );
+        self.doc = fresh.doc;
+        self.syntax = fresh.syntax;
+        self.analysis = fresh.analysis;
+        self.rows = fresh.rows;
+        self.max_columns = fresh.max_columns;
+        self.number_digits = fresh.number_digits;
+        true
+    }
+
     fn preferred_ratio(&self, cx: &App) -> f32 {
         self.owner
             .read_with(cx, |app, _| {
@@ -853,6 +892,78 @@ impl Render for SplitDiff {
 #[cfg(test)]
 mod tests {
     use super::{Row, align, max_offset, split_ratio};
+
+    #[test]
+    fn refreshing_split_data_keeps_the_reader_and_skips_unchanged_rows() {
+        use super::{PreparedDiff, SplitDiff};
+        use gpui_kit::{WeakEntity, point, px};
+        use std::{fs, process::Command, sync::Arc};
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(root)
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                ])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        fs::write(root.join("source.rs"), "original\n").unwrap();
+        git(&["add", "--", "source.rs"]);
+        git(&["commit", "-m", "authored base"]);
+        fs::write(root.join("source.rs"), "changed\n").unwrap();
+        let snapshot = pokarak_core::snapshot_current(root, &Default::default()).unwrap();
+        let read = || pokarak_core::diff(root, &snapshot.changes[0], &Default::default()).unwrap();
+        let document = read();
+        let prepared = PreparedDiff::new(document.clone());
+        let view = Arc::new(prepared.analysis.view(&prepared.document.lines, false));
+        let mut split = SplitDiff::new(
+            prepared.document,
+            prepared.syntax,
+            prepared.analysis,
+            view,
+            WeakEntity::new_invalid(),
+            Some(root.to_owned()),
+        );
+        let scroll = split.scroll.clone();
+        let offset = point(px(-11.), px(-90.));
+        scroll.0.borrow().base_handle.set_offset(offset);
+        split.horizontal = 37.;
+        split.panel_width = 440.;
+        split.resizing = true;
+        let rows = split.rows.clone();
+        let syntax = split.syntax.clone();
+        assert!(!split.refresh_data(PreparedDiff::new(document)));
+        assert!(Arc::ptr_eq(&rows, &split.rows));
+        assert!(Arc::ptr_eq(&syntax, &split.syntax));
+        fs::write(root.join("source.rs"), "newer content\nanother line\n").unwrap();
+        assert!(split.refresh_data(PreparedDiff::new(read())));
+        assert!(!Arc::ptr_eq(&rows, &split.rows));
+        assert_eq!(split.doc.new_text, "newer content\nanother line\n");
+        assert!(std::rc::Rc::ptr_eq(&scroll.0, &split.scroll.0));
+        assert_eq!(split.scroll.0.borrow().base_handle.offset(), offset);
+        assert_eq!(split.horizontal, 37.);
+        assert_eq!(split.panel_width, 440.);
+        assert!(split.resizing);
+        assert_eq!(split.worktree.as_deref(), Some(root));
+    }
 
     #[test]
     fn pending_restore_survives_hidden_layout_then_tracks_actual_scroll_and_row_height() {

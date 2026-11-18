@@ -622,7 +622,7 @@
     "bundled": false,
     "version": "271.2085.0",
     "sourceUrl": "https://github.com/Kotlin/kotlin-lsp",
-    "metadataUrl": "https://api.github.com/repos/Kotlin/kotlin-lsp/releases",
+    "metadataUrl": "https://raw.githubusercontent.com/Kotlin/kotlin-lsp/main/RELEASES.md",
     "officialReleaseUrl": "https://github.com/Kotlin/kotlin-lsp/releases/tag/kotlin-lsp/v271.2085.0",
     "assetUrl": "https://download.jetbrains.com/language-server/kotlin-server/271.2085.0/kotlin-server-271.2085.0-aarch64.sit",
     "checksumUrl": "https://download.jetbrains.com/language-server/kotlin-server/271.2085.0/kotlin-server-271.2085.0-aarch64.sit.sha256",

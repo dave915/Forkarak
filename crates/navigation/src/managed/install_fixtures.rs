@@ -20,9 +20,9 @@ fn archive(executable: &str) -> Vec<u8> {
 fn responses() -> Vec<(String, Vec<u8>)> {
     let arm = cfg!(target_arch = "aarch64");
     let kotlin_file = if arm {
-        "kotlin-aarch64.sit"
+        "kotlin-server-1.2.3-aarch64.sit"
     } else {
-        "kotlin.sit"
+        "kotlin-server-1.2.3.sit"
     };
     let jdk_arch = if arm { "aarch64" } else { "x64" };
     let jdk_file = format!("OpenJDK25U-jdk_{jdk_arch}_mac_hotspot_fixture.tar.gz");
@@ -36,16 +36,34 @@ fn responses() -> Vec<(String, Vec<u8>)> {
     let jdk_archive = archive("jdk/Contents/Home/bin/java");
     let maven_archive = archive("maven/bin/mvn");
     vec![
-        ("https://api.github.com/repos/Kotlin/kotlin-lsp/releases/latest".into(),
-         serde_json::to_vec(&serde_json::json!({"tag_name":"v1.2.3","body":kotlin})).unwrap()),
-        (format!("{kotlin}.sha256"), format!("{:x}", Sha256::digest(&kotlin_archive)).into_bytes()),
+        (
+            "https://raw.githubusercontent.com/Kotlin/kotlin-lsp/main/RELEASES.md".into(),
+            format!("### Kotlin releases\n\n### v1.2.3\n* [Download]({kotlin})").into_bytes(),
+        ),
+        (
+            format!("{kotlin}.sha256"),
+            format!("{:x}", Sha256::digest(&kotlin_archive)).into_bytes(),
+        ),
         (kotlin, kotlin_archive),
-        ("https://api.github.com/repos/adoptium/temurin25-binaries/releases/latest".into(),
-         serde_json::to_vec(&serde_json::json!({"tag_name":"fixture","assets":[{"name":jdk_file,"browser_download_url":jdk}]})).unwrap()),
-        (format!("{jdk}.sha256.txt"), format!("{:x}", Sha256::digest(&jdk_archive)).into_bytes()),
+        (
+            format!(
+                "https://api.adoptium.net/v3/assets/latest/25/hotspot?architecture={jdk_arch}&os=mac&image_type=jdk&vendor=eclipse"
+            ),
+            serde_json::to_vec(&serde_json::json!([{"release_name":"fixture", "binary":{
+                "architecture":jdk_arch, "os":"mac", "image_type":"jdk",
+                "package":{"link":jdk, "checksum":format!("{:x}", Sha256::digest(&jdk_archive))}
+            }}]))
+            .unwrap(),
+        ),
         (jdk, jdk_archive),
-        (format!("{base}/maven-metadata.xml"), b"<versions><version>3.9.9</version></versions>".to_vec()),
-        (format!("{maven}.sha512"), format!("{:x}", Sha512::digest(&maven_archive)).into_bytes()),
+        (
+            format!("{base}/maven-metadata.xml"),
+            b"<versions><version>3.9.9</version></versions>".to_vec(),
+        ),
+        (
+            format!("{maven}.sha512"),
+            format!("{:x}", Sha512::digest(&maven_archive)).into_bytes(),
+        ),
         (maven, maven_archive),
     ]
 }
@@ -68,6 +86,11 @@ while [ "$#" -gt 0 ]; do
 done
 index=$(wc -l < "$root/requests")
 printf '%s\n' "$url" >> "$root/requests"
+case "$url" in
+    https://api.github.com/*)
+        printf 'HTTP/2 403\r\n\r\n' > "$headers"
+        exit 56 ;;
+esac
 test "$url" = "$(sed -n "$((index+1))p" "$root/urls")" || exit 91
 if [ "$index" -eq "$(cat "$root/refused")" ]; then
     printf 'HTTP/2 302\r\nLocation: https://cdn.invalid/private?signature=SECRET\r\n\r\nHTTP/2 403\r\n\r\n' > "$headers"
@@ -75,7 +98,7 @@ if [ "$index" -eq "$(cat "$root/refused")" ]; then
     echo 'https://user:password@cdn.invalid/private?signature=SECRET' >&2
     echo 'X-Amz-Credential: SECRET' >&2
     # A received HTTP refusal still wins if the subprocess exits successfully.
-    if [ "$index" -eq 6 ]; then exit 0; fi
+    if [ "$index" -eq 5 ]; then exit 0; fi
     exit 22
 fi
 printf 'HTTP/2 200\r\n\r\n' > "$headers"
@@ -84,6 +107,10 @@ cat "$root/body-$((index+0))" > "$output"
     fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
     let responses = responses();
     let urls: Vec<_> = responses.iter().map(|(url, _)| url.as_str()).collect();
+    assert!(
+        urls.iter()
+            .all(|url| !url.starts_with("https://api.github.com/"))
+    );
     fs::write(fixture.join("urls"), urls.join("\n")).unwrap();
     for (index, (_, body)) in responses.iter().enumerate() {
         fs::write(fixture.join(format!("body-{index}")), body).unwrap();
@@ -109,6 +136,7 @@ cat "$root/body-$((index+0))" > "$output"
         if refused == urls.len() {
             let receipt = control.wait().unwrap();
             assert_eq!(receipt.distribution, ToolDistribution::FirstUseDownload);
+            assert_eq!(receipt.version, "1.2.3");
             assert_eq!(receipt.artifacts.len(), 3);
             assert_eq!(receipt.servers[0].language, "kotlin");
             assert_eq!(durable.phase, InstallPhase::Complete);
@@ -116,8 +144,16 @@ cat "$root/body-$((index+0))" > "$output"
             assert!(status.problem.is_none());
             assert_eq!(status.installed.unwrap().version, receipt.version);
         } else {
-            let component = ["Kotlin LSP", "Temurin JDK", "Maven"][refused / 3];
-            let stage = ["메타데이터", "체크섬", "압축 파일"][refused % 3];
+            let (component, stage) = [
+                ("Kotlin LSP", "메타데이터"),
+                ("Kotlin LSP", "체크섬"),
+                ("Kotlin LSP", "압축 파일"),
+                ("Temurin JDK", "메타데이터"),
+                ("Temurin JDK", "압축 파일"),
+                ("Maven", "메타데이터"),
+                ("Maven", "체크섬"),
+                ("Maven", "압축 파일"),
+            ][refused];
             let url = url::Url::parse(urls[refused]).unwrap();
             let summary = &durable.message;
             for expected in [
@@ -134,7 +170,7 @@ cat "$root/body-$((index+0))" > "$output"
             assert_eq!(control.wait().unwrap_err().to_string(), diagnostic);
             assert_eq!(control.snapshot().message, *summary);
             assert_ne!(&diagnostic, summary);
-            if refused == 6 {
+            if refused == 5 {
                 assert!(diagnostic.contains("unsuccessful HTTP response"));
             } else {
                 assert!(diagnostic.contains("curl failed (exit code 22)"));

@@ -184,42 +184,34 @@ fn java_version(
     major: u16,
 ) -> Result<PathBuf> {
     let c = &c.for_component("Temurin JDK");
-    let source =
-        format!("https://api.github.com/repos/adoptium/temurin{major}-binaries/releases/latest");
-    let release = io::json(&source, scratch, c)?;
-    let prefix = if arch()? == "arm64" {
-        format!("OpenJDK{major}U-jdk_aarch64_mac_hotspot_")
-    } else {
-        format!("OpenJDK{major}U-jdk_x64_mac_hotspot_")
-    };
-    let name = release["assets"]
+    let architecture = if arch()? == "arm64" { "aarch64" } else { "x64" };
+    let source = format!(
+        "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture={architecture}&os=mac&image_type=jdk&vendor=eclipse"
+    );
+    let releases = io::json(&source, scratch, c)?;
+    let release = releases
         .as_array()
-        .context("Invalid Temurin release")?
+        .context("Invalid Adoptium release metadata")?
         .iter()
-        .find_map(|a| {
-            a["name"]
-                .as_str()
-                .filter(|n| n.starts_with(&prefix) && n.ends_with(".tar.gz"))
+        .find(|r| {
+            let binary = &r["binary"];
+            binary["architecture"] == architecture
+                && binary["os"] == "mac"
+                && binary["image_type"] == "jdk"
         })
-        .context("No compatible Temurin macOS asset")?;
-    let asset = release["assets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["name"] == name)
-        .unwrap();
-    let url = str_field(asset, "browser_download_url")?;
-    let digest = match asset["digest"]
-        .as_str()
-        .filter(|s| s.starts_with("sha256:"))
-    {
-        Some(d) => d.into(),
-        None => format!(
-            "sha256:{}",
-            io::checksum(&format!("{url}.sha256.txt"), 64, scratch, c)?
-        ),
-    };
-    let a = descriptor(str_field(&release, "tag_name")?, url, &digest, &source);
+        .context("No compatible Temurin macOS JDK")?;
+    let package = &release["binary"]["package"];
+    let url = str_field(package, "link")?;
+    let checksum = str_field(package, "checksum")?;
+    if checksum.len() != 64 || !checksum.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("Invalid Adoptium SHA-256 checksum");
+    }
+    let a = descriptor(
+        str_field(release, "release_name")?,
+        url,
+        &format!("sha256:{checksum}"),
+        &source,
+    );
     unpack(&a, &payload.join("java"), scratch, c)?;
     artifacts.push(a);
     find(&payload.join("java"), "/Contents/Home/bin/java")
@@ -548,38 +540,46 @@ fn jdt(
         )],
     ))
 }
+const KOTLIN_RELEASES: &str =
+    "https://raw.githubusercontent.com/Kotlin/kotlin-lsp/main/RELEASES.md";
+
+fn kotlin_archive<'a>(releases: &'a str, architecture: &str) -> Result<(&'a str, &'a str)> {
+    let mut lines = releases.lines();
+    let version = lines
+        .find_map(|line| line.strip_prefix("### v"))
+        .context("Official Kotlin release index lacks a version")?
+        .trim();
+    if !version
+        .split('.')
+        .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        bail!("Invalid Kotlin release version");
+    }
+    let suffix = if architecture == "arm64" {
+        "-aarch64"
+    } else {
+        ""
+    };
+    let filename = format!("/kotlin-server-{version}{suffix}.sit");
+    // The index also lists VS Code extensions and older server releases.
+    let url = lines
+        .take_while(|line| !line.starts_with("### v"))
+        .flat_map(|line| line.split(['(', ')']))
+        .find(|url| url.starts_with("https://download.jetbrains.com/") && url.ends_with(&filename))
+        .context("Official Kotlin release lacks standalone macOS download")?;
+    Ok((version, url))
+}
+
 fn kotlin(
     payload: &Path,
     scratch: &Path,
     c: &InstallControl,
     artifacts: &mut Vec<ToolArtifact>,
 ) -> Result<(String, Vec<ServerConfig>)> {
-    let release = github("Kotlin/kotlin-lsp", scratch, c)?;
-    let body = str_field(&release, "body")?;
-    let suffix = if arch()? == "arm64" {
-        "-aarch64.sit"
-    } else {
-        ".sit"
-    };
-    let url = body
-        .split(|ch: char| ch.is_whitespace() || matches!(ch, '(' | ')' | '>' | '<' | '"'))
-        .find(|s| {
-            s.starts_with("https://download.jetbrains.com/")
-                && s.ends_with(suffix)
-                && (arch().ok() != Some("x64") || !s.ends_with("-aarch64.sit"))
-        })
-        .context("Official Kotlin release lacks standalone macOS download")?;
+    let releases = io::text(KOTLIN_RELEASES, scratch, c)?;
+    let (version, url) = kotlin_archive(&releases, arch()?)?;
     let sum = io::checksum(&format!("{url}.sha256"), 64, scratch, c)?;
-    let version = release["name"]
-        .as_str()
-        .unwrap_or(str_field(&release, "tag_name")?)
-        .trim_start_matches('v');
-    let a = descriptor(
-        version,
-        url,
-        &format!("sha256:{sum}"),
-        "https://api.github.com/repos/Kotlin/kotlin-lsp/releases/latest",
-    );
+    let a = descriptor(version, url, &format!("sha256:{sum}"), KOTLIN_RELEASES);
     unpack(&a, &payload.join("server"), scratch, c)?;
     artifacts.push(a);
     let server = find(&payload.join("server"), "/bin/intellij-server")?;
@@ -1191,4 +1191,29 @@ pub(super) fn install(
         formatters: vec![],
         notices,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kotlin_archive;
+
+    #[test]
+    fn kotlin_index_pairs_the_latest_release_with_its_standalone_architecture() {
+        let base = "https://download.jetbrains.com/language-server/kotlin-server/2.0.0";
+        let intel = format!("{base}/kotlin-server-2.0.0.sit");
+        let arm = format!("{base}/kotlin-server-2.0.0-aarch64.sit");
+        let latest = format!("### v2.0.0\n[extension]({base}/server.vsix)\n[x64]({intel})\n");
+        // An incomplete release must not silently use an archive from the next section.
+        let old = format!("### v1.9.0\n[old link]({arm})\n");
+        assert!(kotlin_archive(&format!("{latest}{old}"), "arm64").is_err());
+        let both = format!("{latest}[arm64]({arm})\n{old}");
+        assert_eq!(
+            kotlin_archive(&both, "arm64").unwrap(),
+            ("2.0.0", arm.as_str())
+        );
+        assert_eq!(
+            kotlin_archive(&both, "x64").unwrap(),
+            ("2.0.0", intel.as_str())
+        );
+    }
 }

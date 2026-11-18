@@ -613,3 +613,6 @@ fn signature_hover_and_completion_documentation_use_snapshot_and_capabilities() 
         }
     }
 }
+
+#[path = "buffer/workspace_edits.rs"]
+mod workspace_edits;

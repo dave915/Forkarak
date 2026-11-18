@@ -26,7 +26,27 @@ impl Pokarak {
         if let Some(panel) = self.language_tools.panel.as_mut()
             && panel.is_caret_popup()
         {
-            if let Reply::Signature(Some(help)) = &panel.value {
+            if let Reply::RenameInput(_, name) = &panel.value {
+                let input = cx.new(|cx| InputState::new(window, cx).default_value(name.clone()));
+                input.update(cx, |s, cx| {
+                    s.focus(window, cx);
+                    s.select_all(window, cx);
+                });
+                self.language_tools.rename_input = Some(input);
+            } else if let Reply::Actions(actions, _) = &panel.value {
+                panel.cursor = actions
+                    .items
+                    .iter()
+                    .position(|a| a.disabled.is_none())
+                    .unwrap_or(0);
+                self.language_tools.scroll.scroll_to_item(
+                    actions.row_for(panel.cursor).saturating_sub(1),
+                    ScrollStrategy::Top,
+                );
+                if let Some(editor) = self.active_editor() {
+                    editor.read(cx).focus_handle(cx).focus(window, cx);
+                }
+            } else if let Reply::Signature(Some(help)) = &panel.value {
                 panel.cursor = help.active_signature.unwrap_or(0) as usize;
             } else if matches!(panel.value, Reply::Complete(_)) {
                 self.language_tools

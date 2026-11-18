@@ -25,6 +25,19 @@ impl Identity {
     }
 }
 
+pub(super) enum PendingAnalysis {
+    Symbol(PendingSymbolRequest),
+    Edit(Identity, Tool),
+}
+impl PendingAnalysis {
+    pub(super) fn resume(self, current: Option<&Identity>) -> Option<(Tool, Option<Position>)> {
+        match self {
+            Self::Symbol(request) => Some((Tool::Symbol, Some(request.resume(current)?))),
+            Self::Edit(identity, tool) => identity.matches(current?, true).then_some((tool, None)),
+        }
+    }
+}
+
 /// Only a native symbol gesture may survive the explicit trust prompt. It is
 /// consumed on approval; every ordinary language action retains its old policy.
 pub(super) struct PendingSymbolRequest {

@@ -67,6 +67,9 @@ fn entries(app: &Pokarak, window: &Window, cx: &App) -> Vec<Entry> {
         ManageFiles,
         ready
     );
+    command!("파일: 모두 저장", "save_all", ready);
+    command!("코드 지원: 이름 바꾸기…", "rename_symbol", editable);
+    command!("코드 지원: 빠른 수정…", "quick_fix", editable);
     command!("파일: 현재 파일 저장", "save_file", ready);
     command!(
         "파일: 현재 파일 닫기",

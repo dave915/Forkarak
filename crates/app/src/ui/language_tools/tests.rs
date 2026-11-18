@@ -711,3 +711,31 @@ fn candidate_documentation_uses_only_completion_resolve_and_keeps_the_original_w
         assert!(!methods.iter().any(|m| m == "textDocument/hover"));
     }
 }
+
+#[test]
+fn workspace_edit_approval_resumes_the_original_command_only_for_the_same_source_and_caret() {
+    use super::model::PendingAnalysis;
+    let fixture = Fixture::new();
+    for tool in [Tool::PrepareRename, Tool::QuickFix] {
+        let identity = fixture.identity();
+        let pending = || PendingAnalysis::Edit(identity.clone(), tool.clone());
+        let (resumed, position) = pending().resume(Some(&identity)).unwrap();
+        assert_eq!(resumed.title(), tool.title());
+        assert!(position.is_none());
+        let mut moved = identity.clone();
+        moved.cursor -= 1;
+        assert!(pending().resume(Some(&moved)).is_none());
+        let mut other = identity.clone();
+        other.key.root = PathBuf::from("other-worktree");
+        assert!(pending().resume(Some(&other)).is_none());
+        assert!(pending().resume(None).is_none());
+    }
+    let identity = fixture.identity();
+    identity.snapshot.invalidate();
+    assert!(
+        PendingAnalysis::Edit(identity.clone(), Tool::QuickFix)
+            .resume(Some(&identity))
+            .is_none()
+    );
+    assert!(!fixture.root.join("protocol.jsonl").exists());
+}

@@ -7,7 +7,7 @@ use std::{
 };
 
 #[derive(Clone, Debug)]
-struct Formatter {
+pub(in crate::ui) struct Formatter {
     path: String,
     args: Vec<String>,
 }
@@ -25,7 +25,7 @@ fn run_with_timeout(
 ) -> Result<String, String> {
     run_controlled(config, root, file, text, timeout, None)
 }
-fn run_controlled(
+pub(in crate::ui) fn run_controlled(
     config: Formatter,
     root: &Path,
     file: &Path,
@@ -169,6 +169,32 @@ fn resolve_formatter(
         }))
 }
 impl Pokarak {
+    pub(in crate::ui) fn configured_file_formatter(
+        &self,
+        path: &Path,
+    ) -> Result<Option<Formatter>, String> {
+        if let Some(config) = resolve_formatter(
+            self.prefs
+                .option(self.current_project.as_deref(), "formatters.config"),
+            path,
+            self.registered_extension_formatters(),
+        )? {
+            return Ok(Some(config));
+        }
+        let language =
+            pokarak_navigation::language_for_path(path).unwrap_or_else(|| language(path));
+        let family = pokarak_navigation::language_family(language);
+        Ok(self
+            .effective_managed_formatter_configs()?
+            .into_iter()
+            .rev()
+            .find(|c| c.language == language || c.language == family)
+            .map(|c| Formatter {
+                path: c.program,
+                args: c.args,
+            }))
+    }
+
     pub(in crate::ui) fn format_code_file(
         &mut self,
         save_after: bool,
@@ -209,38 +235,13 @@ impl Pokarak {
             cx.notify();
             return;
         }
-        let config = match resolve_formatter(
-            self.prefs.option(project, "formatters.config"),
-            &path,
-            self.registered_extension_formatters(),
-        ) {
+        let config = match self.configured_file_formatter(&path) {
             Ok(config) => config,
             Err(error) => {
                 self.error = Some(error);
                 cx.notify();
                 return;
             }
-        };
-        let config = if config.is_some() {
-            config
-        } else {
-            let managed = match self.effective_managed_formatter_configs() {
-                Ok(v) => v,
-                Err(error) => {
-                    self.error = Some(error);
-                    cx.notify();
-                    return;
-                }
-            };
-            let family = pokarak_navigation::language_family(language);
-            managed
-                .into_iter()
-                .rev()
-                .find(|c| c.language == language || c.language == family)
-                .map(|c| Formatter {
-                    path: c.program,
-                    args: c.args,
-                })
         };
         let Some(config) = config else {
             self.request_language(

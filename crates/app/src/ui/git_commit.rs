@@ -31,6 +31,7 @@ pub(super) struct CommitUi {
     snapshot: Option<Arc<IndexSnapshot>>,
     selected: Option<PathBuf>,
     preview: Option<Entity<EditorState>>,
+    preview_version: Option<PreviewVersion>,
     side: Option<Side>,
     partial: Option<partial::PartialDiff>,
     split: Option<Entity<split_diff::SplitDiff>>,
@@ -54,6 +55,36 @@ fn commit_message_editor(
             .soft_wrap(true)
             .default_value(text)
     })
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct PreviewVersion {
+    guard: index::IndexGuard,
+    path: PathBuf,
+    side: Side,
+    permissions: Option<std::fs::Permissions>,
+    old: String,
+    new: String,
+}
+
+impl PreviewVersion {
+    fn new(snapshot: &IndexSnapshot, path: &Path, side: Side, preview: &PartialPreview) -> Self {
+        let (old, new) = preview.source_texts();
+        Self {
+            guard: snapshot.guard.clone(),
+            path: path.to_owned(),
+            side,
+            permissions: (side == Side::Unstaged)
+                .then(|| {
+                    std::fs::symlink_metadata(snapshot.root.join(path))
+                        .ok()
+                        .map(|m| m.permissions())
+                })
+                .flatten(),
+            old: old.to_owned(),
+            new: new.to_owned(),
+        }
+    }
 }
 
 impl CommitUi {
@@ -106,8 +137,29 @@ impl CommitUi {
             .find_map(|(files, side)| files.first().map(|file| (file.path.clone(), side)))
     }
 
+    fn index_read_failed(&mut self, automatic: bool) {
+        if !automatic {
+            self.snapshot = None;
+            self.clear_preview();
+        }
+    }
+
+    fn install_index_preview(
+        &mut self,
+        snapshot: Arc<IndexSnapshot>,
+        preview: Option<(partial::PartialDiff, PreviewVersion)>,
+    ) {
+        self.snapshot = Some(snapshot);
+        if let Some((preview, version)) = preview {
+            self.clear_preview();
+            self.partial = Some(preview);
+            self.preview_version = Some(version);
+        }
+    }
+
     fn clear_preview(&mut self) {
         self.preview = None;
+        self.preview_version = None;
         self.partial = None;
         self.split = None;
         self.marked.clear();
@@ -152,6 +204,10 @@ impl Pokarak {
         if self.commit_ui.surface == Surface::Inline {
             self.commit_ui.close();
         }
+    }
+
+    pub(super) fn inline_commit_read_pending(&self) -> bool {
+        self.inline_commit_active() && self.commit_ui.reading
     }
 
     pub(super) fn refresh_inline_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -224,6 +280,7 @@ impl Pokarak {
         self.commit_ui.error = None;
         let token = self.commit_ui.request;
         let navigation = self.request;
+        let automatic = self.auto_refresh.preserves_focus(navigation);
         let target = root.clone();
         let task = cx.background_spawn(async move {
             let snapshot = index::snapshot(&target)?;
@@ -258,17 +315,31 @@ impl Pokarak {
                         let selected = app
                             .commit_ui
                             .next_selection(&snapshot.staged, &snapshot.unstaged);
-                        app.commit_ui.snapshot = Some(Arc::new(snapshot));
+                        let snapshot = Arc::new(snapshot);
+                        if automatic
+                            && let Some((path, side)) = selected.as_ref()
+                            && app.commit_ui.selected.as_ref() == Some(path)
+                            && app.commit_ui.side == Some(*side)
+                            && (app.commit_ui.partial.is_some() || app.commit_ui.preview.is_some())
+                        {
+                            app.read_index_preview(snapshot, path.clone(), *side, true, window, cx);
+                            return;
+                        }
+                        app.commit_ui.snapshot = Some(snapshot);
                         app.commit_ui.selected = None;
                         app.commit_ui.side = None;
                         app.commit_ui.clear_preview();
                         if let Some((path, side)) = selected {
                             app.select_index_preview(path, side, window, cx);
+                        } else {
+                            app.auto_refresh.installed(navigation);
                         }
                     }
                     Err(error) => {
-                        app.commit_ui.snapshot = None;
-                        app.commit_ui.clear_preview();
+                        app.commit_ui.index_read_failed(automatic);
+                        if app.auto_refresh.failed(navigation) {
+                            app.external_change = true;
+                        }
                         app.commit_ui.error = Some(format!("인덱스 읽기 실패: {error:#}"));
                     }
                 }
@@ -289,20 +360,47 @@ impl Pokarak {
         let Some(snapshot) = self.commit_ui.snapshot.clone() else {
             return;
         };
+        self.read_index_preview(snapshot, path, side, false, window, cx);
+    }
+
+    fn read_index_preview(
+        &mut self,
+        snapshot: Arc<IndexSnapshot>,
+        path: PathBuf,
+        side: Side,
+        preserving: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.commit_ui.preview_request += 1;
         let token = self.commit_ui.preview_request;
         let generation = self.commit_ui.request;
-        self.commit_ui.selected = Some(path.clone());
-        self.commit_ui.side = Some(side);
-        self.commit_ui.clear_preview();
+        let navigation = self.request;
+        self.commit_ui.reading = true;
+        let previous_version = preserving
+            .then(|| self.commit_ui.preview_version.clone())
+            .flatten();
+        if !preserving {
+            self.commit_ui.selected = Some(path.clone());
+            self.commit_ui.side = Some(side);
+            self.commit_ui.clear_preview();
+        }
         let root = snapshot.root.clone();
+        let candidate = snapshot.clone();
         let task = cx.background_spawn(async move {
-            match partial_index::preview(&snapshot, &path, side) {
-                Ok(preview) => Ok(partial::PartialDiff::new(&path, preview)),
+            match partial_index::preview(&candidate, &path, side) {
+                Ok(preview) => {
+                    let version = PreviewVersion::new(&candidate, &path, side, &preview);
+                    if previous_version.as_ref() == Some(&version) {
+                        Ok(None)
+                    } else {
+                        Ok(Some((partial::PartialDiff::new(&path, preview), version)))
+                    }
+                }
                 Err(error) => {
                     let mut message = format!("부분 선택을 사용할 수 없습니다. {error:#}\n");
                     let source = if side == Side::Staged {
-                        index::diff(&snapshot, &path).ok().map(|doc| {
+                        index::diff(&candidate, &path).ok().map(|doc| {
                             message.push_str(&doc.patch);
                             Arc::new(split_diff::DiffSyntax::new(&doc))
                         })
@@ -321,10 +419,31 @@ impl Pokarak {
                 {
                     return;
                 }
+                app.commit_ui.reading = false;
+                if app.request != navigation || app.git_is_busy() {
+                    if app.auto_refresh.failed(navigation) {
+                        app.external_change = true;
+                    }
+                    cx.notify();
+                    return;
+                }
                 match result {
-                    Ok(preview) => app.commit_ui.partial = Some(preview),
+                    Ok(preview) => {
+                        app.commit_ui.install_index_preview(snapshot, preview);
+                        app.auto_refresh.installed(navigation);
+                    }
                     Err(patch) => {
-                        app.commit_ui.preview = Some(patch::editor(patch, false, window, cx))
+                        if preserving {
+                            app.commit_ui.error = Some("변경사항 미리보기를 갱신할 수 없습니다. 이전 미리보기를 유지합니다. 다시 갱신하세요.".into());
+                            if app.auto_refresh.failed(navigation) {
+                                app.external_change = true;
+                            }
+                        } else {
+                            app.commit_ui.preview = Some(patch::editor(patch, false, window, cx));
+                            if app.auto_refresh.failed(navigation) {
+                                app.external_change = true;
+                            }
+                        }
                     }
                 }
                 cx.notify();
@@ -619,8 +738,97 @@ fn commit_note(text: impl Into<String>) -> Div {
 }
 #[cfg(test)]
 mod tests {
-    use super::{ChangedFile, CommitUi, Side, Surface, preview_is_current};
+    use super::{
+        ChangedFile, CommitUi, PreviewVersion, Side, Surface, index, partial, partial_index,
+        preview_is_current,
+    };
     use std::path::Path;
+    use std::{fs, process::Command, sync::Arc};
+    #[test]
+    fn automatic_index_refresh_reuses_unchanged_preview_and_retains_it_on_failure() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(root)
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                ])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        fs::write(root.join("selected.rs"), "before\n").unwrap();
+        fs::write(root.join("other.rs"), "other\n").unwrap();
+        git(&["add", "--", "selected.rs", "other.rs"]);
+        git(&["commit", "-m", "authored base"]);
+        fs::write(root.join("selected.rs"), "after\n").unwrap();
+        let path = Path::new("selected.rs");
+        let accepted = Arc::new(index::snapshot(root).unwrap());
+        let preview = partial_index::preview(&accepted, path, Side::Unstaged).unwrap();
+        let retained_preview = preview.clone();
+        let version = PreviewVersion::new(&accepted, path, Side::Unstaged, &preview);
+        let mut ui = CommitUi::default();
+        ui.install_index_preview(
+            accepted.clone(),
+            Some((partial::PartialDiff::new(path, preview), version.clone())),
+        );
+        fs::write(root.join("other.rs"), "unrelated external update\n").unwrap();
+        let refreshed = Arc::new(index::snapshot(root).unwrap());
+        let candidate = partial_index::preview(&refreshed, path, Side::Unstaged).unwrap();
+        assert!(version == PreviewVersion::new(&refreshed, path, Side::Unstaged, &candidate));
+        // This is the actual unchanged-candidate installation path. Cached
+        // partial/split readers are left in place while snapshot guards advance.
+        ui.install_index_preview(refreshed.clone(), None);
+        assert!(ui.partial.is_some());
+        assert!(ui.preview_version.as_ref() == Some(&version));
+        assert!(Arc::ptr_eq(ui.snapshot.as_ref().unwrap(), &refreshed));
+        fs::write(root.join(path), "newer\n").unwrap();
+        let candidate = partial_index::preview(&refreshed, path, Side::Unstaged).unwrap();
+        assert!(version != PreviewVersion::new(&refreshed, path, Side::Unstaged, &candidate));
+        ui.index_read_failed(true);
+        // A retained preview remains bound to its old exact source. A failed
+        // refresh must never authorize those rows against newly changed bytes.
+        let rows = retained_preview
+            .lines()
+            .iter()
+            .enumerate()
+            .filter_map(|(row, line)| {
+                (line.kind == pokarak_core::DiffKind::Addition).then_some(row)
+            })
+            .collect::<Vec<_>>();
+        assert!(!rows.is_empty());
+        let operations = pokarak_core::operations::GitOperations::open(root).unwrap();
+        assert!(
+            operations
+                .apply_selected_lines(&retained_preview, &rows)
+                .is_err()
+        );
+        assert_eq!(index::snapshot(root).unwrap().guard, refreshed.guard);
+        assert_eq!(fs::read_to_string(root.join(path)).unwrap(), "newer\n");
+        assert!(Arc::ptr_eq(ui.snapshot.as_ref().unwrap(), &refreshed));
+        assert!(ui.partial.is_some());
+        assert!(ui.preview_version.as_ref() == Some(&version));
+        ui.index_read_failed(false);
+        assert!(ui.snapshot.is_none());
+        assert!(ui.partial.is_none());
+    }
+
     #[test]
     fn index_preview_rejects_stale_root_request_refresh_and_close() {
         let mut ui = CommitUi {

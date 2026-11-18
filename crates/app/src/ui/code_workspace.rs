@@ -1,5 +1,8 @@
 //! Code inspects working files against the worktree's explicitly applied base.
-use super::{FileRevision, Path, PathBuf, Pokarak, Position, ReadingPoint, Session, Snapshot};
+use super::{
+    DiffDocument, FileRevision, Path, PathBuf, Pokarak, Position, ReadingPoint, ReviewDiff,
+    Session, Snapshot, split_diff,
+};
 
 pub(super) struct PendingFile {
     pub root: PathBuf,
@@ -21,7 +24,118 @@ impl PendingFile {
     }
 }
 
+/// A file candidate belongs to one exact view generation, including worktree
+/// reentry. Keeping the accepted reader visible never relaxes these guards.
+pub(super) struct FileRead {
+    pub root: PathBuf,
+    pub snapshot: u64,
+    pub file: u64,
+}
+
+impl FileRead {
+    pub(super) fn accepts(
+        &self,
+        root: Option<&Path>,
+        snapshot: u64,
+        file: u64,
+        graph: bool,
+    ) -> bool {
+        root == Some(self.root.as_path())
+            && snapshot == self.snapshot
+            && file == self.file
+            && !graph
+    }
+}
+
+pub(super) enum FileDiff {
+    Unchanged,
+    Replace(Option<split_diff::PreparedDiff>),
+}
+
+impl FileDiff {
+    pub(super) fn prepare(
+        candidate: Option<DiffDocument>,
+        accepted: Option<&DiffDocument>,
+    ) -> Self {
+        if match (&candidate, accepted) {
+            (None, None) => true,
+            (Some(new), Some(old)) => same_diff(new, old),
+            _ => false,
+        } {
+            Self::Unchanged
+        } else {
+            Self::Replace(candidate.map(split_diff::PreparedDiff::new))
+        }
+    }
+}
+
+fn same_diff(a: &DiffDocument, b: &DiffDocument) -> bool {
+    a.path == b.path
+        && a.old_path == b.old_path
+        && a.old_text == b.old_text
+        && a.new_text == b.new_text
+        && a.patch == b.patch
+        && a.binary == b.binary
+        && a.truncated == b.truncated
+        && a.lines.len() == b.lines.len()
+        && a.lines.iter().zip(&b.lines).all(|(a, b)| {
+            a.old_line == b.old_line
+                && a.new_line == b.new_line
+                && a.kind == b.kind
+                && a.text == b.text
+        })
+}
+
 impl Session {
+    pub(super) fn install_code_snapshot(
+        &mut self,
+        snapshot: Snapshot,
+        pending_file: bool,
+        dirty: impl Fn(&Path) -> bool,
+    ) -> Option<PathBuf> {
+        let selection = self.snapshot_selection(&snapshot);
+        self.saved.comparison = snapshot.compare.clone();
+        if !pending_file {
+            self.saved.selected = selection.clone();
+        }
+        self.saved.tabs.retain(|path| {
+            if self.saved.selected.as_ref() == Some(path) || dirty(path) {
+                true
+            } else if path.is_absolute() {
+                path.is_file()
+            } else {
+                snapshot.files.contains(path) || snapshot.changes.iter().any(|f| &f.path == path)
+            }
+        });
+        self.documents
+            .retain(|path, _| self.saved.tabs.contains(path));
+        self.diffs.retain(|path, _| self.saved.tabs.contains(path));
+        self.snapshot = Some(snapshot);
+        // Retain accepted readers until the matching file candidate succeeds.
+        selection
+    }
+
+    pub(super) fn file_read_failed(&mut self, path: &Path, preserving: bool) {
+        if !preserving {
+            self.documents.remove(path);
+            self.diffs.remove(path);
+        }
+        self.restoring = false;
+    }
+
+    /// Commit a successfully read candidate. A failed read never reaches here;
+    /// an unchanged diff keeps its syntax, cached views, split entities and scroll.
+    pub(super) fn install_file_diff(&mut self, path: &Path, diff: FileDiff) -> bool {
+        match diff {
+            FileDiff::Unchanged => false,
+            FileDiff::Replace(Some(diff)) => {
+                self.diffs.insert(path.to_owned(), ReviewDiff::from(diff));
+                true
+            }
+            FileDiff::Replace(None) => self.diffs.remove(path).is_some(),
+        }
+    }
+
     pub(super) fn snapshot_selection(&self, snapshot: &Snapshot) -> Option<PathBuf> {
         // A disappearing file should report its own error, never silently open
         // README (or the first changed file) instead of the exact reading path.
@@ -62,12 +176,137 @@ impl Pokarak {
 
 #[cfg(test)]
 mod tests {
-    use super::PendingFile;
+    use super::{FileDiff, FileRead, PendingFile};
     use crate::prefs::{SavedPosition, SavedView};
     use crate::ui::{ReadingPoint, Session};
     use gpui_kit::component::input::Position;
     use pokarak_core::{CompareMode, Snapshot};
+    use std::sync::Arc;
     use std::{collections::HashMap, fs, path::Path, process::Command};
+
+    fn refresh_fixture() -> (tempfile::TempDir, Session) {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        git(root, &["init", "-b", "main"]);
+        fs::write(root.join("selected.rs"), "fn original() {}\n").unwrap();
+        fs::write(root.join("other.rs"), "other\n").unwrap();
+        git(root, &["add", "--", "selected.rs", "other.rs"]);
+        git(root, &["commit", "-m", "authored base"]);
+        fs::write(root.join("selected.rs"), "fn changed() {}\n").unwrap();
+        let mut session = Session::new(SavedView {
+            selected: Some("selected.rs".into()),
+            tabs: vec!["selected.rs".into(), "other.rs".into()],
+            code: false,
+            line: 12,
+            column: 3,
+            diff_row: 4,
+            scroll_y: -320.,
+            ..Default::default()
+        });
+        session.install_code_snapshot(
+            pokarak_core::snapshot(root, &Default::default()).unwrap(),
+            false,
+            |_| false,
+        );
+        let diff = pokarak_core::diff(
+            root,
+            &session.snapshot.as_ref().unwrap().changes[0],
+            &Default::default(),
+        )
+        .unwrap();
+        session.install_file_diff(
+            Path::new("selected.rs"),
+            FileDiff::prepare(Some(diff), None),
+        );
+        (fixture, session)
+    }
+
+    #[test]
+    fn cached_same_view_refresh_retains_the_accepted_diff_and_reading_model() {
+        let (fixture, mut session) = refresh_fixture();
+        let root = fixture.path();
+        let path = Path::new("selected.rs");
+        let accepted = session.diffs[path].document.clone();
+        let view = session.diffs[path].view(false);
+        let saved = serde_json::to_value(&session.saved).unwrap();
+        fs::write(root.join("other.rs"), "external unrelated change\n").unwrap();
+        assert!(!session.prepare_code_snapshot());
+        session.install_code_snapshot(
+            pokarak_core::snapshot(root, &Default::default()).unwrap(),
+            false,
+            |_| false,
+        );
+        // The accepted diff remains mounted throughout the replacement read.
+        assert!(Arc::ptr_eq(&accepted, &session.diffs[path].document));
+        assert_eq!(serde_json::to_value(&session.saved).unwrap(), saved);
+        let file = session
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .changes
+            .iter()
+            .find(|file| file.path == path)
+            .cloned()
+            .unwrap();
+        let candidate = pokarak_core::diff(root, &file, &Default::default()).unwrap();
+        assert!(
+            !session.install_file_diff(path, FileDiff::prepare(Some(candidate), Some(&accepted)))
+        );
+        assert!(Arc::ptr_eq(&accepted, &session.diffs[path].document));
+        assert!(Arc::ptr_eq(&view, &session.diffs[path].view(false)));
+        assert_eq!(serde_json::to_value(&session.saved).unwrap(), saved);
+        // A real selected-file update must replace the old diff, then remove it
+        // when the file becomes clean. Retention never suppresses new contents.
+        fs::write(root.join(path), "fn newer() {}\n").unwrap();
+        let candidate = pokarak_core::diff(root, &file, &Default::default()).unwrap();
+        assert!(
+            session.install_file_diff(path, FileDiff::prepare(Some(candidate), Some(&accepted)))
+        );
+        assert!(!Arc::ptr_eq(&accepted, &session.diffs[path].document));
+        let current = session.diffs[path].document.clone();
+        assert!(session.install_file_diff(path, FileDiff::prepare(None, Some(&current))));
+        assert!(!session.diffs.contains_key(path));
+    }
+
+    #[test]
+    fn failed_automatic_file_read_retains_preview_but_explicit_failure_clears_it() {
+        let (fixture, mut session) = refresh_fixture();
+        let root = fixture.path();
+        let path = Path::new("selected.rs");
+        let accepted = session.diffs[path].document.clone();
+        fs::remove_file(root.join(path)).unwrap();
+        session.install_code_snapshot(
+            pokarak_core::snapshot(root, &Default::default()).unwrap(),
+            false,
+            |_| false,
+        );
+        assert!(pokarak_core::read_file(root, path).is_err());
+        session.file_read_failed(path, true);
+        assert!(Arc::ptr_eq(&accepted, &session.diffs[path].document));
+        assert_eq!(session.saved.selected.as_deref(), Some(path));
+        assert!(!session.saved.code);
+        session.file_read_failed(path, false);
+        assert!(!session.diffs.contains_key(path));
+    }
+
+    #[test]
+    fn cached_file_candidate_rejects_worktree_reentry_navigation_and_graph_transition() {
+        let read = FileRead {
+            root: "/fixture/main".into(),
+            snapshot: 5,
+            file: 9,
+        };
+        assert!(read.accepts(Some(Path::new("/fixture/main")), 5, 9, false));
+        for (root, snapshot, file, graph) in [
+            (Some(Path::new("/fixture/linked")), 5, 9, false),
+            (None, 5, 9, false),
+            (Some(Path::new("/fixture/main")), 6, 9, false),
+            (Some(Path::new("/fixture/main")), 5, 10, false),
+            (Some(Path::new("/fixture/main")), 5, 9, true),
+        ] {
+            assert!(!read.accepts(root, snapshot, file, graph));
+        }
+    }
 
     fn legacy_view() -> SavedView {
         let path = std::path::PathBuf::from("src/선택.kt");

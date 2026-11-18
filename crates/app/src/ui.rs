@@ -1198,28 +1198,9 @@ impl Pokarak {
         let root = self.current.clone().unwrap();
         let session = self.sessions.get_mut(&root).unwrap();
         let code_edits = &self.code_edits;
-        let selection = session.snapshot_selection(&snapshot);
-        session.saved.comparison = snapshot.compare.clone();
-        if pending_file.is_none() {
-            session.saved.selected = selection.clone();
-        }
-        session.saved.tabs.retain(|path| {
-            if session.saved.selected.as_ref() == Some(path) || code_edits.dirty(&root, path) {
-                true
-            } else if path.is_absolute() {
-                path.is_file()
-            } else {
-                snapshot.files.contains(path) || snapshot.changes.iter().any(|f| &f.path == path)
-            }
+        let selection = session.install_code_snapshot(snapshot, pending_file.is_some(), |path| {
+            code_edits.dirty(&root, path)
         });
-        session
-            .documents
-            .retain(|path, _| session.saved.tabs.contains(path));
-        session
-            .diffs
-            .retain(|path, _| session.saved.tabs.contains(path));
-        session.snapshot = Some(snapshot);
-        session.diffs.clear();
         self.verify_reviewed_files(cx);
         self.status = "준비됨".into();
         if let Some(pending) = pending_file {
@@ -1229,7 +1210,7 @@ impl Pokarak {
         } else if let Some(path) = selection.filter(|_| !self.git_history.active) {
             self.open_file(path, false, None, window, cx);
         }
-        self.sync_git_history(window, cx);
+        self.sync_refreshed_git_history(window, cx);
         self.refresh_branch_sync(window, cx);
         self.refresh_workflow_status(window, cx);
         self.restore_git_completion(cx);
@@ -1244,8 +1225,16 @@ impl Pokarak {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.invalidate_language_view(cx);
-        self.leave_git_graph();
+        let preserve_focus = self.auto_refresh.preserves_focus(self.request)
+            && !self.git_history.active
+            && !history
+            && position.is_none()
+            && self.pending_history.is_none()
+            && self.selected().as_ref() == Some(&path);
+        if !preserve_focus {
+            self.invalidate_language_view(cx);
+            self.leave_git_graph();
+        }
         let Some(root) = self.current.clone() else {
             return;
         };
@@ -1325,10 +1314,11 @@ impl Pokarak {
             .as_ref()
             .and_then(|s| s.changes.iter().find(|f| f.path == path))
             .cloned();
-        if file.is_none() {
+        if file.is_none() && !preserve_focus {
             session.saved.code = true;
         }
         let mode = session.saved.comparison.clone();
+        let accepted_diff = session.diffs.get(&path).map(|diff| diff.document.clone());
         let previous_position = session
             .documents
             .get(&path)
@@ -1345,7 +1335,7 @@ impl Pokarak {
         if let Some(point) = &history_restore {
             session.saved.code = point.code;
         }
-        session.restoring = true;
+        session.restoring = !preserve_focus;
         self.file_request += 1;
         self.navigation_request += 1;
         self.navigating = false;
@@ -1356,12 +1346,16 @@ impl Pokarak {
         let load_path = path.clone();
         self.capture_code_buffers(cx);
         let retained = self.code_edits.retained_text(&root, &path);
-        let preserve_focus = self.auto_refresh.preserves_focus(self.request);
         let load_request = self.request;
+        let read = code_workspace::FileRead {
+            root: root.clone(),
+            snapshot: load_request,
+            file: token,
+        };
         let live = retained.is_some()
             || !matches!(file.as_ref().map(|f| &f.status), Some(FileStatus::Deleted));
         let task = cx.background_spawn(async move {
-            let result = (|| {
+            (|| {
                 if let Some(expected) = target_revision {
                     anyhow::ensure!(
                         file_revision(&load_root.join(&load_path)) == Some(expected),
@@ -1400,15 +1394,11 @@ impl Pokarak {
                 }
                 anyhow::Ok((
                     text,
-                    diff.map(split_diff::PreparedDiff::new),
+                    code_workspace::FileDiff::prepare(diff, accepted_diff.as_deref()),
                     !deleted,
                     !binary,
                 ))
-            })();
-            result.or_else(|error| match retained {
-                Some(text) => Ok((text, None, false, true)),
-                None => Err(error),
-            })
+            })()
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
@@ -1416,15 +1406,38 @@ impl Pokarak {
                 if this.current.as_ref() != Some(&root) || this.file_request != token {
                     return;
                 }
+                // Settle this request's loading flag even if a newer snapshot,
+                // graph transition or Git operation made its contents obsolete.
                 this.file_loading = false;
+                if !read.accepts(
+                    this.current.as_deref(),
+                    this.request,
+                    this.file_request,
+                    this.git_history.active,
+                ) || this.active_worktree_has_git_job()
+                {
+                    if let Some(session) = this.sessions.get_mut(&root) {
+                        session.restoring = false;
+                    }
+                    if this.auto_refresh.failed(load_request) {
+                        this.external_change = true;
+                    }
+                    cx.notify();
+                    return;
+                }
+                this.capture_positions(cx);
                 this.capture_code_buffers(cx);
                 // A user may have typed after this request began, including
                 // after a refresh that now finds the file missing/unreadable.
-                let result =
-                    result.or_else(|error| match this.code_edits.retained_text(&root, &path) {
-                        Some(text) => Ok((text, None, false, true)),
+                let result = result.or_else(|error| {
+                    if preserve_focus {
+                        return Err(error);
+                    }
+                    match this.code_edits.retained_text(&root, &path) {
+                        Some(text) => Ok((text, code_workspace::FileDiff::Unchanged, false, true)),
                         None => Err(error),
-                    });
+                    }
+                });
                 match result {
                     Ok((text, diff, available, text_file)) => {
                         let has_draft = this.code_edits.dirty(&root, &path);
@@ -1436,19 +1449,51 @@ impl Pokarak {
                             (live && text_file) || has_draft,
                         );
                         let editing = this.code_edits.editing(&root, &path);
-                        let review = diff.map(ReviewDiff::from);
-                        if let Some(review) = &review
-                            && let Some(position) = this
-                                .sessions
-                                .get(&root)
-                                .and_then(|session| session.split_positions.get(&path))
-                                .copied()
+                        // Capture the live reader at acceptance: the user can scroll
+                        // or select text while the filesystem read is in flight.
+                        let current_editor = this
+                            .sessions
+                            .get(&root)
+                            .and_then(|session| session.documents.get(&path))
+                            .cloned();
+                        let previous_position = if preserve_focus {
+                            current_editor.as_ref().map(|doc| {
+                                (doc.read(cx).cursor_position(), doc.read(cx).scroll_offset())
+                            })
+                        } else {
+                            previous_position
+                        };
+                        let previous_selection = if preserve_focus {
+                            current_editor.as_ref().map(|doc| {
+                                let editor = doc.read(cx);
+                                let range = editor.selected_range();
+                                (
+                                    editor.text().offset_to_position(range.start),
+                                    editor.text().offset_to_position(range.end),
+                                    editor.is_selection_reversed(),
+                                )
+                            })
+                        } else {
+                            previous_selection
+                        };
+                        let content_changed = current_editor
+                            .as_ref()
+                            .is_none_or(|doc| doc.read(cx).value().as_ref() != text);
+                        if preserve_focus && content_changed {
+                            this.invalidate_language_view(cx);
+                        }
+                        let session = this.sessions.get_mut(&root).unwrap();
+                        let diff_changed = session.install_file_diff(&path, diff);
+                        let session = this.sessions.get(&root).unwrap();
+                        if diff_changed
+                            && let Some(review) = session.diffs.get(&path)
+                            && let Some(position) = session.split_positions.get(&path).copied()
                         {
                             review.restore_split_position(this, position, cx);
                         }
                         let session = this.sessions.get_mut(&root).unwrap();
-                        if let Some(review) = review {
-                            session.diffs.insert(path.clone(), review);
+                        if !session.diffs.contains_key(&path) {
+                            session.saved.code = true;
                         }
                         let editor = session
                             .documents
@@ -1468,7 +1513,10 @@ impl Pokarak {
                             if editor.value().as_ref() != text {
                                 editor.set_value(text, window, cx);
                             }
-                            if preserve_focus
+                            if preserve_focus && !content_changed {
+                                // No caret/selection/scroll setters: they can trigger
+                                // caret-follow even when the text did not change.
+                            } else if preserve_focus
                                 && history_restore.is_none()
                                 && position.is_none()
                                 && let Some((cursor, offset)) = previous_position
@@ -1523,13 +1571,17 @@ impl Pokarak {
                             .as_ref()
                             .map(|point| point.row)
                             .unwrap_or(restore.diff_row);
-                        session.saved.diff_row = diff_row;
-                        session
-                            .scroll
-                            .scroll_to_item_strict(diff_row, ScrollStrategy::Top);
+                        if !preserve_focus {
+                            session.saved.diff_row = diff_row;
+                            session
+                                .scroll
+                                .scroll_to_item_strict(diff_row, ScrollStrategy::Top);
+                        }
                         let code = session.saved.code;
                         this.bind_code_editor(&root, &path, &editor, cx);
-                        this.configure_code_tools(&root, &path, &editor, window, cx);
+                        if !preserve_focus || content_changed {
+                            this.configure_code_tools(&root, &path, &editor, window, cx);
+                        }
                         if !code && !preserve_focus && !this.file_tree_focus.is_focused(window) {
                             this.focus.focus(window, cx);
                         }
@@ -1560,9 +1612,7 @@ impl Pokarak {
                             this.external_change = true;
                         }
                         if let Some(s) = this.sessions.get_mut(&root) {
-                            s.documents.remove(&path);
-                            s.diffs.remove(&path);
-                            s.restoring = false;
+                            s.file_read_failed(&path, preserve_focus);
                         }
                         this.error = Some(format!("{error:#}"));
                         this.status = "파일을 읽을 수 없습니다".into();

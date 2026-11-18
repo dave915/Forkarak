@@ -100,11 +100,8 @@ impl AutoRefresh {
     }
 
     pub(super) fn installed(&mut self, request: u64) {
-        if self
-            .automatic_request
-            .take()
-            .is_some_and(|own| own == request)
-        {
+        if self.automatic_request == Some(request) {
+            self.automatic_request = None;
             self.completed = self.completed.wrapping_add(1);
         }
     }
@@ -392,6 +389,21 @@ mod tests {
         state.installed(10);
         assert_eq!(state.completed, 1);
         assert!(state.start(now + Duration::from_secs(34), false).is_some());
+    }
+
+    #[test]
+    fn stale_install_cannot_complete_or_cancel_a_newer_automatic_read() {
+        let now = Instant::now();
+        let mut state = state(now);
+        state.automatic_request = Some(10);
+        state.installed(9);
+        assert!(state.preserves_focus(10));
+        assert_eq!(state.completed, 0);
+        state.installed(10);
+        assert!(!state.preserves_focus(10));
+        assert_eq!(state.completed, 1);
+        state.installed(10);
+        assert_eq!(state.completed, 1);
     }
 
     #[test]

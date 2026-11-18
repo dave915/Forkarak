@@ -131,6 +131,8 @@ impl Pokarak {
             && let Some(root) = &self.current
             && let Some(session) = self.sessions.get_mut(root)
         {
+            session.clear_reader_split();
+            session.preview_tab = None;
             session.saved.selected = None;
             session.saved.tabs.clear();
             session.result_tab = None;

@@ -11,19 +11,23 @@ fn single(key: &str) -> Keystroke {
 
 fn keys(stroke: &Keystroke) -> Vec<Keystroke> {
     let m = stroke.modifiers;
+    // GPUI can store a modifier in the key field as well as in the flags.
+    let key = stroke.key.as_str();
     let mut keys = Vec::new();
-    for (pressed, key) in [
-        (m.control, "ctrl"),
-        (m.alt, "alt"),
-        (m.shift, "shift"),
-        (m.platform, "cmd"),
-        (m.function, "fn"),
+    for (pressed, cap) in [
+        (m.control || key == "control", "ctrl"),
+        (m.alt || key == "alt", "alt"),
+        (m.shift || key == "shift", "shift"),
+        (m.platform || key == "platform", "cmd"),
+        (m.function || key == "function", "fn"),
     ] {
         if pressed {
-            keys.push(single(key));
+            keys.push(single(cap));
         }
     }
-    keys.push(single(&stroke.key));
+    if !key.is_empty() && !stroke.is_modifier_key() {
+        keys.push(single(key));
+    }
     keys
 }
 
@@ -332,6 +336,23 @@ mod tests {
     use super::{Part, explanation_parts, keys, menu_label, strokes};
     use crate::prefs::Preferences;
     use gpui_kit::component::kbd::Kbd;
+
+    #[test]
+    fn modifier_only_keycaps_render_glyphs_for_click_hints() {
+        let hint = "⌘클릭 / ⌃클릭 / ⌥클릭 / ⇧클릭";
+        assert_eq!(menu_label(hint, &Preferences::default(), None), hint);
+
+        for (binding, expected) in [
+            ("cmd-ctrl", vec!["⌃", "⌘"]),
+            ("cmd-ctrl-", vec!["⌃", "⌘"]),
+            ("fn", vec!["Fn"]),
+        ] {
+            let parsed = strokes(binding).unwrap();
+            let labels: Vec<_> = keys(&parsed[0]).iter().map(Kbd::format).collect();
+            assert_eq!(labels, expected, "{binding}");
+        }
+    }
+
     #[test]
     fn splits_modifiers_without_splitting_named_or_punctuation_keys() {
         for (binding, expected) in [

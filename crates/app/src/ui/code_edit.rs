@@ -1244,10 +1244,10 @@ impl Pokarak {
                     && app.selected().as_ref() == Some(&changed_key.path)
                 {
                     app.status = status.into();
-                    app.schedule_input_assistance(&changed_key, &editor, typed, window, cx);
+                    app.schedule_input_assistance(&changed_key, editor, typed, window, cx);
                 }
                 app.pin_preview(&changed_key.root, &changed_key.path);
-                app.refresh_inline_tools(&changed_key.root, &changed_key.path, &editor, cx);
+                app.refresh_inline_tools(&changed_key.root, &changed_key.path, editor, cx);
                 app.checkpoint_code_drafts(cx);
                 cx.notify();
             },

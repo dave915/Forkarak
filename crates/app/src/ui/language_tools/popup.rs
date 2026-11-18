@@ -241,6 +241,49 @@ impl Pokarak {
     }
 }
 
+fn documentation_view(content: &pokarak_navigation::MarkupContent) -> Div {
+    if content.kind != "markdown" {
+        return div().child(content.value.clone());
+    }
+    // Keep server-provided examples passive. Fenced code belongs in the same
+    // typeface as the editor, with the surrounding explanation in the UI font.
+    let mut view = div().v_flex().gap_1();
+    let mut fence: Option<(char, usize)> = None;
+    let mut block = Vec::new();
+    let flush = |view: Div, lines: &mut Vec<&str>, code: bool| {
+        if lines.is_empty() {
+            return view;
+        }
+        let text = lines.join("\n");
+        lines.clear();
+        view.child(
+            div()
+                .when(code, |d| d.font_family("JetBrains Mono"))
+                .child(text),
+        )
+    };
+    for line in content.value.lines() {
+        let trimmed = line.trim();
+        let Some(ch) = trimmed.chars().next().filter(|c| matches!(c, '`' | '~')) else {
+            block.push(line);
+            continue;
+        };
+        let count = trimmed.chars().take_while(|c| *c == ch).count();
+        match fence {
+            None if count >= 3 => {
+                view = flush(view, &mut block, false);
+                fence = Some((ch, count));
+            }
+            Some((start, len)) if ch == start && count >= len && trimmed.len() == count => {
+                view = flush(view, &mut block, true);
+                fence = None;
+            }
+            _ => block.push(line),
+        }
+    }
+    flush(view, &mut block, fence.is_some())
+}
+
 fn hover_popup(hover: Option<&HoverResult>, space: &PopupSpace) -> AnyElement {
     let contents = hover.map_or(&[][..], |result| result.contents.as_slice());
     div()
@@ -256,11 +299,7 @@ fn hover_popup(hover: Option<&HoverResult>, space: &PopupSpace) -> AnyElement {
         .when(contents.is_empty(), |d| {
             d.child("이 위치에 타입·설명 정보가 없습니다.")
         })
-        .children(
-            contents
-                .iter()
-                .map(|content| div().child(content.value.clone())),
-        )
+        .children(contents.iter().map(documentation_view))
         .into_any_element()
 }
 

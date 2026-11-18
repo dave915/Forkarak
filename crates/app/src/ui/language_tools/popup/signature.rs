@@ -114,12 +114,12 @@ impl Pokarak {
                     .children(
                         parameter
                             .and_then(|p| p.documentation.as_ref())
-                            .map(|d| div().child(d.value.clone())),
+                            .map(documentation_view),
                     )
                     .children(
                         sig.documentation
                             .as_ref()
-                            .map(|d| div().text_color(palette.rgb(MUTED)).child(d.value.clone())),
+                            .map(|d| documentation_view(d).text_color(palette.rgb(MUTED))),
                     ),
             )
             .into_any_element()

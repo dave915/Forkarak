@@ -40,16 +40,13 @@ impl Pokarak {
                 .child("완성 후보가 없습니다.")
                 .into_any_element();
         };
-        let documentation = [
-            selected.detail.as_deref(),
-            selected.documentation.as_ref().map(|d| d.value.as_str()),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|s| !s.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-        let side_by_side = !documentation.is_empty() && space.body_width() >= ui_px(560.);
+        let detail = selected.detail.as_deref().filter(|s| !s.trim().is_empty());
+        let documentation = selected
+            .documentation
+            .as_ref()
+            .filter(|d| !d.value.trim().is_empty());
+        let has_docs = detail.is_some() || documentation.is_some();
+        let side_by_side = has_docs && space.body_width() >= ui_px(560.);
         let width = space.body_width().min(if side_by_side {
             ui_px(660.)
         } else {
@@ -64,7 +61,7 @@ impl Pokarak {
         } else {
             height
         };
-        let stacked_docs = !side_by_side && !documentation.is_empty() && available >= row * 5.;
+        let stacked_docs = !side_by_side && has_docs && available >= row * 5.;
         let list_height = (row * count.min(8) as f32).min(if stacked_docs {
             available * 0.65
         } else {
@@ -163,7 +160,10 @@ impl Pokarak {
             .overflow_y_scroll()
             .p_2()
             .text_size(ui_text(12.))
-            .child(documentation);
+            .v_flex()
+            .gap_1()
+            .children(detail.map(|text| div().font_family("JetBrains Mono").child(text.to_owned())))
+            .children(documentation.map(documentation_view));
         let body = div().h_flex().w_full().h(body_height).child(
             div()
                 .id("completion-listbox")

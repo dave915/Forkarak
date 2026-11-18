@@ -139,6 +139,8 @@ impl Pokarak {
                 .map(|p| p.root.clone())
                 .collect::<Vec<_>>(),
             window.viewport_size().width,
+            self.prefs.display.ui_zoom_percent,
+            self.prefs.display.ui_font_size,
         );
         let state = window.use_keyed_state("project-tab-reveal", cx, |_, _| None);
         if state.read(cx).as_ref() != Some(&reveal) {
@@ -151,7 +153,6 @@ impl Pokarak {
         TabBar::new("project-tabs")
             .segmented()
             .bg(palette.rgb(SIDE))
-            .small()
             .min_w_0()
             .flex_initial()
             .menu(false)
@@ -167,7 +168,7 @@ impl Pokarak {
                 let path = root.to_string_lossy().into_owned();
                 let tab =
                     Tab::new()
-                        .prefix(Icon::new(IconName::FolderGit2).size(ui_px(14.)).text_color(
+                        .prefix(Icon::new(IconName::FolderGit2).size(ui_px(18.)).text_color(
                             palette.rgb(if active == Some(index) { BLUE } else { MUTED }),
                         ))
                         .label(project_label(&root))
@@ -228,9 +229,10 @@ impl Pokarak {
         let root = root.to_path_buf();
         let label = project_label(&root);
         Button::new(format!("close-project:{}", root.display()))
-            .icon(Icon::new(IconName::X).size(ui_px(13.)))
+            .icon(IconName::X)
             .ghost()
-            .xsmall()
+            .with_size(ui_px(20.))
+            .px_0()
             .accessibility_label(format!("{label} 프로젝트 닫기"))
             .tooltip(format!("{label} 프로젝트 닫기"))
             // A close press must not arm the enclosing row's click or drag.

@@ -167,9 +167,6 @@ impl DiffAnalysis {
                         }
                     }
                     (Some(i), None) | (None, Some(i)) => {
-                        if !lines[i].text.is_empty() {
-                            result.inline[i] = std::iter::once(0..lines[i].text.len()).collect();
-                        }
                         result.whitespace_only[i] = lines[i].text.chars().all(char::is_whitespace);
                     }
                     _ => {}
@@ -528,6 +525,34 @@ mod tests {
         let fallback = word_ranges("😀abc", "😀ab😀", &mut 0);
         assert_eq!(&"😀abc"[fallback[0][0].clone()], "c");
         assert_eq!(&"😀ab😀"[fallback[1][0].clone()], "😀");
+    }
+
+    #[test]
+    fn word_highlights_only_cover_paired_replacement_lines() {
+        use DiffKind::{Addition, Context, Deletion};
+
+        let rows = [
+            (Deletion, "removed();", None),
+            (Context, "first();", None),
+            (Addition, "inserted();", None),
+            (Context, "second();", None),
+            (Deletion, "call(before);", Some("before")),
+            (Deletion, "obsolete();", None),
+            (Addition, "call(after);", Some("after")),
+            (Context, "third();", None),
+            (Deletion, "return old;", Some("old")),
+            (Addition, "return new;", Some("new")),
+            (Addition, "\textra();", None),
+        ];
+        let lines: Vec<_> = rows
+            .iter()
+            .map(|(kind, text, _)| line(kind.clone(), text, None, None))
+            .collect();
+        let analysis = DiffAnalysis::new(&lines);
+        for ((_, text, expected), ranges) in rows.into_iter().zip(analysis.inline) {
+            let words: Vec<_> = ranges.into_iter().map(|range| &text[range]).collect();
+            assert_eq!(words.as_slice(), expected.as_slice(), "{text}");
+        }
     }
 
     #[test]

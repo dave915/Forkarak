@@ -4,8 +4,10 @@ use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 use std::{
     ffi::CString,
+    fmt,
     fs::File,
     io::{self, Read},
+    mem::MaybeUninit,
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::{ffi::OsStrExt, fs::PermissionsExt},
@@ -20,6 +22,40 @@ pub(crate) enum Node {
     File(File),
     Link(Vec<u8>),
     Directory,
+}
+
+/// Typed context only for permission failures on a verified regular file.
+/// Repository, ancestor directory and special-file errors remain fatal.
+#[derive(Debug)]
+pub(crate) struct UnreadableFile(pub PathBuf);
+
+impl fmt::Display for UnreadableFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Cannot read regular file {}", self.0.display())
+    }
+}
+
+fn regular_io<T>(path: &Path, result: io::Result<T>) -> Result<T> {
+    match result {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            Err(error).context(UnreadableFile(path.to_owned()))
+        }
+        result => Ok(result?),
+    }
+}
+
+fn is_regular_at(directory: &File, name: &CString) -> bool {
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: the directory and name are live, and fstatat initializes stat on success.
+    unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        ) == 0
+            && stat.assume_init().st_mode & libc::S_IFMT == libc::S_IFREG
+    }
 }
 
 pub(crate) fn relative(root: &Path, path: &Path) -> Result<PathBuf> {
@@ -71,6 +107,12 @@ pub(crate) fn open(root: &Path, path: &Path) -> Result<Node> {
         let descriptor = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
         if descriptor < 0 {
             let error = io::Error::last_os_error();
+            if last
+                && error.kind() == io::ErrorKind::PermissionDenied
+                && is_regular_at(&directory, &name)
+            {
+                return Err(error).context(UnreadableFile(relative));
+            }
             if last && error.raw_os_error() == Some(libc::ELOOP) {
                 let mut target = vec![0; 64 * 1024];
                 // SAFETY: the buffer is writable for its full capacity, and no
@@ -179,13 +221,13 @@ pub(crate) fn inspect(
             )))
         }
         Node::File(mut file) => {
-            let metadata = file.metadata()?;
+            let metadata = regular_io(path, file.metadata())?;
             let mut hash = BlobHash::new(sha256, metadata.len());
             let mut buffer = [0u8; 64 * 1024];
             let mut length = 0u64;
             let mut eol = eol::Stats::default();
             loop {
-                let n = file.read(&mut buffer)?;
+                let n = regular_io(path, file.read(&mut buffer))?;
                 if n == 0 {
                     break;
                 }
@@ -196,7 +238,7 @@ pub(crate) fn inspect(
                     eol.update(&buffer[..n]);
                 }
             }
-            let after = file.metadata()?;
+            let after = regular_io(path, file.metadata())?;
             ensure!(
                 length == metadata.len()
                     && metadata.len() == after.len()
@@ -235,12 +277,12 @@ pub(crate) fn normalized_oid(
             path.display()
         );
     };
-    let mut raw = BlobHash::new(sha256, file.metadata()?.len());
+    let mut raw = BlobHash::new(sha256, regular_io(path, file.metadata())?.len());
     let mut normalized = BlobHash::new(sha256, length);
     let mut buffer = [0; 64 * 1024];
     let mut carry = 0;
     loop {
-        let n = file.read(&mut buffer[carry..])?;
+        let n = regular_io(path, file.read(&mut buffer[carry..]))?;
         if n == 0 {
             normalized.update(&buffer[..carry]);
             break;
@@ -262,10 +304,12 @@ pub(crate) fn normalized_oid(
     Ok(normalized.finish())
 }
 
-pub(crate) fn preview(file: File) -> Result<(Vec<u8>, bool)> {
+pub(crate) fn preview(path: &Path, file: File) -> Result<(Vec<u8>, bool)> {
     let mut bytes = Vec::new();
-    file.take(MAX_TEXT_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)?;
+    regular_io(
+        path,
+        file.take(MAX_TEXT_BYTES as u64 + 1).read_to_end(&mut bytes),
+    )?;
     let truncated = bytes.len() > MAX_TEXT_BYTES;
     bytes.truncate(MAX_TEXT_BYTES);
     Ok((bytes, truncated))
@@ -275,7 +319,7 @@ pub(crate) fn read(root: &Path, path: &Path) -> Result<Option<(Vec<u8>, bool)>> 
     match open(root, path)? {
         Node::Missing | Node::Directory => Ok(None),
         Node::Link(bytes) => Ok(Some((bytes, false))),
-        Node::File(file) => preview(file).map(Some),
+        Node::File(file) => preview(path, file).map(Some),
     }
 }
 

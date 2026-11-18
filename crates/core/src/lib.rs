@@ -36,9 +36,10 @@ pub struct Worktree {
     pub is_locked: bool,
     pub is_prunable: bool,
     pub is_detached: bool,
-    /// Meaningful only when `changed_files_available` is true.
+    /// Exact when `changed_files_available` is true. A partial inspection
+    /// reports only the changes it could verify.
     pub changed_files: usize,
-    /// Inventory-only rows and failed sibling inspections have no dirty count.
+    /// False for partial, failed and inventory-only inspections.
     #[serde(default)]
     pub changed_files_available: bool,
     /// A sibling inspection failure never prevents viewing a healthy worktree.
@@ -75,8 +76,19 @@ pub struct Snapshot {
     pub worktrees: Vec<Worktree>,
     pub changes: Vec<ChangedFile>,
     pub files: Vec<PathBuf>,
+    /// Selected-worktree-relative regular files omitted from change comparison
+    /// because reading their contents was denied. Listed files remain in `files`.
+    pub skipped_paths: Vec<PathBuf>,
     pub branches: Vec<String>,
     pub compare: CompareMode,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorktreeChangeSummary {
+    /// Number of verified changed files against HEAD.
+    pub changed_files: usize,
+    pub skipped_paths: Vec<PathBuf>,
     pub fingerprint: String,
 }
 
@@ -132,6 +144,13 @@ pub struct SourceLocation {
     pub preview: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SearchReport {
+    pub matches: Vec<SourceLocation>,
+    /// Worktree-relative regular files denied before the match limit was reached.
+    pub skipped_paths: Vec<PathBuf>,
+}
+
 /// Find the canonical root of this worktree (including linked worktrees).
 pub fn repository_root(path: &Path) -> Result<PathBuf> {
     git::repository_root(path)
@@ -148,13 +167,22 @@ pub fn worktree_inventory(root: &Path) -> Result<Vec<Worktree>> {
     git::worktrees(root)
 }
 /// Count changes against HEAD in the selected worktree, including staged changes.
+/// Requires a complete inspection.
 pub fn worktree_change_count(root: &Path) -> Result<usize> {
     backend::worktree_change_count(root)
 }
 /// Return the selected worktree's dirty count and a graph refresh fingerprint.
 /// Ignored, untracked build output does not contribute to this fingerprint.
+/// Requires a complete inspection. For partial refreshes use [`worktree_change_summary_report`].
 pub fn worktree_change_summary(root: &Path) -> Result<(usize, String)> {
-    backend::worktree_change_summary(root)
+    let report = worktree_change_summary_report(root)?;
+    backend::require_complete(report.skipped_paths.iter())?;
+    Ok((report.changed_files, report.fingerprint))
+}
+/// Inspect changes against HEAD, returning the verified count, relative skipped
+/// paths and a refresh fingerprint that incorporates those omissions.
+pub fn worktree_change_summary_report(root: &Path) -> Result<WorktreeChangeSummary> {
+    backend::worktree_change_summary_report(root)
 }
 /// Capture index, HEAD, working bytes, and worktree inventory without refreshing
 /// the index. Inventory counts are uncommitted counts, independent of comparison.
@@ -214,7 +242,18 @@ pub fn search_with_exclusions(
     limit: usize,
     exclude_patterns: &[String],
 ) -> Result<Vec<SourceLocation>> {
-    backend::search_with_exclusions(root, query, limit, exclude_patterns)
+    Ok(search_with_exclusions_report(root, query, limit, exclude_patterns)?.matches)
+}
+
+/// Like [`search_with_exclusions`], also reporting regular files that could
+/// not be read due to permissions. The scan stops when it reaches the hit limit.
+pub fn search_with_exclusions_report(
+    root: &Path,
+    query: &str,
+    limit: usize,
+    exclude_patterns: &[String],
+) -> Result<SearchReport> {
+    backend::search_with_exclusions_report(root, query, limit, exclude_patterns)
 }
 
 /// Maximum bytes retained from either side of a diff or a whole-file read.

@@ -1,10 +1,10 @@
 # Language analysis and managed tools
 
-This document describes the integrated development version. Public downloads may predate the native language manager; see [installation and source builds](distribution.md).
+이 문서는 공개 v1.0.0 이후 개발 변경도 포함합니다. [공개 버전 설치와 소스 빌드](distribution.md)를 구분해 확인하세요.
 
 ## Start in the app
 
-File viewing, syntax highlighting and text search work immediately, without installation, indexing or language-server startup. **코드 지원…** provides completion, diagnostics, file symbols, function help, hover/type information and code navigation when the selected server supports them. It is a set of code actions, separate from the Git/Code working-screen choice and from read/Edit mode.
+File viewing, syntax highlighting and text search work immediately, without installation, indexing or language-server startup. **코드 지원…** provides completion, diagnostics, file symbols, function help, hover/type information and code navigation when the selected server supports them. 작업 화면 선택과 코드 지원은 별개입니다. 작업 파일의 [바로 편집](../README.md#코드와-탐색)은 v1.0.0 이후 개발 변경이며, 언어 분석 허용을 뜻하지 않습니다.
 
 Open **Settings → 언어 분석·포맷 → 설치·업데이트 관리…** to reach **언어 지원 관리**. The manager distinguishes bundled tools, first-use downloads and unsupported/prerequisite-limited entries. Use **설치**, **업데이트 다운로드**, **취소** or **다시 시도** explicitly; version, source, checksum and license/notice details remain inspectable. Failed or cancelled updates retain the previous active installation. A pending code action can be resumed with **원래 요청 계속** only after the original file, source and trust are rechecked.
 

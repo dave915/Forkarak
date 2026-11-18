@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing release tag, e.g. v0.1.0'
+        description: 'Existing release tag, e.g. v1.0.1'
         required: true
         type: string
 
@@ -24,7 +24,8 @@ env:
 
 jobs:
   build:
-    runs-on: macos-15
+    # Native Liquid Glass stack verification uses the host /usr/bin/assetutil.
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Validate tag
@@ -40,8 +41,9 @@ jobs:
           rustup default stable
           rustup target add aarch64-apple-darwin
           rustup component add rustfmt clippy
-      - name: Test installation and updates
+      - name: Test icon assets, installation and updates
         run: |
+          python3 scripts/test-icon-assets.py
           python3 scripts/test-distribution.py
           python3 scripts/test-cli-launcher.py
           python3 scripts/test-language-resources.py

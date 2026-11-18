@@ -4803,7 +4803,7 @@ dependencies = [
 
 [[package]]
 name = "pokarak"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -4827,7 +4827,7 @@ dependencies = [
 
 [[package]]
 name = "pokarak-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "ignore",
@@ -4841,7 +4841,7 @@ dependencies = [
 
 [[package]]
 name = "pokarak-navigation"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "flate2",

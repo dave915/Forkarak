@@ -59,6 +59,7 @@ fn commit_message_editor(
 
 #[derive(Clone, PartialEq, Eq)]
 struct PreviewVersion {
+    root: PathBuf,
     guard: index::IndexGuard,
     path: PathBuf,
     side: Side,
@@ -71,6 +72,7 @@ impl PreviewVersion {
     fn new(snapshot: &IndexSnapshot, path: &Path, side: Side, preview: &PartialPreview) -> Self {
         let (old, new) = preview.source_texts();
         Self {
+            root: snapshot.root.clone(),
             guard: snapshot.guard.clone(),
             path: path.to_owned(),
             side,
@@ -85,6 +87,20 @@ impl PreviewVersion {
             new: new.to_owned(),
         }
     }
+
+    fn same_source(&self, other: &Self) -> bool {
+        self.root == other.root
+            && self.path == other.path
+            && self.side == other.side
+            && self.old == other.old
+            && self.new == other.new
+    }
+}
+
+struct IndexPreviewCandidate {
+    partial: partial::PartialDiff,
+    version: PreviewVersion,
+    split: Option<split_diff::PreparedDiff>,
 }
 
 impl CommitUi {
@@ -147,14 +163,18 @@ impl CommitUi {
     fn install_index_preview(
         &mut self,
         snapshot: Arc<IndexSnapshot>,
-        preview: Option<(partial::PartialDiff, PreviewVersion)>,
-    ) {
+        preview: Option<IndexPreviewCandidate>,
+    ) -> Option<(Entity<split_diff::SplitDiff>, split_diff::PreparedDiff)> {
         self.snapshot = Some(snapshot);
-        if let Some((preview, version)) = preview {
-            self.clear_preview();
-            self.partial = Some(preview);
-            self.preview_version = Some(version);
-        }
+        let candidate = preview?;
+        // The same-view automatic path retains this entity. Explicit selection
+        // already clears it before starting a differently scoped preview read.
+        let split = self.split.take();
+        self.clear_preview();
+        self.partial = Some(candidate.partial);
+        self.preview_version = Some(candidate.version);
+        self.split = split;
+        self.split.clone().zip(candidate.split)
     }
 
     fn clear_preview(&mut self) {
@@ -380,6 +400,7 @@ impl Pokarak {
         let previous_version = preserving
             .then(|| self.commit_ui.preview_version.clone())
             .flatten();
+        let refresh_split = preserving && self.commit_ui.split.is_some();
         if !preserving {
             self.commit_ui.selected = Some(path.clone());
             self.commit_ui.side = Some(side);
@@ -394,7 +415,23 @@ impl Pokarak {
                     if previous_version.as_ref() == Some(&version) {
                         Ok(None)
                     } else {
-                        Ok(Some((partial::PartialDiff::new(&path, preview), version)))
+                        let same_source = previous_version
+                            .as_ref()
+                            .is_some_and(|old| old.same_source(&version));
+                        let split = (refresh_split && !same_source).then(|| {
+                            split_diff::PreparedDiff::new(DiffDocument {
+                                path: path.clone(),
+                                old_text: version.old.clone(),
+                                new_text: version.new.clone(),
+                                lines: preview.lines().to_vec(),
+                                ..Default::default()
+                            })
+                        });
+                        Ok(Some(IndexPreviewCandidate {
+                            partial: partial::PartialDiff::new(&path, preview),
+                            version,
+                            split,
+                        }))
                     }
                 }
                 Err(error) => {
@@ -429,7 +466,13 @@ impl Pokarak {
                 }
                 match result {
                     Ok(preview) => {
-                        app.commit_ui.install_index_preview(snapshot, preview);
+                        if let Some((split, prepared)) = app.commit_ui.install_index_preview(snapshot, preview) {
+                            split.update(cx, |split, cx| {
+                                if split.refresh_data(prepared) {
+                                    cx.notify();
+                                }
+                            });
+                        }
                         app.auto_refresh.installed(navigation);
                     }
                     Err(patch) => {
@@ -739,8 +782,8 @@ fn commit_note(text: impl Into<String>) -> Div {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChangedFile, CommitUi, PreviewVersion, Side, Surface, index, partial, partial_index,
-        preview_is_current,
+        ChangedFile, CommitUi, IndexPreviewCandidate, PreviewVersion, Side, Surface, index,
+        partial, partial_index, preview_is_current,
     };
     use std::path::Path;
     use std::{fs, process::Command, sync::Arc};
@@ -786,7 +829,11 @@ mod tests {
         let mut ui = CommitUi::default();
         ui.install_index_preview(
             accepted.clone(),
-            Some((partial::PartialDiff::new(path, preview), version.clone())),
+            Some(IndexPreviewCandidate {
+                partial: partial::PartialDiff::new(path, preview),
+                version: version.clone(),
+                split: None,
+            }),
         );
         fs::write(root.join("other.rs"), "unrelated external update\n").unwrap();
         let refreshed = Arc::new(index::snapshot(root).unwrap());
@@ -800,7 +847,14 @@ mod tests {
         assert!(Arc::ptr_eq(ui.snapshot.as_ref().unwrap(), &refreshed));
         fs::write(root.join(path), "newer\n").unwrap();
         let candidate = partial_index::preview(&refreshed, path, Side::Unstaged).unwrap();
-        assert!(version != PreviewVersion::new(&refreshed, path, Side::Unstaged, &candidate));
+        let changed_version = PreviewVersion::new(&refreshed, path, Side::Unstaged, &candidate);
+        assert!(version != changed_version);
+        assert!(!version.same_source(&changed_version));
+        let mut advanced_version = version.clone();
+        advanced_version.permissions = None;
+        assert!(version.same_source(&advanced_version));
+        advanced_version.root = root.join("another-worktree");
+        assert!(!version.same_source(&advanced_version));
         ui.index_read_failed(true);
         // A retained preview remains bound to its old exact source. A failed
         // refresh must never authorize those rows against newly changed bytes.

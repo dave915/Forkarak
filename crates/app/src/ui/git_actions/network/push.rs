@@ -78,6 +78,12 @@ impl PushTarget {
     }
 }
 
+struct PushRepository {
+    state: RepositoryState,
+    sync: BranchSync,
+    starts: Vec<BranchStart>,
+}
+
 impl Pokarak {
     pub(in crate::ui::git_actions) fn open_branch_push(
         &mut self,
@@ -94,8 +100,8 @@ impl Pokarak {
             let review = if use_upstream {
                 PushTarget::configured(&state, &sync).map(|target| target.review(&ops, &state, &starts))
             } else { None };
-            Ok((state, sync, starts, review))
-        }, move |app, (state, sync, starts, review), w, cx| {
+            Ok((PushRepository { state, sync, starts }, review))
+        }, move |app, (repository, review), w, cx| {
             let notice = match review {
                 Some(Ok(review)) if matches!(&review.source, ReviewSource::Operation(p) if p.remote_state_known) => {
                     app.show_git_review(review, w, cx);
@@ -105,20 +111,23 @@ impl Pokarak {
                 Some(Err(error)) => Some(format!("기본 대상 확인 실패 · {error}")),
                 None => None,
             };
-            app.branch_push_form(state, sync, starts, edit, notice, w, cx);
+            app.branch_push_form(repository, edit, notice, w, cx);
         }, window, cx);
     }
 
     fn branch_push_form(
         &mut self,
-        state: RepositoryState,
-        sync: BranchSync,
-        starts: Vec<BranchStart>,
+        repository: PushRepository,
         edit: Option<PushTarget>,
         notice: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let PushRepository {
+            state,
+            sync,
+            starts,
+        } = repository;
         let state = Arc::new(state);
         let starts = Arc::new(starts);
         let local = edit

@@ -137,11 +137,11 @@
     },
     {
       "id": "legal-9",
-      "name": "EPL-2.0.html",
-      "version": "pinned-a23d82492ea9",
-      "url": "https://www.eclipse.org/legal/epl-2.0/",
-      "sha256": "a23d82492ea90ecc90bd003247ac11306da2a24c8a2aecad19776435669a2bc1",
-      "destination": "legal/upstream/EPL-2.0.html"
+      "name": "EPL-2.0.txt",
+      "version": "pinned-209fe24bf556",
+      "url": "https://raw.githubusercontent.com/eclipse-jdtls/eclipse.jdt.ls/d98abba8f04cf041542d9ebb6df0d472a1395606/LICENSE",
+      "sha256": "209fe24bf55677bbf81c2b0481c1403201fab57b3b4c609971eba4ec8162b99c",
+      "destination": "legal/upstream/EPL-2.0.txt"
     },
     {
       "id": "legal-10",

@@ -483,8 +483,7 @@ fn decode_edit(
                 &change["edits"],
             )?;
         }
-    }
-    if let Some(changes) = value.get("changes") {
+    } else if let Some(changes) = value.get("changes") {
         for (uri, edits) in changes.as_object().context("잘못된 changes입니다")? {
             add(uri, None, edits)?;
         }

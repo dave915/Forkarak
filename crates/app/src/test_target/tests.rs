@@ -271,6 +271,66 @@ fn kotlin_annotated_functions_use_declared_class_and_literal_backtick_names() {
 }
 
 #[test]
+fn java_junit_annotations_select_the_method_in_gradle() {
+    let repo = Repo::new();
+    repo.write("build.gradle", "");
+    let path = "src/test/java/OrdersTest.java";
+    repo.write(
+        path,
+        r#"package shop;
+import org.junit.jupiter.api.*;
+class OrdersTest {
+    @RepeatedTest(3)
+    void retries() {}
+    @org.junit.jupiter.api.TestFactory
+    DynamicTest[] cases() { return new DynamicTest[0]; }
+    @TestTemplate
+    void contract() {}
+}"#,
+    );
+    for (line, selector) in [
+        (4, "shop.OrdersTest.retries"),
+        (6, "shop.OrdersTest.cases"),
+        (8, "shop.OrdersTest.contract"),
+    ] {
+        assert_eq!(
+            repo.target(path, line, false).profile.command,
+            ["gradle", ":test", "--tests", selector]
+        );
+    }
+}
+
+#[test]
+fn kotlin_junit_annotations_select_the_method_in_maven() {
+    let repo = Repo::new();
+    repo.write("pom.xml", "<project/>");
+    let path = "src/test/kotlin/OrdersTest.kt";
+    repo.write(
+        path,
+        r#"package shop
+import org.junit.jupiter.api.*
+class OrdersTest {
+    @org.junit.jupiter.api.RepeatedTest(3)
+    fun retries() {}
+    @TestFactory
+    fun cases() = emptyList<DynamicTest>()
+    @org.junit.jupiter.api.TestTemplate
+    fun contract() {}
+}"#,
+    );
+    for (line, selector) in [
+        (4, "-Dtest=shop.OrdersTest#retries"),
+        (6, "-Dtest=shop.OrdersTest#cases"),
+        (8, "-Dtest=shop.OrdersTest#contract"),
+    ] {
+        assert_eq!(
+            repo.target(path, line, false).profile.command,
+            ["mvn", selector, "test"]
+        );
+    }
+}
+
+#[test]
 fn cargo_workspace_selects_owning_crate_and_exact_inline_or_external_module_test() {
     let repo = Repo::new();
     repo.write("Cargo.toml", "[workspace]\nmembers=['crates/checkout']\n");

@@ -77,7 +77,13 @@ fn annotated(method: Node<'_>, source: &str) -> bool {
                     });
                 matches!(
                     name.trim().rsplit('.').next(),
-                    Some("Test" | "ParameterizedTest")
+                    Some(
+                        "Test"
+                            | "ParameterizedTest"
+                            | "RepeatedTest"
+                            | "TestFactory"
+                            | "TestTemplate"
+                    )
                 )
             })
         })

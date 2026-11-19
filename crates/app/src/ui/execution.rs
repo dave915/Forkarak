@@ -1,4 +1,5 @@
 //! Shared native task, log and extension surfaces. Every executable action is explicit.
+mod test_runs;
 use super::*;
 use crate::ui::dialogs::DialogWindowExt as _;
 use crate::{
@@ -10,6 +11,8 @@ use gpui_kit::component::checkbox::Checkbox;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+pub(super) use test_runs::TestCommand;
+use test_runs::TestRuns;
 
 actions!(forkarak_tasks, [ManageTasks]);
 actions!(forkarak_extensions, [ManageExtensions]);
@@ -51,15 +54,24 @@ struct ExecutionConfig {
 #[derive(Clone, PartialEq, Eq)]
 enum LogSource {
     Task(String, RunId),
+    Test(RunId),
     Extension(String),
 }
+#[derive(Clone)]
 struct SelectedLogs {
     buffer: Arc<Mutex<LogBuffer>>,
     cwd: PathBuf,
 }
 impl LogSource {
-    fn logs(&self, root: &Path, tasks: &TaskRuntime, host: &ExtensionHost) -> Option<SelectedLogs> {
+    fn logs(
+        &self,
+        root: &Path,
+        tasks: &TaskRuntime,
+        tests: &TestRuns,
+        host: &ExtensionHost,
+    ) -> Option<SelectedLogs> {
         match self {
+            Self::Test(id) => tests.logs(root, *id),
             Self::Task(name, id) => {
                 let run = tasks.run(root, name).filter(|run| run.id == *id)?;
                 Some(SelectedLogs {
@@ -120,7 +132,9 @@ pub(super) struct ExecutionUi {
     page: Page,
     scope: Scope,
     config: ExecutionConfig,
+    config_path: PathBuf,
     pub tasks: TaskRuntime,
+    tests: TestRuns,
     pub host: Arc<ExtensionHost>,
     registry: ExtensionRegistry,
     views: HashMap<PathBuf, TreeView>,
@@ -131,7 +145,11 @@ pub(super) struct ExecutionUi {
 }
 impl Default for ExecutionUi {
     fn default() -> Self {
-        let path = config_file();
+        Self::load(config_file(), extension_directory())
+    }
+}
+impl ExecutionUi {
+    fn load(path: PathBuf, extensions: PathBuf) -> Self {
         let config = std::fs::read(&path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
@@ -141,9 +159,11 @@ impl Default for ExecutionUi {
             page: Page::Tasks,
             scope: Scope::Worktree,
             config,
+            config_path: path,
             tasks: TaskRuntime::default(),
+            tests: TestRuns::default(),
             host: Arc::new(ExtensionHost::default()),
-            registry: ExtensionRegistry::new(extension_directory()),
+            registry: ExtensionRegistry::new(extensions),
             views: HashMap::new(),
             pending_restarts: HashMap::new(),
             busy: false,
@@ -160,7 +180,7 @@ pub(crate) fn extension_directory() -> PathBuf {
 }
 impl ExecutionUi {
     fn save(&self) -> anyhow::Result<()> {
-        let path = config_file();
+        let path = &self.config_path;
         let parent = path.parent().unwrap();
         std::fs::create_dir_all(parent)?;
         let mut temp = tempfile::NamedTempFile::new_in(parent)?;
@@ -170,10 +190,14 @@ impl ExecutionUi {
     }
     pub(super) fn shutdown_root(&mut self, root: &Path) {
         self.pending_restarts.retain(|(p, _), _| p != root);
+        self.tests.shutdown_root(root);
+        self.views.remove(root);
         self.tasks.shutdown_root(root);
         self.host.shutdown_root(root);
     }
     pub(super) fn shutdown(&mut self) {
+        self.tests.shutdown();
+        self.views.clear();
         self.pending_restarts.clear();
         self.tasks = TaskRuntime::default();
         self.host.shutdown();
@@ -195,6 +219,7 @@ impl Pokarak {
     }
     fn open_execution(&mut self, page: Page, w: &mut Window, cx: &mut Context<Self>) {
         w.close_all_dialogs(cx);
+        self.execution.tests.leave_trust_screen();
         self.execution.visible = true;
         self.execution.page = page;
         self.execution.message = None;
@@ -442,6 +467,7 @@ impl Pokarak {
         cx.notify();
     }
     pub(super) fn execution_tick(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.tick_editor_tests(w, cx);
         let ready: Vec<_> = self
             .execution
             .pending_restarts
@@ -501,6 +527,7 @@ impl Pokarak {
         self.execution.views.get(root)?.selected.as_ref()?.logs(
             root,
             &self.execution.tasks,
+            &self.execution.tests,
             &self.execution.host,
         )
     }
@@ -543,6 +570,7 @@ impl Pokarak {
                     .selected(self.execution.page == Page::Extensions)
                     .small()
                     .on_click(cx.listener(|app, _, _, cx| {
+                        app.execution.tests.leave_trust_screen();
                         app.execution.page = Page::Extensions;
                         cx.notify();
                     })),
@@ -555,6 +583,7 @@ impl Pokarak {
                     .tooltip("닫기")
                     .small()
                     .on_click(cx.listener(|app, _, w, cx| {
+                        app.execution.tests.leave_trust_screen();
                         app.execution.visible = false;
                         app.focus.focus(w, cx);
                         cx.notify();
@@ -589,6 +618,8 @@ impl Pokarak {
         }
         if !root.as_os_str().is_empty() && !self.execution_trusted(&root) {
             let expected = root.clone();
+            let workspace = self.request;
+            let generation = self.execution.tests.trust_generation();
             content = content.child(
                 div()
                     .p_2()
@@ -601,11 +632,16 @@ impl Pokarak {
                         Button::new("execution-trust")
                             .label("이 워크트리 실행 허용")
                             .small()
-                            .on_click(cx.listener(move |app, _, _, cx| {
-                                if app.current.as_ref() == Some(&expected) {
+                            .on_click(cx.listener(move |app, _, w, cx| {
+                                if app.current.as_ref() == Some(&expected)
+                                    && app.request == workspace
+                                    && app.execution.tests.trust_generation() == generation
+                                    && app.opening_path.is_none()
+                                {
                                     app.execution.config.trusted.insert(expected.clone());
                                     app.execution.message =
                                         app.execution.save().err().map(|e| e.to_string());
+                                    app.resume_trusted_test(w, cx);
                                     cx.notify();
                                 }
                             })),
@@ -863,7 +899,8 @@ impl Pokarak {
                             })),
                     ),
             )
-            .child(list);
+            .child(list)
+            .children(self.test_result_panel(root, cx));
         if let Some(logs) = self.selected_execution_logs(root) {
             panel = panel.child(self.render_execution_logs(root, logs, query, cx));
         } else {
@@ -1020,11 +1057,11 @@ impl Pokarak {
                         ))
                         .on_a11y_action(accesskit::Action::Click, move |_, w, cx| {
                             let _ = accessible_view.update(cx, |app, cx| {
-                                app.open_execution_location(&accessible_link, w, cx)
+                                app.open_execution_log_link(&accessible_link, w, cx)
                             });
                         })
                         .on_click(cx.listener(move |app, _, w, cx| {
-                            app.open_execution_location(&link, w, cx);
+                            app.open_execution_log_link(&link, w, cx);
                         }))
                 });
             rows = rows.child(row);
@@ -1040,7 +1077,7 @@ impl Pokarak {
             .child(rows)
             .into_any_element()
     }
-    fn open_execution_location(
+    fn open_execution_log_link(
         &mut self,
         link: &ExecutionLogLink,
         w: &mut Window,
@@ -1061,12 +1098,21 @@ impl Pokarak {
                 return;
             }
         };
+        self.open_execution_location(path, &link.location, w, cx);
+    }
+    fn open_execution_location(
+        &mut self,
+        path: &Path,
+        location: &task_runtime::StackLocation,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.execution.visible = false;
         self.git_history.active = false;
         self.open_file(
             path.to_owned(),
             true,
-            Some(Position::new(link.location.line, link.location.column)),
+            Some(Position::new(location.line, location.column)),
             w,
             cx,
         );
@@ -1936,13 +1982,14 @@ mod tests {
         };
         let mut tasks = TaskRuntime::default();
         let host = ExtensionHost::default();
+        let tests = super::TestRuns::default();
         let run = tasks
             .start(&root, profile.clone(), true, LogOptions::default())
             .unwrap();
         let source = LogSource::Task(profile.name.clone(), run);
         fs::remove_file(root.join("active")).unwrap();
         symlink(".", root.join("active")).unwrap();
-        let logs = source.logs(&root, &tasks, &host).unwrap();
+        let logs = source.logs(&root, &tasks, &tests, &host).unwrap();
         let link = ExecutionLogLink::resolve(&root, &logs, "source.rs:3:2").unwrap();
         assert_eq!(
             link.target(&logs).unwrap(),
@@ -1956,9 +2003,9 @@ mod tests {
         let next = tasks
             .restart(&root, profile.clone(), true, LogOptions::default())
             .unwrap();
-        assert!(source.logs(&root, &tasks, &host).is_none());
+        assert!(source.logs(&root, &tasks, &tests, &host).is_none());
         let next_logs = LogSource::Task(profile.name, next)
-            .logs(&root, &tasks, &host)
+            .logs(&root, &tasks, &tests, &host)
             .unwrap();
         assert!(link.target(&next_logs).unwrap().is_none());
     }

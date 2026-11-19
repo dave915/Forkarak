@@ -20,6 +20,13 @@ pokarak-navigation = { path = "../navigation" }
 smol = "2"
 notify = "8"
 tempfile = "3"
+toml = "0.8"
+roxmltree = "0.21"
+rustix = { version = "1", features = ["fs"] }
+tree-sitter = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-kotlin-ng = "1.1"
+tree-sitter-rust = "0.24"
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Component, Path, PathBuf},
@@ -742,23 +742,14 @@ pub fn spring_manifest() -> ExtensionManifest {
         },
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SpringBuild {
-    Maven,
-    Gradle,
-}
+pub(crate) mod jvm;
+pub use jvm::JvmBuild as SpringBuild;
+
 pub fn detect_spring_builds(root: &Path) -> Vec<SpringBuild> {
-    let mut found = Vec::new();
-    if root.join("pom.xml").is_file() {
-        found.push(SpringBuild::Maven);
-    }
-    if ["build.gradle", "build.gradle.kts"]
-        .iter()
-        .any(|p| root.join(p).is_file())
-    {
-        found.push(SpringBuild::Gradle);
-    }
-    found
+    root.canonicalize()
+        .ok()
+        .and_then(|root| jvm::builds_at(&root, &root).ok())
+        .unwrap_or_default()
 }
 fn spring_response(request: &ExtensionRequest) -> Result<Vec<TaskProfile>> {
     ensure!(
@@ -773,25 +764,8 @@ fn spring_response(request: &ExtensionRequest) -> Result<Vec<TaskProfile>> {
             .unwrap_or("")
             .to_owned()
     };
-    let mut env: BTreeMap<String, String> = settings
-        .get("spring.env")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()?
-        .unwrap_or_default();
-    let jdk = string("spring.jdk");
-    if !jdk.is_empty() {
-        let home = PathBuf::from(&jdk)
-            .canonicalize()
-            .context("JDK 홈을 찾을 수 없습니다")?;
-        ensure!(
-            home.join("bin/java").is_file(),
-            "JDK 홈에 bin/java가 없습니다"
-        );
-        env.insert("JAVA_HOME".into(), home.display().to_string());
-        let path = std::env::var("PATH").unwrap_or_default();
-        env.insert("PATH".into(), format!("{}/bin:{path}", home.display()));
-    }
+    let root = request.worktree.canonicalize()?;
+    let env = jvm::environment(&root, settings)?;
     let args: Vec<String> = settings
         .get("spring.args")
         .cloned()
@@ -800,37 +774,27 @@ fn spring_response(request: &ExtensionRequest) -> Result<Vec<TaskProfile>> {
         .unwrap_or_default();
     let profiles = string("spring.profiles");
     let mut tasks = Vec::new();
-    for build in detect_spring_builds(&request.worktree) {
-        let (name, program, mut command) = match build {
+    for build in detect_spring_builds(&root) {
+        let project = jvm::Project {
+            kind: build,
+            module: root.clone(),
+            build_root: root.clone(),
+        };
+        let program = project.program(&root, settings)?;
+        let (name, mut command) = match build {
             SpringBuild::Maven => {
-                let configured = string("spring.maven");
-                let program = if !configured.is_empty() {
-                    configured
-                } else if request.worktree.join("mvnw").is_file() {
-                    request.worktree.join("mvnw").display().to_string()
-                } else {
-                    "mvn".into()
-                };
                 let mut command = vec!["spring-boot:run".into()];
                 if !profiles.is_empty() {
                     command.push(format!("-Dspring-boot.run.profiles={profiles}"));
                 }
-                ("Spring · Maven", program, command)
+                ("Spring · Maven", command)
             }
             SpringBuild::Gradle => {
-                let configured = string("spring.gradle");
-                let program = if !configured.is_empty() {
-                    configured
-                } else if request.worktree.join("gradlew").is_file() {
-                    request.worktree.join("gradlew").display().to_string()
-                } else {
-                    "gradle".into()
-                };
                 let mut command = vec!["bootRun".into()];
                 if !profiles.is_empty() {
                     command.push(format!("--args=--spring.profiles.active={profiles}"));
                 }
-                ("Spring · Gradle", program, command)
+                ("Spring · Gradle", command)
             }
         };
         command.extend(args.clone());

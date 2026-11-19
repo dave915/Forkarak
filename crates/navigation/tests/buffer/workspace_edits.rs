@@ -72,7 +72,7 @@ fn prepare_checks_capabilities_utf16_range_and_default_behavior() {
 }
 
 #[test]
-fn changes_and_versioned_document_changes_use_exact_retained_and_disk_bytes() {
+fn document_changes_use_exact_retained_and_disk_bytes() {
     let f = Fixture::new();
     let s = f.snapshot(42);
     let mut nav = f.nav("buffer");
@@ -92,10 +92,10 @@ fn changes_and_versioned_document_changes_use_exact_retained_and_disk_bytes() {
         &f,
         "rename.json",
         json!({
-            "changes":{(uri(&f,"unopened.ts")):[replace(0,3,6)]},
             "documentChanges":[
                 {"textDocument":{"uri":uri(&f,"entry.ts"),"version":42},"edits":[replace(1,6,11),replace(2,0,5)]},
-                {"textDocument":{"uri":uri(&f,"target.ts"),"version":2},"edits":[replace(0,3,6)]}
+                {"textDocument":{"uri":uri(&f,"target.ts"),"version":2},"edits":[replace(0,3,6)]},
+                {"textDocument":{"uri":uri(&f,"unopened.ts"),"version":null},"edits":[replace(0,3,6)]}
             ]
         }),
     );
@@ -142,6 +142,39 @@ fn changes_and_versioned_document_changes_use_exact_retained_and_disk_bytes() {
 }
 
 #[test]
+fn document_changes_ignore_duplicate_and_extra_changes() {
+    let f = Fixture::new();
+    let s = f.snapshot(3);
+    let mut nav = f.nav("buffer");
+    let entry = uri(&f, "entry.ts");
+    let edit = replace(1, 6, 11);
+    reply(
+        &f,
+        "rename.json",
+        json!({
+            "documentChanges":[{"textDocument":{"uri":entry,"version":3},"edits":[edit]}],
+            "changes":{(entry):[edit],(uri(&f,"target.ts")):[replace(0,3,9)]}
+        }),
+    );
+    let result = nav.rename_buffer(&s, 1, 7, "renamed").unwrap().value;
+    assert_eq!(result.files.len(), 1);
+    assert_eq!(result.files[0].path, f.root.join("entry.ts"));
+    assert_eq!(json!(result.files[0].edits), json!([edit]));
+}
+
+#[test]
+fn empty_document_changes_ignore_populated_changes() {
+    let f = Fixture::new();
+    let s = f.snapshot(3);
+    let mut nav = f.nav("buffer");
+    let mut response = target_edit(&f);
+    response["documentChanges"] = json!([]);
+    reply(&f, "rename.json", response);
+    let result = nav.rename_buffer(&s, 1, 7, "renamed").unwrap().value;
+    assert!(result.files.is_empty());
+}
+
+#[test]
 fn rejects_whole_batch_for_resources_external_files_and_ambiguous_ranges() {
     let f = Fixture::new();
     let other = Fixture::new();
@@ -172,8 +205,16 @@ fn rejects_whole_batch_for_resources_external_files_and_ambiguous_ranges() {
         reply(&f, "rename.json", invalid);
         assert!(nav.rename_buffer(&s, 1, 7, "safe").is_err());
     }
-    let mut invalid = valid.clone();
-    invalid["documentChanges"] = json!([{"textDocument":{"uri":uri(&f,"target.ts"),"version":null},"edits":[replace(0,4,5)]}]);
+    for malformed in [Value::Null, json!([{"edits":[]}])] {
+        let mut invalid = valid.clone();
+        invalid["documentChanges"] = malformed;
+        reply(&f, "rename.json", invalid);
+        assert!(nav.rename_buffer(&s, 1, 7, "safe").is_err());
+    }
+    let invalid = json!({"documentChanges":[{
+        "textDocument":{"uri":uri(&f,"target.ts"),"version":null},
+        "edits":[replace(0,3,9),replace(0,4,5)]
+    }]});
     reply(&f, "rename.json", invalid);
     assert!(
         nav.rename_buffer(&s, 1, 7, "safe")

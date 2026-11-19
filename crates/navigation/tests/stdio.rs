@@ -190,7 +190,6 @@ fn errors_timeouts_malformed_frames_and_exit_are_honest_and_bounded() {
         ("error", "deliberate semantic failure"),
         ("utf8", "unsupported position encoding"),
         ("unsupported", "does not support"),
-        ("stale-disk", "changed on disk"),
     ] {
         let f = Fixture::new();
         let mut nav = f.navigator(mode);
@@ -202,8 +201,80 @@ fn errors_timeouts_malformed_frames_and_exit_are_honest_and_bounded() {
         assert!(error.contains(expected), "{mode}: {error}");
         assert!(nav.status().contains(expected), "{mode}");
         assert!(start.elapsed() < Duration::from_secs(4), "{mode}");
+        if matches!(mode, "hang" | "error" | "unsupported") {
+            nav.shutdown();
+        }
         assert_process_gone(&f.root.join("mock.pid"));
     }
+}
+
+#[test]
+fn disk_content_changes_during_a_request_are_resynchronized_in_the_same_process() {
+    for from_buffer in [false, true] {
+        let f = Fixture::new();
+        let mut nav = f.navigator("stale-disk");
+        let path = Path::new("entry.ts");
+        nav.navigate(path, 1, 6, Definition).unwrap();
+        let error = if from_buffer {
+            let draft = pokarak_navigation::DocumentSnapshot::new(
+                f.root.clone(),
+                "target.ts".into(),
+                "draft".into(),
+                1,
+            )
+            .unwrap();
+            nav.navigate_buffer(&draft, 0, 0, References).unwrap_err()
+        } else {
+            nav.navigate(path, 1, 6, References).unwrap_err()
+        };
+        assert!(error.to_string().contains("changed on disk"), "{error}");
+        nav.navigate(path, 0, 0, Definition).unwrap();
+        let log = f.log();
+        assert_eq!(
+            log.iter().filter(|m| m["method"] == "initialize").count(),
+            1
+        );
+        assert!(log.iter().any(|m| m["method"] == "textDocument/didChange"
+            && m["params"]["contentChanges"][0]["text"] == "changed during request"));
+        assert!(!log.iter().any(|m| m["method"] == "$/cancelRequest"));
+    }
+}
+
+#[test]
+fn disk_request_failures_reuse_the_process_and_cancel_only_the_pending_id() {
+    let f = Fixture::new();
+    let entry = Path::new("entry.py");
+    fs::write(f.root.join(entry), "value = 1\n").unwrap();
+    let mut config = f.config("request-recovery");
+    config.language = "python".into();
+    let mut nav = Navigator::with_options(f.root.clone(), vec![config], f.options());
+    for (kind, expected) in [
+        (Definition, "timed out"),
+        (Implementation, "does not support"),
+        (References, "reference lookup failed"),
+    ] {
+        let error = nav.navigate(entry, 0, 0, kind).unwrap_err().to_string();
+        assert!(error.contains(expected), "{error}");
+    }
+    let result = nav.navigate(entry, 0, 0, Definition).unwrap();
+    assert_eq!(result.locations[0].path, f.root.join("target.ts"));
+    nav.shutdown();
+    let log = f.log();
+    let messages = |method: &str| {
+        log.iter()
+            .filter(|m| m["method"] == method)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(messages("initialize").len(), 1);
+    assert_eq!(messages("textDocument/didOpen").len(), 1);
+    assert!(messages("textDocument/implementation").is_empty());
+    assert_eq!(messages("textDocument/references").len(), 1);
+    let definitions = messages("textDocument/definition");
+    assert_eq!(definitions.len(), 2);
+    assert_ne!(definitions[0]["id"], definitions[1]["id"]);
+    let cancelled = messages("$/cancelRequest");
+    assert_eq!(cancelled.len(), 1);
+    assert_eq!(cancelled[0]["params"]["id"], definitions[0]["id"]);
 }
 
 #[test]

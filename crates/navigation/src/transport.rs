@@ -1,4 +1,4 @@
-use crate::{CancellationHandle, cancellation::OwnedProcess};
+use crate::{CancellationHandle, DocumentSnapshot, RequestFailure, cancellation::OwnedProcess};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::{
@@ -7,7 +7,7 @@ use std::{
     path::Path,
     process::{Command, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         mpsc::{self, Receiver, SyncSender},
     },
     thread::{self, JoinHandle},
@@ -68,10 +68,12 @@ pub(crate) fn read_frame(reader: &mut impl BufRead) -> Result<Value> {
 }
 
 pub(crate) struct Transport {
-    snapshot: Option<crate::DocumentSnapshot>,
+    source: Option<DocumentSnapshot>,
+    snapshots: Vec<DocumentSnapshot>,
     process: Arc<OwnedProcess>,
+    read_failure: Arc<OnceLock<String>>,
     cancellation: CancellationHandle,
-    rx: Option<Receiver<std::result::Result<Value, String>>>,
+    rx: Option<Receiver<Value>>,
     tx: Option<SyncSender<WriteJob>>,
     stderr: Arc<Mutex<VecDeque<u8>>>,
     threads: Vec<JoinHandle<()>>,
@@ -110,12 +112,19 @@ impl Transport {
         let logs = Arc::new(Mutex::new(VecDeque::new()));
         let capture = Arc::clone(&logs);
         let (response_tx, response_rx) = mpsc::sync_channel(128);
+        let read_failure = Arc::new(OnceLock::new());
+        let reader_failure = Arc::clone(&read_failure);
         let reader = thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
-                let frame = read_frame(&mut reader).map_err(|e| format!("{e:#}"));
-                let failed = frame.is_err();
-                if response_tx.send(frame).is_err() || failed {
+                let frame = match read_frame(&mut reader) {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        let _ = reader_failure.set(format!("{error:#}"));
+                        break;
+                    }
+                };
+                if response_tx.send(frame).is_err() {
                     break;
                 }
             }
@@ -152,8 +161,10 @@ impl Transport {
             }
         });
         Ok(Self {
-            snapshot: None,
+            source: None,
+            snapshots: Vec::new(),
             process,
+            read_failure,
             cancellation: cancellation.clone(),
             rx: Some(response_rx),
             tx: Some(write_tx),
@@ -163,11 +174,61 @@ impl Transport {
         })
     }
 
-    pub fn set_snapshot(&mut self, snapshot: Option<crate::DocumentSnapshot>) {
-        self.snapshot = snapshot;
+    pub fn set_context(
+        &mut self,
+        source: Option<&DocumentSnapshot>,
+        snapshots: Vec<DocumentSnapshot>,
+    ) {
+        self.source = source.cloned();
+        self.snapshots = snapshots;
+    }
+
+    pub fn check_health(&self) -> Result<()> {
+        self.cancellation.check()?;
+        if let Some(error) = self.read_failure.get() {
+            bail!("{error}");
+        }
+        if let Some(exit) = self.exit_status() {
+            bail!("{exit}");
+        }
+        Ok(())
+    }
+
+    pub fn check_snapshots(&self) -> Result<()> {
+        self.snapshots.iter().try_for_each(DocumentSnapshot::check)
+    }
+
+    fn check_pending_context(&self) -> Result<()> {
+        if let Some(source) = &self.source {
+            source.check()?;
+        }
+        self.snapshots
+            .iter()
+            .try_for_each(DocumentSnapshot::check_revision)
     }
 
     pub fn send(&self, message: &Value, deadline: Instant) -> Result<()> {
+        self.write(message, deadline, || {
+            self.check_pending_context()
+                .map_err(|e| anyhow::anyhow!("Unconfirmed LSP write: {e:#}"))
+        })
+    }
+
+    pub fn cancel_request(&self, id: u64) -> Result<()> {
+        // Independent of the expired deadline and invalidated editor revision.
+        self.write(
+            &serde_json::json!({"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":id}}),
+            Instant::now() + Duration::from_millis(100),
+            || Ok(()),
+        )
+    }
+
+    fn write(
+        &self,
+        message: &Value,
+        deadline: Instant,
+        check_pending: impl Fn() -> Result<()>,
+    ) -> Result<()> {
         self.cancellation.check()?;
         let body = serde_json::to_vec(message)?;
         if body.len() > MAX_BODY {
@@ -179,37 +240,51 @@ impl Transport {
             .context("Language server is stopped")?
             .try_send((body, ack_tx))
             .map_err(|e| anyhow::anyhow!("Cannot queue LSP write: {e}"))?;
-        self.wait(&ack_rx, deadline, "LSP write")?
-            .map_err(|e| anyhow::anyhow!("LSP write failed: {e}"))
+        // Once queued, an interrupted acknowledgement leaves delivery uncertain.
+        // In particular a didChange may already have advanced the remote version.
+        self.wait(
+            &ack_rx,
+            deadline,
+            || anyhow::anyhow!("LSP write timed out"),
+            check_pending,
+        )?
+        .map_err(|e| anyhow::anyhow!("LSP write failed: {e}"))
     }
 
     pub fn receive(&self, deadline: Instant) -> Result<Value> {
+        self.check_pending_context()?;
         self.wait(
             self.rx.as_ref().context("Language server is stopped")?,
             deadline,
-            "LSP response",
-        )?
-        .map_err(anyhow::Error::msg)
+            || RequestFailure("LSP response timed out".into()).into(),
+            || self.check_pending_context(),
+        )
     }
 
-    fn wait<T>(&self, receiver: &Receiver<T>, deadline: Instant, operation: &str) -> Result<T> {
+    fn wait<T>(
+        &self,
+        receiver: &Receiver<T>,
+        deadline: Instant,
+        timeout: impl Fn() -> anyhow::Error,
+        check_pending: impl Fn() -> Result<()>,
+    ) -> Result<T> {
         loop {
             self.cancellation.check()?;
-            if let Some(snapshot) = &self.snapshot {
-                snapshot.check()?;
-            }
             let remaining = deadline
                 .checked_duration_since(Instant::now())
-                .with_context(|| format!("{operation} timed out"))?;
+                .ok_or_else(&timeout)?;
             match receiver.recv_timeout(remaining.min(Duration::from_millis(20))) {
                 Ok(value) => {
                     self.cancellation.check()?;
                     return Ok(value);
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    self.check_health()?;
+                    check_pending()?;
+                }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.cancellation.check()?;
-                    bail!("{operation} worker exited");
+                    self.check_health()?;
+                    bail!("LSP I/O worker exited");
                 }
             }
         }

@@ -73,6 +73,7 @@ fn main() {
         .unwrap();
     let mut stdin = BufReader::new(std::io::stdin().lock());
     let mut rename_requests = 0;
+    let mut late_reply = None;
     let mut docs = HashMap::<String, Value>::new();
     fs::write("launch.json", serde_json::to_string(&args).unwrap()).unwrap();
     let mut root_uri = String::new();
@@ -93,11 +94,38 @@ fn main() {
         let mut body = vec![0; size.unwrap()];
         stdin.read_exact(&mut body).unwrap();
         let message: Value = serde_json::from_slice(&body).unwrap();
-        writeln!(log, "{message}").unwrap();
-        log.flush().unwrap();
+        // A fixture can be killed during a request. Append the whole record in
+        // one write so the next process's initialize starts on a clean line.
+        log.write_all(format!("{message}\n").as_bytes()).unwrap();
         let id = &message["id"];
         let params = &message["params"];
         let method = message["method"].as_str().unwrap_or("");
+        if mode == "request-recovery" {
+            if method == "textDocument/definition"
+                && !std::path::Path::new("request.started").exists()
+            {
+                fs::write("request.started", id.to_string()).unwrap();
+                continue;
+            }
+            if method == "$/cancelRequest" {
+                late_reply = Some(params["id"].clone());
+                continue;
+            }
+            if id.is_number()
+                && let Some(abandoned) = late_reply.take()
+            {
+                // Arrive while another request is outstanding on the same stream.
+                send(
+                    json!({"jsonrpc":"2.0","id":abandoned,"error":{"code":-32800,"message":"late cancelled response"}}),
+                );
+            }
+            if method == "textDocument/references" {
+                send(
+                    json!({"jsonrpc":"2.0","id":id,"error":{"code":-32603,"message":"reference lookup failed"}}),
+                );
+                continue;
+            }
+        }
         match method {
             "intellij/workspaceImportState" => {
                 assert!(!args.iter().any(|arg| arg == "-data"));
@@ -133,7 +161,7 @@ fn main() {
                         "positionEncoding": if mode == "utf8" {"utf-8"} else {"utf-16"},
                         "textDocumentSync": {"openClose": true, "change": if mode == "full" {1} else {2}},
                         "definitionProvider": true, "referencesProvider": true,
-                        "implementationProvider": mode != "unsupported",
+                        "implementationProvider": !matches!(mode, "unsupported" | "request-recovery"),
                         "executeCommandProvider": {"commands":if mode.starts_with("ts-diagnostics") {json!(["typescript.tsserverRequest","DANGEROUS"])} else {json!([])}},
                         "completionProvider": if mode == "unsupported-editor" {Value::Bool(false)} else {json!({"resolveProvider":true})},
                         "hoverProvider":mode != "unsupported-editor",
@@ -418,9 +446,16 @@ fn main() {
                 if method.ends_with("references") {
                     assert_eq!(params["context"]["includeDeclaration"], true);
                 }
-                if mode == "request-exit" {
+                if mode == "request-exit"
+                    || (mode == "transport-recovery" && fs::remove_file("exit.next").is_ok())
+                {
                     eprintln!("server request crashed");
                     std::process::exit(19);
+                }
+                if mode == "transport-recovery" && fs::remove_file("malformed.next").is_ok() {
+                    print!("Content-Length: invalid\r\n\r\n");
+                    std::io::stdout().flush().unwrap();
+                    continue;
                 }
                 if mode == "hang" {
                     continue;
@@ -435,7 +470,7 @@ fn main() {
                     response(id, Value::Null);
                     continue;
                 }
-                if mode == "stale-disk" {
+                if mode == "stale-disk" && method == "textDocument/references" {
                     fs::write("entry.ts", "changed during request").unwrap();
                 }
                 // Unrelated responses must not satisfy the pending request.
@@ -463,7 +498,9 @@ fn main() {
                 } else {
                     response(id, location);
                 }
-                if mode == "exit-descendants" {
+                if mode == "exit-descendants"
+                    || (mode == "transport-recovery" && fs::remove_file("exit.after.reply").is_ok())
+                {
                     return;
                 }
             }

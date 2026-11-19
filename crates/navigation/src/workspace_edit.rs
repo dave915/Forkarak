@@ -148,20 +148,23 @@ fn check_change_times(root: &Path, path: &Path, started: SystemTime) -> Result<(
 }
 
 impl Navigator {
-    fn edit_client(&self, source: &DocumentSnapshot) -> Result<&Client> {
+    fn edit_client(&mut self, source: &DocumentSnapshot) -> Result<&Client> {
         let language =
             crate::config::language(source.path()).context("지원되지 않는 언어입니다")?;
         let origin = self.origin_for(source.path(), language)?;
-        self.clients.get(&origin.key).context(STALE)
+        let client = self.clients.get(&origin.key).context(STALE)?;
+        let health = client.transport.check_health();
+        self.client_result(&origin.key, health)?;
+        Ok(&self.clients[&origin.key])
     }
 
     fn edit_request(&mut self, source: &DocumentSnapshot) -> Result<(Arc<EditRequest>, Value)> {
         let started = SystemTime::now();
         let caps = self.capabilities_buffer(source)?.value;
-        let client = self.edit_client(source)?;
+        let session = self.edit_client(source)?.session_path().to_owned();
         let request = EditRequest {
             source: source.clone(),
-            session: client.session_path().to_owned(),
+            session,
             started,
             retained: self.buffer_versions.clone(),
         };

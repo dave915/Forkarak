@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashSet},
+    fmt,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -44,6 +45,18 @@ pub use managed::{
     ToolDistribution, ToolPackage, ToolStatus,
 };
 pub use paths::{path_to_uri, uri_to_path};
+
+/// This request failed with the stream and acknowledged document state intact.
+#[derive(Debug)]
+struct RequestFailure(String);
+
+impl fmt::Display for RequestFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RequestFailure {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -138,8 +151,7 @@ impl Navigator {
             let language =
                 language(snapshot.path()).context("No configured language for this file")?;
             let origin = self.origin_for(snapshot.path(), language)?;
-            self.ensure_client(&origin, Some(snapshot))?;
-            Ok(self.clients.get(&origin.key).unwrap().capabilities())
+            self.with_client_context(&origin, Some(snapshot), |client| Ok(client.capabilities()))
         })();
         self.finish_buffer(snapshot, result)
     }
@@ -203,23 +215,9 @@ impl Navigator {
         // A dependency source keeps the originating import session even if its
         // language or filesystem root differs from the selected worktree source.
         let origin = self.origin_for(&path, language)?;
-        let key = &origin.key;
-        self.ensure_client(&origin, None)?;
-        let client = self.clients.get_mut(key).unwrap();
-        let response = client.navigate(&path, text, language, line, column, &kind);
-        let response = match response {
-            Ok(value) => value,
-            Err(error) => {
-                // A timeout or protocol error invalidates this process and all pending IDs.
-                // A later explicit navigation may start a fresh session.
-                client.transport.stop(Duration::ZERO);
-                self.last_stderr = client.transport.stderr();
-                self.last_messages = client.server_messages().to_owned();
-                let error = client.error_message(&format!("{error:#}"), language);
-                self.clients.remove(key);
-                bail!("{error}");
-            }
-        };
+        let response = self.with_client_context(&origin, None, |client| {
+            client.navigate(&path, text, language, line, column, &kind)
+        })?;
         let (locations, skipped) = decode_locations(&self.root, response)?;
         self.external_sources.extend(
             locations
@@ -300,16 +298,20 @@ impl Navigator {
         Ok(origin)
     }
 
-    fn ensure_client(
+    fn with_client_context<T>(
         &mut self,
         origin: &ClientOrigin,
         snapshot: Option<&DocumentSnapshot>,
-    ) -> Result<()> {
+        operation: impl FnOnce(&mut Client) -> Result<T>,
+    ) -> Result<T> {
         let key = &origin.key;
-        if !self.clients.contains_key(key) {
+        if let Some(client) = self.clients.get(key) {
+            let health = client.transport.check_health();
+            self.client_result(key, health)?;
+        } else {
             let mut launch_config = origin.config.clone();
             launch_config.language = family(&launch_config.language).into();
-            let mut client = Client::start(
+            let client = Client::start(
                 &self.root,
                 &origin.import_root,
                 &launch_config,
@@ -317,24 +319,50 @@ impl Navigator {
                 &self.cancellation,
                 snapshot,
             )?;
-            // Recreate every retained draft after a protocol failure/restart, not
-            // just the requested file: cross-file semantics must see dirty sources.
-            client.transport.set_snapshot(snapshot.cloned());
-            for retained in self.buffer_versions.values() {
-                let Some(language) = language(retained.path()) else {
-                    continue;
-                };
-                if self.origin_for(retained.path(), language)?.key == *key {
-                    if resolved_path(retained.path())? != retained.path() {
-                        bail!("Retained source changed its filesystem target");
-                    }
-                    client.restore_buffer(retained, language)?;
-                }
-            }
-            client.transport.set_snapshot(None);
             self.clients.insert(key.clone(), client);
         }
-        Ok(())
+
+        // A reused session and a replacement must both see every retained draft
+        // for their import root, including when navigating a disk-backed source.
+        let mut retained = Vec::new();
+        for source in self.buffer_versions.values() {
+            if let Some(language) = language(source.path())
+                && self.origin_for(source.path(), language)?.key == *key
+            {
+                retained.push((source, language));
+            }
+        }
+        let client = self.clients.get_mut(key).unwrap();
+        client.transport.set_context(
+            snapshot,
+            retained.iter().map(|(doc, _)| (*doc).clone()).collect(),
+        );
+        let result = (|| {
+            client.transport.check_snapshots()?;
+            for (source, language) in retained {
+                client.restore_buffer(source, language)?;
+            }
+            let result = operation(client)?;
+            client.transport.check_snapshots()?;
+            Ok(result)
+        })();
+        client.transport.set_context(None, Vec::new());
+        self.client_result(key, result)
+    }
+
+    fn client_result<T>(&mut self, key: &str, result: Result<T>) -> Result<T> {
+        result.map_err(|error| {
+            let client = self.clients.get_mut(key).unwrap();
+            if error.is::<RequestFailure>() && client.transport.check_health().is_ok() {
+                return anyhow::Error::msg(client.error_message(&format!("{error:#}"), ""));
+            }
+            client.transport.stop(Duration::ZERO);
+            self.last_stderr = client.transport.stderr();
+            self.last_messages = client.server_messages().to_owned();
+            let message = client.error_message(&format!("{error:#}"), "");
+            self.clients.remove(key);
+            anyhow::Error::msg(message)
+        })
     }
 
     /// Call on filesystem-change notifications; navigation also refreshes all open buffers.
@@ -349,14 +377,14 @@ impl Navigator {
         let keys: Vec<_> = self.clients.keys().cloned().collect();
         for key in keys {
             let client = self.clients.get_mut(&key).unwrap();
-            if let Err(error) = client.refresh(Instant::now() + self.options.request_timeout) {
-                client.transport.stop(Duration::ZERO);
-                self.last_stderr = client.transport.stderr();
-                self.last_messages = client.server_messages().to_owned();
-                self.last_status =
-                    client.error_message(&format!("Disk synchronization failed: {error:#}"), "");
-                self.clients.remove(&key);
-                bail!("{}", self.last_status);
+            let result = client
+                .transport
+                .check_health()
+                .and_then(|_| client.refresh(Instant::now() + self.options.request_timeout))
+                .context("Disk synchronization failed");
+            if let Err(error) = self.client_result(&key, result) {
+                self.last_status = format!("{error:#}");
+                return Err(error);
             }
         }
         Ok(())

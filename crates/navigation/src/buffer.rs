@@ -14,7 +14,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 #[derive(Clone, Debug)]
@@ -69,10 +68,16 @@ impl DocumentSnapshot {
     pub(crate) fn same_revision(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.valid, &other.valid)
     }
-    pub(crate) fn check(&self) -> Result<()> {
+    pub(crate) fn check_revision(&self) -> Result<()> {
         if !self.is_current() {
-            bail!("Stale document snapshot; displayed source changed");
+            bail!(crate::RequestFailure(
+                "Stale document snapshot; displayed source changed".into()
+            ));
         }
+        Ok(())
+    }
+    pub(crate) fn check(&self) -> Result<()> {
+        self.check_revision()?;
         if resolved_path(&self.path)? != self.path || other_worktree(&self.root, &self.path) {
             bail!("Source changed its filesystem target");
         }
@@ -359,52 +364,9 @@ impl Navigator {
         let language = language(snapshot.path())
             .context("No language-server configuration for this file type")?;
         let origin = self.origin_for(snapshot.path(), language)?;
-        self.ensure_client(&origin, Some(snapshot))?;
-        let retained: Vec<_> = self
-            .buffer_versions
-            .values()
-            .filter_map(|source| {
-                let language = crate::config::language(source.path())?;
-                Some(
-                    self.origin_for(source.path(), language)
-                        .map(|owner| (source.clone(), language, owner.key)),
-                )
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .filter(|(_, _, key)| *key == origin.key)
-            .collect();
-        let guards: Vec<_> = retained
-            .iter()
-            .filter(|(source, _, _)| source.is_current())
-            .map(|(source, _, _)| source.clone())
-            .collect();
-        let client = self.clients.get_mut(&origin.key).unwrap();
-        client.transport.set_snapshot(Some(snapshot.clone()));
-        let synced = retained.iter().try_for_each(|(source, language, _)| {
-            if resolved_path(source.path())? != source.path() {
-                bail!("Retained source changed its filesystem target");
-            }
-            client.restore_buffer(source, language)
-        });
-        client.transport.set_snapshot(None);
-        let result = synced
-            .and_then(|_| client.buffer_request(snapshot, language, method, capability, params))
-            .and_then(|value| {
-                for source in guards {
-                    source.check()?;
-                }
-                Ok(value)
-            });
-        if let Err(error) = result {
-            client.transport.stop(Duration::ZERO);
-            self.last_stderr = client.transport.stderr();
-            self.last_messages = client.server_messages().to_owned();
-            let error = client.error_message(&format!("{error:#}"), language);
-            self.clients.remove(&origin.key);
-            bail!("{error}");
-        }
-        result
+        self.with_client_context(&origin, Some(snapshot), |client| {
+            client.buffer_request(snapshot, language, method, capability, params)
+        })
     }
     pub fn navigate_buffer(
         &mut self,

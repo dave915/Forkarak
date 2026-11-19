@@ -1,5 +1,6 @@
 use crate::{
-    CancellationHandle, DocumentSnapshot, NavigationKind, NavigatorOptions, ServerConfig,
+    CancellationHandle, DocumentSnapshot, NavigationKind, NavigatorOptions, RequestFailure,
+    ServerConfig,
     config::{discover_program, is_jetbrains},
     paths::{end_position, other_worktree, path_to_uri},
     transport::Transport,
@@ -76,6 +77,24 @@ impl Client {
             );
         }
         read_document(path)
+    }
+
+    fn check_disk_documents(&self) -> Result<()> {
+        for (path, document) in &self.documents {
+            if document.buffer_version.is_none()
+                && self.read_current_document(path)? != document.text
+            {
+                let message = format!(
+                    "Source changed on disk during analysis; retry against the current file: {}",
+                    path.display()
+                );
+                if self.sync_kind != 0 {
+                    bail!(RequestFailure(message));
+                }
+                bail!("{message}");
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn check_import_permission(
@@ -231,7 +250,7 @@ impl Client {
             import_error: None,
             workspace,
         };
-        client.transport.set_snapshot(snapshot.cloned());
+        client.transport.set_context(snapshot, Vec::new());
         let deadline = Instant::now() + options.initialize_timeout;
         let initialized = (|| -> Result<()> {
             let mut init_options = json!({
@@ -331,7 +350,7 @@ impl Client {
                 )
             );
         }
-        client.transport.set_snapshot(None);
+        client.transport.set_context(None, Vec::new());
         Ok(client)
     }
 
@@ -485,6 +504,10 @@ impl Client {
         deadline: Instant,
         mut observe: impl FnMut(&Value),
     ) -> Result<Value> {
+        self.transport.check_snapshots()?;
+        if Instant::now() >= deadline {
+            bail!(RequestFailure(format!("LSP {method} timed out")));
+        }
         let id = self.next_id;
         self.next_id += 1;
         self.transport
@@ -494,10 +517,19 @@ impl Client {
             )
             .with_context(|| format!("Sending {method}"))?;
         loop {
-            let message = self
-                .transport
-                .receive(deadline)
-                .with_context(|| format!("Waiting for {method}"))?;
+            let message = match self.transport.receive(deadline) {
+                Ok(message) => message,
+                Err(error) => {
+                    if error.is::<RequestFailure>() && !matches!(method, "initialize" | "shutdown")
+                    {
+                        self.transport.check_health()?;
+                        self.transport
+                            .cancel_request(id)
+                            .with_context(|| format!("Cancelling {method} after {error:#}"))?;
+                    }
+                    return Err(error).with_context(|| format!("Waiting for {method}"));
+                }
+            };
             if message.get("method").is_some() {
                 observe(&message);
                 self.record_notification(&message);
@@ -511,7 +543,13 @@ impl Client {
                 continue;
             }
             if let Some(error) = message.get("error") {
-                bail!("LSP {method} error: {error}");
+                if message.get("result").is_some()
+                    || !error["code"].is_i64()
+                    || !error["message"].is_string()
+                {
+                    bail!("Invalid JSON-RPC error response for {method}: {error}");
+                }
+                bail!(RequestFailure(format!("LSP {method} error: {error}")));
             }
             return message
                 .get("result")
@@ -622,9 +660,7 @@ impl Client {
             .get(path)
             .is_some_and(|doc| doc.buffer_version.is_some())
         {
-            bail!(
-                "Source has an editor snapshot; use navigate_buffer or explicitly release_buffer first"
-            );
+            bail!(RequestFailure("Source has an editor snapshot; use navigate_buffer or explicitly release_buffer first".into()));
         }
         if !self.documents.contains_key(path) {
             if self.open_close {
@@ -647,7 +683,9 @@ impl Client {
             }
         };
         if self.capabilities[capability].is_null() || self.capabilities[capability] == false {
-            bail!("Language server does not support {method}");
+            bail!(RequestFailure(format!(
+                "Language server does not support {method}"
+            )));
         }
         let mut params = json!({"textDocument": {"uri": path_to_uri(path)?}, "position": {"line": line, "character": column}});
         if matches!(kind, NavigationKind::References) {
@@ -668,16 +706,7 @@ impl Client {
                 result = self.request(method, params, deadline)?;
             }
         }
-        for (path, document) in &self.documents {
-            if document.buffer_version.is_none()
-                && self.read_current_document(path)? != document.text
-            {
-                bail!(
-                    "Source changed on disk during navigation; retry against the current file: {}",
-                    path.display()
-                );
-            }
-        }
+        self.check_disk_documents()?;
         Ok(result)
     }
 
@@ -709,20 +738,6 @@ impl Client {
         capability: &str,
         params: Value,
     ) -> Result<Value> {
-        self.transport.set_snapshot(Some(snapshot.clone()));
-        let result = self.buffer_request_inner(snapshot, language, method, capability, params);
-        self.transport.set_snapshot(None);
-        result
-    }
-
-    fn buffer_request_inner(
-        &mut self,
-        snapshot: &DocumentSnapshot,
-        language: &str,
-        method: &str,
-        capability: &str,
-        params: Value,
-    ) -> Result<Value> {
         snapshot.check()?;
         let timeout = if self.jetbrains {
             self.options
@@ -733,16 +748,19 @@ impl Client {
         };
         let deadline = Instant::now() + timeout;
         self.refresh(deadline)?;
-        self.sync_buffer(snapshot, language, deadline)?;
         let pull =
             self.capabilities[capability].is_object() || self.capabilities[capability] == true;
         if method == "completionItem/resolve"
             && self.capabilities["completionProvider"]["resolveProvider"] != true
         {
-            bail!("Language server does not support completionItem/resolve");
+            bail!(RequestFailure(
+                "Language server does not support completionItem/resolve".into()
+            ));
         }
         if method != "textDocument/diagnostic" && !pull {
-            bail!("Language server does not support {method}");
+            bail!(RequestFailure(format!(
+                "Language server does not support {method}"
+            )));
         }
         if self.jetbrains {
             let state = self.request("intellij/workspaceImportState", json!({}), deadline)?;
@@ -775,11 +793,7 @@ impl Client {
                 .context("Invalid diagnostic report")?
                 .clone();
         }
-        for (path, doc) in &self.documents {
-            if doc.buffer_version.is_none() && self.read_current_document(path)? != doc.text {
-                bail!("Source changed on disk during buffer analysis");
-            }
-        }
+        self.check_disk_documents()?;
         snapshot.check()?;
         Ok(result)
     }
@@ -925,9 +939,7 @@ impl Client {
                 return Ok(items.clone());
             }
             if self.unversioned_diagnostics.contains(path) {
-                bail!(
-                    "Server publishes unversioned diagnostics without a synchronous diagnostic API; cannot attach them safely to this source snapshot"
-                );
+                bail!(RequestFailure("Server publishes unversioned diagnostics without a synchronous diagnostic API; cannot attach them safely to this source snapshot".into()));
             }
             let message = self
                 .transport
@@ -950,7 +962,9 @@ impl Client {
         let path = snapshot.path();
         let text = snapshot.text();
         if !self.open_close || self.sync_kind == 0 {
-            bail!("Server cannot synchronize editor snapshots");
+            bail!(RequestFailure(
+                "Server cannot synchronize editor snapshots".into()
+            ));
         }
         let version = if let Some(old) = self.documents.get(path) {
             if old.text == text && old.buffer_version == Some(snapshot.version()) {

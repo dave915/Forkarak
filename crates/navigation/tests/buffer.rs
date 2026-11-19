@@ -172,11 +172,21 @@ fn push_diagnostics_are_bound_to_the_exact_version() {
     );
     let f = Fixture::new();
     let mut nav = f.nav("push-unversioned");
+    let snapshot = f.snapshot(0);
     assert!(
-        nav.diagnostics(&f.snapshot(0))
+        nav.diagnostics(&snapshot)
             .unwrap_err()
             .to_string()
             .contains("unversioned")
+    );
+    nav.navigate_buffer(&snapshot, 0, 5, NavigationKind::Definition)
+        .unwrap();
+    assert_eq!(
+        f.log()
+            .iter()
+            .filter(|m| m["method"] == "initialize")
+            .count(),
+        1
     );
 }
 #[test]
@@ -243,6 +253,168 @@ fn await_file(path: &std::path::Path) {
     while !path.exists() {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn interrupted_editor_requests_reuse_the_session_and_sync_the_next_revision() {
+    for interrupt in ["timeout", "source", "sibling"] {
+        let f = Fixture::new();
+        let mut nav = f.nav("request-recovery");
+        let source = f.snapshot(4);
+        let sibling =
+            DocumentSnapshot::new(f.root.clone(), "target.ts".into(), SOURCE.into(), 3).unwrap();
+        nav.retain_buffer(&sibling).unwrap();
+        let error = std::thread::scope(|scope| {
+            let pending =
+                scope.spawn(|| nav.navigate_buffer(&source, 0, 5, NavigationKind::Definition));
+            await_file(&f.root.join("request.started"));
+            match interrupt {
+                "source" => source.invalidate(),
+                "sibling" => sibling.invalidate(),
+                _ => {}
+            }
+            pending.join().unwrap().unwrap_err().to_string()
+        });
+        assert!(
+            error.contains(if interrupt == "timeout" {
+                "timed out"
+            } else {
+                "Stale"
+            }),
+            "{error}"
+        );
+        if !sibling.is_current() {
+            let replacement = DocumentSnapshot::new(
+                f.root.clone(),
+                "target.ts".into(),
+                SOURCE.replace("dirty", "dirty_dependency"),
+                4,
+            )
+            .unwrap();
+            nav.retain_buffer(&replacement).unwrap();
+        }
+        let next = DocumentSnapshot::new(
+            f.root.clone(),
+            "entry.ts".into(),
+            SOURCE.replace("dirty", "dirty_next"),
+            5,
+        )
+        .unwrap();
+        for (kind, expected) in [
+            (NavigationKind::Implementation, "does not support"),
+            (NavigationKind::References, "reference lookup failed"),
+        ] {
+            let error = nav
+                .navigate_buffer(&next, 0, 5, kind)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{error}");
+        }
+        assert_eq!(
+            nav.diagnostics(&next).unwrap().value[0].message,
+            next.text()
+        );
+        let log = f.log();
+        assert_eq!(
+            log.iter().filter(|m| m["method"] == "initialize").count(),
+            1
+        );
+        let id = &log
+            .iter()
+            .find(|m| m["method"] == "textDocument/definition")
+            .unwrap()["id"];
+        let cancels: Vec<_> = log
+            .iter()
+            .filter(|m| m["method"] == "$/cancelRequest")
+            .collect();
+        assert_eq!(cancels.len(), 1);
+        assert_eq!(&cancels[0]["params"]["id"], id);
+        assert_eq!(
+            log.iter()
+                .filter(|m| m["method"] == "textDocument/didOpen")
+                .count(),
+            2
+        );
+        assert!(log.iter().any(|m| m["method"] == "textDocument/didChange"
+            && m["params"]["contentChanges"][0]["text"] == next.text()));
+    }
+}
+
+#[test]
+fn failed_transports_are_replaced_and_retained_drafts_replayed() {
+    for (fault, expected) in [
+        ("exit.next", "server request crashed"),
+        ("malformed.next", "Invalid Content-Length"),
+    ] {
+        let f = Fixture::new();
+        let mut nav = f.nav("transport-recovery");
+        let draft = f.snapshot(7);
+        nav.capabilities_buffer(&draft).unwrap();
+        let pid = fs::read_to_string(f.root.join("mock.pid")).unwrap();
+        fs::write(f.root.join(fault), "").unwrap();
+        let error = if fault == "exit.next" {
+            nav.navigate("target.ts".as_ref(), 0, 0, NavigationKind::Definition)
+                .unwrap_err()
+        } else {
+            nav.navigate_buffer(&draft, 0, 5, NavigationKind::Definition)
+                .unwrap_err()
+        };
+        assert!(error.to_string().contains(expected), "{error}");
+        assert_eq!(
+            nav.diagnostics(&draft).unwrap().value[0].message,
+            draft.text()
+        );
+        assert_ne!(fs::read_to_string(f.root.join("mock.pid")).unwrap(), pid);
+        let log = f.log();
+        assert_eq!(
+            log.iter().filter(|m| m["method"] == "initialize").count(),
+            2
+        );
+        assert_eq!(
+            log.iter()
+                .filter(|m| m["method"] == "textDocument/didOpen"
+                    && m["params"]["textDocument"]["text"] == SOURCE)
+                .count(),
+            2
+        );
+        assert!(!log.iter().any(|m| m["method"] == "$/cancelRequest"));
+    }
+}
+
+#[test]
+fn idle_process_death_is_reported_by_refresh_and_capabilities() {
+    for context in ["refresh", "capabilities"] {
+        let f = Fixture::new();
+        let mut nav = f.nav("transport-recovery");
+        let draft = f.snapshot(5);
+        // Finish the server's initialization-time configuration requests first.
+        nav.diagnostics(&draft).unwrap();
+        fs::write(f.root.join("exit.after.reply"), "").unwrap();
+        nav.navigate_buffer(&draft, 0, 5, NavigationKind::Definition)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !nav.status().contains("exit code 0") {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let error = if context == "refresh" {
+            nav.refresh().unwrap_err()
+        } else {
+            nav.capabilities_buffer(&draft).unwrap_err()
+        };
+        assert!(error.to_string().contains("exit code 0"), "{error}");
+        assert_eq!(
+            nav.diagnostics(&draft).unwrap().value[0].message,
+            draft.text()
+        );
+        assert_eq!(
+            f.log()
+                .iter()
+                .filter(|m| m["method"] == "initialize")
+                .count(),
+            2
+        );
     }
 }
 #[test]

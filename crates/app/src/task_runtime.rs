@@ -524,37 +524,28 @@ pub(crate) fn resolve_stack_location_from(
             if file.is_empty() {
                 continue;
             }
-            if let Ok(path) = cwd.join(file).canonicalize()
-                && path.is_file()
-                && path.starts_with(root)
-            {
-                return Some(StackLocation {
-                    path,
-                    line: line - 1,
-                    column: column.saturating_sub(1),
-                });
-            }
             // JVM traces omit the source path; derive only the exact package
-            // under standard source roots. Never guess a different worktree.
-            if !file.contains('/') && (file.ends_with(".java") || file.ends_with(".kt")) {
-                let frame = prefix[..start]
-                    .trim_end_matches('(')
-                    .trim()
-                    .trim_start_matches("at ");
-                let mut components: Vec<_> = frame.split('.').collect();
-                if components.len() < 2 {
-                    continue;
-                }
-                components.pop();
-                components.pop();
-                let package = components.join("/");
+            // under standard source roots. Modern traces may include a loader
+            // and module before the class, e.g. app//demo.Test.run.
+            if !file.contains('/')
+                && (file.ends_with(".java") || file.ends_with(".kt"))
+                && let Some(symbol) = prefix[..start].trim_end().strip_suffix('(')
+                && let Some(symbol) = symbol.split_whitespace().last()
+                && let Some((class, _method)) = symbol.rsplit('/').next()?.rsplit_once('.')
+            {
+                let package = class.rsplit_once('.').map(|(package, _)| package);
+                let package_path = package.unwrap_or_default().replace('.', "/");
                 for source in [
                     "src/main/java",
                     "src/test/java",
                     "src/main/kotlin",
                     "src/test/kotlin",
                 ] {
-                    if let Ok(path) = cwd.join(source).join(&package).join(file).canonicalize()
+                    if let Ok(path) = cwd
+                        .join(source)
+                        .join(&package_path)
+                        .join(file)
+                        .canonicalize()
                         && path.is_file()
                         && path.starts_with(root)
                     {
@@ -565,6 +556,19 @@ pub(crate) fn resolve_stack_location_from(
                         });
                     }
                 }
+                if package.is_some() {
+                    continue;
+                }
+            }
+            if let Ok(path) = cwd.join(file).canonicalize()
+                && path.is_file()
+                && path.starts_with(root)
+            {
+                return Some(StackLocation {
+                    path,
+                    line: line - 1,
+                    column: column.saturating_sub(1),
+                });
             }
         }
     }

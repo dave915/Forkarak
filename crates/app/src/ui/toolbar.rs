@@ -64,6 +64,7 @@ impl Pokarak {
                     );
                 bar.child(
                     toolbar_icon("refresh", IconName::RefreshCw, "저장소 새로고침")
+                        .loading_icon(toolbar_glyph(IconName::Loader))
                         .loading(self.loading)
                         .disabled(self.loading || self.git_is_busy())
                         .on_click(cx.listener(|app, _, w, cx| app.refresh(w, cx)))
@@ -89,6 +90,32 @@ impl Pokarak {
         div().flex_none().child(title).into_any_element()
     }
 
+    fn commit_toolbar_button(&self, compact: bool, cx: &Context<Self>) -> AnyElement {
+        let changes = self.change_count.map(|(count, _)| count).filter(|&n| n > 0);
+        theme::action_button("stage-commit", self.loading || self.git_is_busy())
+            .icon(toolbar_glyph(IconName::GitCommitHorizontal))
+            .accessibility_label(match changes {
+                Some(count) => format!("Stage / 커밋 · 변경 파일 {count}개"),
+                None => "Stage / 커밋".into(),
+            })
+            .ghost()
+            .small()
+            .h(ui_px(24.))
+            .flex_none()
+            .map(|button| {
+                if compact {
+                    button.w(ui_px(28.))
+                } else {
+                    button.label(match changes {
+                        Some(count) => format!("커밋 {count}"),
+                        None => "커밋".into(),
+                    })
+                }
+            })
+            .on_click(cx.listener(|app, _, w, cx| app.open_git_commit(w, cx)))
+            .shortcut_tooltip("Stage / 커밋", &OpenGitCommit, None)
+    }
+
     fn compact_git_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .id("compact-git-toolbar")
@@ -97,16 +124,7 @@ impl Pokarak {
             .items_center()
             .gap(ui_px(2.))
             .h(ui_px(28.))
-            .child(
-                content_toolbar_icon(
-                    "stage-commit",
-                    IconName::GitCommitHorizontal,
-                    "Stage / 커밋",
-                )
-                .disabled(self.loading || self.git_is_busy())
-                .on_click(cx.listener(|a, _, w, cx| a.open_git_commit(w, cx)))
-                .shortcut_tooltip("Stage / 커밋", &OpenGitCommit, None),
-            )
+            .child(self.commit_toolbar_button(true, cx))
             .child(
                 content_toolbar_icon("compact-git-more", IconName::Ellipsis, "Git 작업 더 보기")
                     .tooltip("Git 작업 더 보기 · 브랜치, Stash, 원격 동기화")
@@ -305,24 +323,6 @@ impl Pokarak {
         let detail_label = self.graph_detail_label();
         let (target, target_detail) = self.git_sync_summary();
         let sync = SyncControls::for_worktree(self.active_sync_read(), self.active_worktree());
-        let changes = match self.change_count {
-            Some((count, _)) if count > 0 => Some(count),
-            _ => None,
-        };
-        let commit = theme::action_button("stage-commit", busy)
-            .icon(IconName::GitCommitHorizontal)
-            .label(match changes {
-                Some(count) => format!("커밋 {count}"),
-                None => "커밋".into(),
-            })
-            .accessibility_label(match changes {
-                Some(count) => format!("Stage / 커밋 · 변경 파일 {count}개"),
-                None => "Stage / 커밋".into(),
-            })
-            .small()
-            .flex_none()
-            .on_click(cx.listener(|app, _, w, cx| app.open_git_commit(w, cx)))
-            .shortcut_tooltip("Stage / 커밋", &OpenGitCommit, None);
         let sync_button = |id: &'static str, icon: IconName, control: SyncControl| {
             let accessible = match control.count {
                 Some(n) => format!("{} · {n}개", control.name),
@@ -334,17 +334,14 @@ impl Pokarak {
                 command: control.command.into(),
             };
             let tooltip = control.tooltip();
-            let button = Button::new(id)
-                .icon(icon)
+            let button = content_toolbar_icon(id, icon, control.name)
                 .when(control.command == "publish", |button| {
-                    button.label(control.name)
+                    button.w_auto().label(control.name)
                 })
-                .when_some(control.count, |button, n| button.label(n.to_string()))
+                .when_some(control.count, |button, n| {
+                    button.w_auto().label(n.to_string())
+                })
                 .accessibility_label(accessible)
-                .ghost()
-                .small()
-                .h(ui_px(26.))
-                .flex_none()
                 .disabled(busy || control.disabled_reason.is_some())
                 .on_click(
                     cx.listener(move |app, _, w, cx| app.run_toolbar_command(&action, w, cx)),
@@ -370,7 +367,7 @@ impl Pokarak {
             .flex()
             .items_center()
             .gap(ui_px(6.))
-            .child(commit)
+            .child(self.commit_toolbar_button(false, cx))
             .child(
                 div()
                     .flex()
@@ -388,17 +385,18 @@ impl Pokarak {
                             .gap(ui_px(5.))
                             .pl(ui_px(6.))
                             .pr(ui_px(4.))
-                            .max_w(ui_px(180.))
+                            .max_w(ui_px(140.))
                             .overflow_hidden()
                             .child(
                                 Icon::new(IconName::GitBranch)
-                                    .size(ui_px(13.))
+                                    .size(ui_px(14.))
+                                    .flex_none()
                                     .text_color(palette.rgb(BLUE)),
                             )
                             .child(
                                 div()
                                     .min_w_0()
-                                    .text_ellipsis()
+                                    .truncate()
                                     .text_size(ui_text(12.))
                                     .child(target),
                             )
@@ -630,29 +628,33 @@ impl Pokarak {
 }
 
 pub(super) fn toolbar_icon(id: &'static str, icon: IconName, name: &'static str) -> Button {
-    toolbar_button(id, icon, name).w(ui_px(32.)).px_0()
+    toolbar_button(id, icon, name).w(ui_px(28.)).px_0()
+}
+
+// GPUI Kit 0.10 overwrites an icon's preferred size from its button (Small is
+// 0.875rem). The SVG's min/max bounds survive that override and follow UI zoom.
+pub(super) fn toolbar_glyph(icon: IconName) -> Icon {
+    let size = ui_px(14.);
+    Icon::new(icon)
+        .min_w(size)
+        .max_w(size)
+        .min_h(size)
+        .max_h(size)
 }
 
 fn toolbar_button(id: &'static str, icon: IconName, name: &'static str) -> Button {
     Button::new(id)
-        .icon(icon)
+        .icon(toolbar_glyph(icon))
         .accessibility_label(name)
         .ghost()
-        .with_size(ui_px(28.))
-        .h(ui_px(32.))
+        .small()
+        .h(ui_px(28.))
         .px(ui_px(5.))
         .flex_none()
 }
 
-fn content_toolbar_icon(id: &'static str, icon: IconName, name: &'static str) -> Button {
-    Button::new(id)
-        .icon(icon)
-        .accessibility_label(name)
-        .ghost()
-        .small()
-        .w(ui_px(28.))
-        .h(ui_px(26.))
-        .flex_none()
+pub(super) fn content_toolbar_icon(id: &'static str, icon: IconName, name: &'static str) -> Button {
+    toolbar_button(id, icon, name).w(ui_px(28.)).h(ui_px(26.))
 }
 
 #[derive(Action, Clone, PartialEq, serde::Deserialize)]

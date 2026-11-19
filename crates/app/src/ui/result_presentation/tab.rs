@@ -194,7 +194,7 @@ impl Pokarak {
             )
             .child(
                 Button::new("close-navigation-tab")
-                    .icon(IconName::X)
+                    .icon(toolbar::toolbar_glyph(IconName::X))
                     .ghost()
                     .small()
                     .accessibility_label("탐색 결과 탭 닫기")

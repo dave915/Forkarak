@@ -387,7 +387,7 @@ impl Pokarak {
                 .flex()
                 .items_center()
                 .child(
-                    toolbar::toolbar_icon(
+                    toolbar::content_toolbar_icon(
                         "previous-diff-hunk",
                         IconName::ChevronUp,
                         "이전 변경 블록",
@@ -399,7 +399,7 @@ impl Pokarak {
                     .keycap_tooltip("이전 변경 블록", "alt-up"),
                 )
                 .child(
-                    toolbar::toolbar_icon(
+                    toolbar::content_toolbar_icon(
                         "next-diff-hunk",
                         IconName::ChevronDown,
                         "다음 변경 블록",
@@ -412,7 +412,7 @@ impl Pokarak {
                 )
                 .when(hidden, |bar| {
                     bar.child(
-                        toolbar::toolbar_icon(
+                        toolbar::content_toolbar_icon(
                             "hide-whitespace-diff",
                             IconName::EyeOff,
                             "공백 변경 숨김 적용 중",

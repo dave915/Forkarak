@@ -1,19 +1,15 @@
 use super::*;
 
 impl Pokarak {
-    pub(in crate::ui) fn language_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
-        let full =
-            self.command_bar_density.get("working-reader") == Some(&reader_toolbar::Density::Full);
-        Button::new("language-tools")
-            .icon(IconName::Waypoints)
-            .when(full, |b| b.label("코드 지원…"))
-            .accessibility_label("코드 지원")
+    pub(in crate::ui) fn language_buttons(
+        &self,
+        show_label: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        toolbar::content_toolbar_icon("language-tools", IconName::Waypoints, "코드 지원")
+            .when(show_label, |b| b.w_auto().label("코드 지원…"))
             .tooltip("코드 지원 · 자동완성, 오류 확인, 함수 도움말, 코드 탐색")
-            .ghost()
-            .small()
-            .flex_none()
-            .h(ui_px(28.))
-            .when(!full, |b| b.w(ui_px(28.)))
+            .loading_icon(toolbar::toolbar_glyph(IconName::Loader))
             .loading(self.language_tools.pending.is_some())
             .disabled(!self.code_support_available(cx))
             .on_click(cx.listener(|app, _, w, cx| app.show_code_support_menu(w, cx)))

@@ -461,11 +461,12 @@ impl Pokarak {
         Ok(())
     }
 
-    pub(super) fn editor_tool_buttons(&self, _path: &Path, cx: &mut Context<Self>) -> AnyElement {
-        toolbar::toolbar_icon("editor-palette", IconName::Command, "명령 팔레트")
+    pub(super) fn command_palette_button(&self, cx: &Context<Self>) -> AnyElement {
+        toolbar::content_toolbar_icon("editor-palette", IconName::Command, "명령 팔레트")
+            .w_auto()
+            .label("명령")
             .on_click(cx.listener(|a, _, w, cx| a.open_command_palette(w, cx)))
             .shortcut_tooltip("명령 팔레트", &CommandPalette, None)
-            .into_any_element()
     }
 
     pub(super) fn reader_editor_menu(

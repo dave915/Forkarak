@@ -2309,7 +2309,7 @@ impl Pokarak {
                             },
                             i,
                         ))
-                        .icon(IconName::X)
+                        .icon(toolbar::toolbar_glyph(IconName::X))
                         .ghost()
                         .small()
                         .accessibility_label("파일 닫기")

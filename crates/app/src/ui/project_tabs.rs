@@ -232,7 +232,7 @@ impl Pokarak {
         let root = root.to_path_buf();
         let label = project_label(&root);
         Button::new(format!("close-project:{}", root.display()))
-            .icon(IconName::X)
+            .icon(toolbar::toolbar_glyph(IconName::X))
             .ghost()
             .with_size(ui_px(20.))
             .px_0()

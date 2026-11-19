@@ -595,21 +595,9 @@ impl Pokarak {
                 continue;
             }
             let identity = self.reader_identity();
-            let button = if labelled {
-                // The most used and least guessable icons get words when there is room.
-                Button::new(id)
-                    .icon(icon)
-                    .label(short)
-                    .accessibility_label(label)
-                    .ghost()
-                    .small()
-                    .h(ui_px(26.))
-                    .flex_none()
-            } else {
-                toolbar::toolbar_icon(id, icon, label)
-            };
             bar = bar.child(
-                button
+                toolbar::content_toolbar_icon(id, icon, label)
+                    .when(labelled, |button| button.w_auto().label(short))
                     .tooltip(label)
                     .selected(selected)
                     .disabled(disabled || identity.is_none())
@@ -628,13 +616,7 @@ impl Pokarak {
             );
         }
         if density != Density::Minimal {
-            bar = bar.child(
-                self.reviewed_file_button(cx)
-                    .label("")
-                    .icon(IconName::Check)
-                    .w(ui_px(28.))
-                    .flex_none(),
-            );
+            bar = bar.child(self.reviewed_file_button(cx));
         }
         if !view.code && density != Density::Minimal {
             bar = bar.children(
@@ -682,11 +664,11 @@ impl Pokarak {
                     .as_ref()
                     .is_some_and(|r| self.code_edits.dirty(r, view.path)))
         {
-            bar = bar.child(self.code_edit_controls(view.path, cx));
-            bar = bar.child(self.language_buttons(cx));
+            bar = bar.child(self.code_edit_controls(view.path, density != Density::Minimal, cx));
+            bar = bar.child(self.language_buttons(density == Density::Full, cx));
         }
         if density == Density::Full {
-            bar = bar.child(self.editor_tool_buttons(view.path, cx));
+            bar = bar.child(self.command_palette_button(cx));
             if let Some(target) = view.target {
                 bar = bar.child(self.file_inspection_buttons(target, cx));
             }
@@ -701,7 +683,7 @@ impl Pokarak {
             more_tooltip.push_str(&format!(" · {}", self.applied_comparison_label()));
         }
         bar.child(
-            toolbar::toolbar_icon("reader-more", IconName::Ellipsis, "파일 명령 더 보기")
+            toolbar::content_toolbar_icon("reader-more", IconName::Ellipsis, "파일 명령 더 보기")
                 .tooltip(more_tooltip)
                 .selected(!view.code && self.hides_diff_whitespace())
                 .disabled(!menu_available)

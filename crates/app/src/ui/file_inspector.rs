@@ -42,7 +42,7 @@ impl Pokarak {
         target: Target,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        toolbar::toolbar_icon(
+        toolbar::content_toolbar_icon(
             "file-history-menu",
             IconName::GitCommitHorizontal,
             "파일 이력",
@@ -564,37 +564,33 @@ impl Pokarak {
                 .text_size(ui_text(10.))
                 .child(Icon::new(IconName::Info).size(ui_px(14.)))
                 .child(
-                    Button::new("blame-line-mode")
-                        .icon(IconName::List)
-                        .accessibility_label(if full {
+                    toolbar::content_toolbar_icon(
+                        "blame-line-mode",
+                        IconName::List,
+                        if full {
                             "Blame 현재 줄만"
                         } else {
                             "Blame 파일 전체"
+                        },
+                    )
+                    .tooltip(format!(
+                        "{status} · {}",
+                        if full {
+                            "현재 줄만 보기"
+                        } else {
+                            "파일 전체 보기"
+                        }
+                    ))
+                    .on_click(move |_, _, cx| {
+                        target.update(cx, |g, cx| {
+                            g.full = !g.full;
+                            cx.notify();
                         })
-                        .tooltip(format!(
-                            "{status} · {}",
-                            if full {
-                                "현재 줄만 보기"
-                            } else {
-                                "파일 전체 보기"
-                            }
-                        ))
-                        .ghost()
-                        .xsmall()
-                        .on_click(move |_, _, cx| {
-                            target.update(cx, |g, cx| {
-                                g.full = !g.full;
-                                cx.notify();
-                            })
-                        }),
+                    }),
                 )
                 .child(
-                    Button::new("close-inline-blame")
-                        .icon(IconName::X)
-                        .accessibility_label("Blame 닫기")
+                    toolbar::content_toolbar_icon("close-inline-blame", IconName::X, "Blame 닫기")
                         .tooltip("Blame 닫기")
-                        .ghost()
-                        .xsmall()
                         .on_click(cx.listener(move |app, _, _, cx| {
                             if app.inline_blame.as_ref() == Some(&close) {
                                 app.inline_blame = None;

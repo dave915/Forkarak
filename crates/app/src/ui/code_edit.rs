@@ -1532,7 +1532,12 @@ impl Pokarak {
         });
     }
 
-    pub(super) fn code_edit_controls(&self, path: &Path, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn code_edit_controls(
+        &self,
+        path: &Path,
+        show_label: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(buffer) = self
             .current
             .as_ref()
@@ -1542,26 +1547,13 @@ impl Pokarak {
         };
         let busy = buffer.saving || self.file_loading || self.loading || self.git_is_busy();
         let name = buffer.save_label();
-        let minimal = self
-            .command_bar_density
-            .get("working-reader")
-            .copied()
-            .unwrap_or_default()
-            == reader_toolbar::Density::Minimal;
-        Button::new("save-code")
-            .icon(IconName::Save)
-            .when(!minimal, |b| b.label(name))
-            .accessibility_label(name)
-            .ghost()
-            .small()
-            .flex_none()
-            .h(ui_px(28.))
-            .when(minimal, |b| b.w(ui_px(28.)))
+        toolbar::content_toolbar_icon("save-code", IconName::Save, name)
+            .when(show_label, |b| b.w_auto().label(name))
+            .loading_icon(toolbar::toolbar_glyph(IconName::Loader))
             .loading(buffer.saving)
             .disabled(busy || self.code_edits.unreadable_storage || !buffer.dirty())
             .on_click(cx.listener(move |app, _, w, cx| app.save_code_file(false, w, cx)))
             .shortcut_tooltip("파일 저장", &SaveCodeFile, None)
-            .into_any_element()
     }
 
     pub(super) fn reader_draft_menu(

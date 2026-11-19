@@ -219,6 +219,18 @@ impl Pokarak {
     }
 
     pub(in crate::ui) fn git_sync_summary(&self) -> (String, String) {
+        let detail = match self.active_sync_read() {
+            Some(SyncRead::Ready { sync, .. }) => {
+                return (
+                    sync.branch
+                        .clone()
+                        .unwrap_or_else(|| "detached HEAD".into()),
+                    format!("Git 작업 대상\n{}", sync_detail(sync)),
+                );
+            }
+            Some(SyncRead::Failed(error)) => format!("동기화 메타데이터 읽기 실패\n{error}"),
+            _ => "로컬 Git 참조를 읽고 있습니다. 네트워크 연결은 하지 않습니다.".into(),
+        };
         let fallback = self
             .active_worktree()
             .map(|tree| {
@@ -229,21 +241,8 @@ impl Pokarak {
                 }
             })
             .unwrap_or_else(|| "브랜치 알 수 없음".into());
-        match self.active_sync_read() {
-            Some(SyncRead::Ready { sync, .. }) => (
-                sync.branch
-                    .clone()
-                    .unwrap_or_else(|| "detached HEAD".into()),
-                format!("Git 작업 대상\n{}", sync_detail(sync)),
-            ),
-            Some(SyncRead::Failed(error)) => {
-                (fallback, format!("동기화 메타데이터 읽기 실패\n{error}"))
-            }
-            _ => (
-                fallback,
-                "로컬 Git 참조를 읽고 있습니다. 네트워크 연결은 하지 않습니다.".into(),
-            ),
-        }
+        let tooltip = format!("Git 작업 대상 · {fallback}\n{detail}");
+        (fallback, tooltip)
     }
 
     pub(in crate::ui) fn git_sync_button(&self, cx: &mut Context<Self>) -> Button {

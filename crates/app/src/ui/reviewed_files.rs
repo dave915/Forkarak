@@ -567,29 +567,16 @@ impl Pokarak {
             || self.git_history.read_pending()
             || self.reviewed_files.checking
             || self.reviewed_files.unreadable;
-        Button::new("toggle-file-reviewed")
-            .label(
-                if self.reviewed_files.checking || state == ReviewState::Pending {
-                    "검토 확인 중…"
-                } else if state == ReviewState::Reviewed {
-                    "✓ 검토 완료"
-                } else {
-                    "검토 완료"
-                },
-            )
-            .accessibility_label(
-                self.review_disabled_reason()
-                    .unwrap_or("파일 검토 완료 표시 전환"),
-            )
-            .tooltip(
-                self.review_disabled_reason()
-                    .unwrap_or("현재 파일과 비교 내용이 바뀌면 완료 표시가 해제됩니다."),
-            )
-            .ghost()
-            .small()
-            .selected(state == ReviewState::Reviewed)
-            .disabled(busy || target.is_none())
-            .on_click(cx.listener(|app, _, w, cx| app.toggle_reviewed_file(w, cx)))
+        let reason = self.review_disabled_reason();
+        toolbar::content_toolbar_icon(
+            "toggle-file-reviewed",
+            IconName::Check,
+            reason.unwrap_or("파일 검토 완료 표시 전환"),
+        )
+        .tooltip(reason.unwrap_or("현재 파일과 비교 내용이 바뀌면 완료 표시가 해제됩니다."))
+        .selected(state == ReviewState::Reviewed)
+        .disabled(busy || target.is_none())
+        .on_click(cx.listener(|app, _, w, cx| app.toggle_reviewed_file(w, cx)))
     }
 
     fn review_disabled_reason(&self) -> Option<&'static str> {

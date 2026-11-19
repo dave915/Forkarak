@@ -105,7 +105,19 @@ pub(super) fn actions(
                 .on_action(cx.listener(|a, _: &PinTab, w, cx| a.pin_code_tab(w, cx)))
                 .on_action(cx.listener(|a, _: &PreviousCode, w, cx| a.toggle_previous_code(w, cx)))
         })
+        .when(app.has_last_test(), |root| {
+            root.on_action(cx.listener(|app, _: &RerunTest, w, cx| {
+                app.run_editor_test(execution::TestCommand::Rerun, w, cx)
+            }))
+        })
         .when(editable, |root| {
+            let root = root
+                .on_action(cx.listener(|app, _: &RunTest, w, cx| {
+                    app.run_editor_test(execution::TestCommand::Current, w, cx)
+                }))
+                .on_action(cx.listener(|app, _: &RunFileTests, w, cx| {
+                    app.run_editor_test(execution::TestCommand::File, w, cx)
+                }));
             root.on_action(
                 cx.listener(|a, _: &ToggleComment, w, cx| {
                     a.edit_lines(LineCommand::Comment, w, cx)

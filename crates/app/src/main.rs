@@ -7,6 +7,8 @@ mod prefs;
 pub mod task_runtime;
 #[cfg(target_os = "macos")]
 mod terminal;
+mod test_report;
+mod test_target;
 mod theme;
 mod ui;
 mod updater;

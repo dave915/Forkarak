@@ -257,7 +257,8 @@ impl Pokarak {
         let transaction = self.code_edits.transactions.get(root);
         let saving = self.code_edits.saving_all.contains(root);
         let report = self.code_edits.save_reports.get(root);
-        if transaction.is_none() && !saving && report.is_none() {
+        let test = self.test_footer_button(root, cx);
+        if transaction.is_none() && !saving && report.is_none() && test.is_none() {
             return None;
         }
         let mut row = div().flex().items_center().gap_1().text_size(ui_text(11.));
@@ -328,7 +329,7 @@ impl Pokarak {
                 );
             }
         }
-        Some(row.into_any_element())
+        Some(row.children(test).into_any_element())
     }
 }
 

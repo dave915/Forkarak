@@ -88,7 +88,7 @@ pub(super) struct LanguageTools {
     next_version: i64,
     on_type_task: Option<Task<()>>,
     input_languages: HashSet<String>,
-    view: u64,
+    pub(super) view: u64,
     request: u64,
     documentation_request: u64,
     active: Option<(FileKey, EntityId)>,

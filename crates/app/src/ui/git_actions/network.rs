@@ -493,7 +493,7 @@ mod tests {
         Identity, Remote, RepositoryState,
         sync::{BranchSync, Upstream},
     };
-    fn data() -> (RepositoryState, BranchSync) {
+    pub(super) fn data() -> (RepositoryState, BranchSync) {
         (
             RepositoryState {
                 root: "/fixture".into(),

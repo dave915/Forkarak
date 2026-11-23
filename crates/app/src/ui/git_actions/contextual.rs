@@ -1,23 +1,51 @@
 //! Sidebar context actions always address a fully qualified Git ref.
 use super::*;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use pokarak_core::operations::branches::BranchStart;
+
+#[derive(Clone)]
+pub(super) struct SelectedBranch {
+    pub root: PathBuf,
+    pub start: BranchStart,
+    pub current: Option<String>,
+}
+
+impl SelectedBranch {
+    pub(super) fn local_name(
+        &self,
+        state: &RepositoryState,
+        starts: &[BranchStart],
+    ) -> anyhow::Result<&str> {
+        let name = self
+            .start
+            .reference
+            .strip_prefix("refs/heads/")
+            .ok_or_else(|| anyhow::anyhow!("로컬 브랜치를 선택하세요."))?;
+        anyhow::ensure!(
+            state.root == self.root
+                && state.current_branch == self.current
+                && state.local_branches.iter().any(|b| b == name)
+                && starts.contains(&self.start),
+            "워크트리 또는 선택한 브랜치가 변경되었습니다. 새로고침 후 다시 선택하세요."
+        );
+        Ok(name)
+    }
+}
 
 pub(in crate::ui) fn branch_context_menu(
     weak: WeakEntity<Pokarak>,
     root: PathBuf,
     reference: String,
+    oid: String,
     current_branch: Option<String>,
     can_checkout: bool,
-) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu {
+) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + Clone {
     move |mut menu, _, cx| {
         let local = reference.strip_prefix("refs/heads/");
         let name = local
             .or_else(|| reference.strip_prefix("refs/remotes/"))
             .unwrap_or(&reference);
-        let disabled = weak.upgrade().is_none_or(|view| {
-            let app = view.read(cx);
-            app.current.as_ref() != Some(&root) || app.git_is_busy() || app.loading
-        });
+        let disabled = branch_forms::branch_form_disabled(&weak, &root, cx);
         menu = menu.label(format!(
             "{}  {name}",
             if local.is_some() { "로컬" } else { "원격" }
@@ -57,6 +85,38 @@ pub(in crate::ui) fn branch_context_menu(
             }
         }
         if let Some(local) = local {
+            let selected = SelectedBranch {
+                root: root.clone(),
+                start: BranchStart {
+                    reference: reference.clone(),
+                    oid: oid.clone(),
+                },
+                current: current_branch.clone(),
+            };
+            let push = selected.clone();
+            let owner = weak.clone();
+            menu = menu.item(PopupMenuItem::new("Push…").disabled(disabled).on_click(
+                move |_, w, cx| {
+                    let _ = owner.update(cx, |app, cx| {
+                        app.open_selected_branch_push(push.clone(), w, cx)
+                    });
+                },
+            ));
+            let occupied = !can_checkout || Some(local) == current_branch.as_deref();
+            let owner = weak.clone();
+            menu = menu.item(
+                PopupMenuItem::new(if occupied {
+                    "로컬 브랜치 삭제 · 워크트리에서 사용 중"
+                } else {
+                    "로컬 브랜치 삭제…"
+                })
+                .disabled(disabled || occupied)
+                .on_click(move |_, w, cx| {
+                    let _ = owner.update(cx, |app, cx| {
+                        app.review_branch_delete(selected.clone(), w, cx)
+                    });
+                }),
+            );
             let rename_root = root.clone();
             let rename_ref = reference.clone();
             let rename_weak = weak.clone();

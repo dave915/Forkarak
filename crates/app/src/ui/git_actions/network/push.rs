@@ -1,5 +1,6 @@
 use super::super::{
     compact,
+    contextual::SelectedBranch,
     recovery::review_close,
     review::{Review, ReviewSource, ReviewWrite},
 };
@@ -18,13 +19,19 @@ pub(in crate::ui::git_actions) struct PushTarget {
     pub set_upstream: bool,
 }
 
-impl PushTarget {
-    fn form_defaults<'a>(
+enum PushFormSource<'a> {
+    Current,
+    Selected(&'a str),
+    Edit(&'a PushTarget),
+}
+
+impl<'a> PushFormSource<'a> {
+    fn defaults(
+        self,
         state: &'a RepositoryState,
         sync: Option<&BranchSync>,
-        edit: Option<&'a Self>,
     ) -> (Option<&'a str>, NetworkDefaults) {
-        if let Some(target) = edit {
+        if let Self::Edit(target) = self {
             return (
                 Some(&target.local),
                 NetworkDefaults {
@@ -34,6 +41,14 @@ impl PushTarget {
                 },
             );
         }
+        if let Self::Selected(name) = self {
+            let mut defaults = network_defaults(state, sync, Some(name));
+            if Some(name) != state.current_branch.as_deref() {
+                // An editable suggestion. branch_sync only knows the current branch's upstream.
+                defaults.remote = preferred_remote(&state.remotes);
+            }
+            return (Some(name), defaults);
+        }
         let local = state.current_branch.as_deref().filter(|branch| {
             state
                 .local_branches
@@ -42,7 +57,9 @@ impl PushTarget {
         });
         (local, network_defaults(state, sync, local))
     }
+}
 
+impl PushTarget {
     pub(super) fn configured(state: &RepositoryState, sync: &BranchSync) -> Option<Self> {
         let local = state.current_branch.as_ref()?;
         let upstream = sync.upstream.as_ref()?;
@@ -65,6 +82,10 @@ impl PushTarget {
         state: &RepositoryState,
         starts: &[BranchStart],
     ) -> anyhow::Result<Review> {
+        anyhow::ensure!(
+            ops.root() == state.root,
+            "워크트리가 변경되었습니다. Push 대상을 다시 확인하세요."
+        );
         let config = state
             .remotes
             .iter()
@@ -146,6 +167,29 @@ impl PushRepository {
 }
 
 impl Pokarak {
+    pub(in crate::ui::git_actions) fn open_selected_branch_push(
+        &mut self,
+        selected: SelectedBranch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workflow_read(
+            selected.root.clone(),
+            move |ops| {
+                let repository = PushRepository::read(&ops)?;
+                let name = selected
+                    .local_name(&repository.state, &repository.starts)?
+                    .to_owned();
+                Ok((repository, name))
+            },
+            |app, (repository, name), w, cx| {
+                app.branch_push_form(repository, PushFormSource::Selected(&name), None, w, cx);
+            },
+            window,
+            cx,
+        );
+    }
+
     pub(in crate::ui) fn open_publish_branch(
         &mut self,
         root: PathBuf,
@@ -160,7 +204,9 @@ impl Pokarak {
                 repository.validate_publish(&branch)?;
                 Ok(repository)
             },
-            |app, repository, w, cx| app.branch_push_form(repository, None, None, w, cx),
+            |app, repository, w, cx| {
+                app.branch_push_form(repository, PushFormSource::Current, None, w, cx)
+            },
             window,
             cx,
         );
@@ -192,14 +238,15 @@ impl Pokarak {
                 Some(Err(error)) => Some(format!("기본 대상 확인 실패 · {error}")),
                 None => repository.sync.as_ref().err().map(|error| format!("업스트림을 확인할 수 없습니다. 보낼 대상과 받을 대상을 선택하세요.\n{error:#}")),
             };
-            app.branch_push_form(repository, edit, notice, w, cx);
+            let source = edit.as_ref().map_or(PushFormSource::Current, PushFormSource::Edit);
+            app.branch_push_form(repository, source, notice, w, cx);
         }, window, cx);
     }
 
     fn branch_push_form(
         &mut self,
         repository: PushRepository,
-        edit: Option<PushTarget>,
+        initial: PushFormSource<'_>,
         notice: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -211,8 +258,7 @@ impl Pokarak {
         } = repository;
         let state = Arc::new(state);
         let starts = Arc::new(starts);
-        let (local, defaults) =
-            PushTarget::form_defaults(&state, sync.as_ref().ok(), edit.as_ref());
+        let (local, defaults) = initial.defaults(&state, sync.as_ref().ok());
         let source = optional_choice(state.local_branches.clone(), local, window, cx);
         let remote = optional_choice(
             state.remotes.iter().map(|r| r.name.clone()).collect(),

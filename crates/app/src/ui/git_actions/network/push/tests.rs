@@ -1,6 +1,31 @@
-use super::super::tests::fixture_git;
-use super::{GitOperations, PushRepository, PushTarget, ReviewSource, ReviewWrite};
+use super::super::tests::{data, fixture_git};
+use super::{GitOperations, PushFormSource, PushRepository, PushTarget, ReviewSource, ReviewWrite};
 use std::{env, fs, path::Path, process::Command};
+
+#[test]
+fn sidebar_branch_push_uses_the_clicked_source_and_only_its_known_upstream() {
+    let (mut state, mut sync) = data();
+    let mut team = state.remotes[0].clone();
+    team.name = "team".into();
+    state.remotes.push(team);
+    let upstream = sync.upstream.as_mut().unwrap();
+    upstream.remote = "team".into();
+    upstream.reference = "refs/remotes/team/trunk".into();
+    let (source, defaults) = PushFormSource::Selected("main").defaults(&state, Some(&sync));
+    assert_eq!(source, Some("main"));
+    assert_eq!(defaults.remote.as_deref(), Some("team"));
+    assert_eq!(defaults.branch, "trunk");
+    assert!(!defaults.set_upstream);
+
+    let (source, defaults) = PushFormSource::Selected("unpublished").defaults(&state, Some(&sync));
+    assert_eq!(source, Some("unpublished"));
+    assert_eq!(defaults.remote.as_deref(), Some("origin"));
+    assert_eq!(defaults.branch, "unpublished");
+    assert!(!defaults.set_upstream);
+    state.remotes[0].name = "fork".into();
+    let (_, ambiguous) = PushFormSource::Selected("unpublished").defaults(&state, Some(&sync));
+    assert_eq!(ambiguous.remote, None);
+}
 
 #[test]
 fn publish_form_previews_then_tracks_the_selected_worktree_branch() {
@@ -72,7 +97,7 @@ fn publish_form_previews_then_tracks_the_selected_worktree_branch() {
     let repo = PushRepository::read(&ops).unwrap();
     assert!(repo.validate_publish("main").is_err());
     repo.validate_publish("feature/topic").unwrap();
-    let (local, defaults) = PushTarget::form_defaults(&repo.state, repo.sync.as_ref().ok(), None);
+    let (local, defaults) = PushFormSource::Current.defaults(&repo.state, repo.sync.as_ref().ok());
     assert_eq!(local, Some("feature/topic"));
     assert_eq!(defaults.branch, "feature/topic");
     assert_eq!(defaults.remote.as_deref(), Some("team"));

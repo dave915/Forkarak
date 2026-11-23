@@ -1,4 +1,5 @@
 //! Branch forms retain immutable sources and revalidate before explicit writes.
+use super::contextual::SelectedBranch;
 use super::*;
 use crate::ui::dialogs::DialogWindowExt as _;
 use gpui_kit::component::{checkbox::Checkbox, select::SelectEvent};
@@ -67,6 +68,10 @@ enum BranchWrite {
         new: String,
         oid: String,
     },
+    Delete {
+        selected: SelectedBranch,
+        head: String,
+    },
 }
 
 impl BranchWrite {
@@ -81,8 +86,38 @@ impl BranchWrite {
                 request.current.as_deref(),
             ),
             Self::Rename { old, new, oid } => ops.rename_branch(&old, &new, &oid),
+            Self::Delete { selected, head } => {
+                let state = ops.state()?;
+                let starts = ops.branch_starts()?;
+                anyhow::ensure!(
+                    captured_head(&starts) == head,
+                    "현재 HEAD가 변경되었습니다. 삭제 대상을 다시 확인하세요."
+                );
+                let name = deletable_branch(&selected, &state, &starts)?;
+                ops.execute(&Operation::DeleteBranch {
+                    name: name.to_owned(),
+                    mode: DeleteMode::MergedOnly,
+                })
+            }
         }
     }
+}
+
+fn deletable_branch<'a>(
+    selected: &'a SelectedBranch,
+    state: &RepositoryState,
+    starts: &[BranchStart],
+) -> anyhow::Result<&'a str> {
+    let name = selected.local_name(state, starts)?;
+    anyhow::ensure!(
+        state.current_branch.as_deref() != Some(name)
+            && !state
+                .checked_out_branches
+                .iter()
+                .any(|branch| branch == name),
+        "워크트리에서 체크아웃한 브랜치는 삭제할 수 없습니다."
+    );
+    Ok(name)
 }
 
 impl Pokarak {
@@ -327,6 +362,31 @@ impl Pokarak {
         });
     }
 
+    pub(super) fn review_branch_delete(
+        &mut self,
+        selected: SelectedBranch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workflow_read(
+            selected.root.clone(),
+            move |ops| {
+                let state = ops.state()?;
+                let starts = ops.branch_starts()?;
+                let name = deletable_branch(&selected, &state, &starts)?;
+                let detail = format!(
+                    "삭제할 로컬 브랜치 · {name}\n커밋 · {}\n병합된 브랜치만 삭제합니다. 원격 브랜치는 그대로 둡니다.",
+                    selected.start.oid
+                );
+                Ok((selected, captured_head(&starts), detail))
+            },
+            |app, (selected, head, detail), w, cx| {
+                app.confirm_branch_write(selected.root.clone(), "로컬 브랜치 삭제", detail, BranchWrite::Delete { selected, head }, w, cx);
+            },
+            window, cx,
+        );
+    }
+
     fn confirm_branch_write(
         &mut self,
         root: PathBuf,
@@ -347,6 +407,7 @@ impl Pokarak {
         window.close_all_dialogs(cx);
         window.open_app_dialog(cx, move |dialog, _, cx| {
             let disabled = branch_form_disabled(&weak, &root, cx);
+            let deletion = matches!(job, BranchWrite::Delete { .. });
             let (weak, root, job) = (weak.clone(), root.clone(), job.clone());
             dialog
                 .title(format!("{label} 확인"))
@@ -372,8 +433,13 @@ impl Pokarak {
                         .child(close_button())
                         .child(
                             theme::action_button("branch-write-confirm", disabled)
-                                .label(format!("{label} 실행"))
-                                .primary()
+                                .label(if deletion {
+                                    "삭제".to_owned()
+                                } else {
+                                    format!("{label} 실행")
+                                })
+                                .when(deletion, |b| b.danger())
+                                .when(!deletion, |b| b.primary())
                                 .on_click(move |_, w, cx| {
                                     let job = job.clone();
                                     let _ = weak.update(cx, |app, cx| {
@@ -491,8 +557,8 @@ fn suggested_name(reference: &str, remotes: &[Remote]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BranchCreation, BranchStart, Remote, RepositoryState, captured_head, explicit_start,
-        selected_start, suggested_name, validate_preferred,
+        BranchCreation, BranchStart, Remote, RepositoryState, SelectedBranch, captured_head,
+        deletable_branch, explicit_start, selected_start, suggested_name, validate_preferred,
     };
 
     fn start(reference: &str, letter: char) -> BranchStart {
@@ -524,6 +590,47 @@ mod tests {
             checkout: false,
             track: true,
         }
+    }
+
+    #[test]
+    fn sidebar_branch_delete_targets_only_the_selected_unoccupied_local_tip() {
+        let mut state = state();
+        state
+            .local_branches
+            .extend(["feature/topic".into(), "occupied".into()]);
+        let selected = SelectedBranch {
+            root: state.root.clone(),
+            current: state.current_branch.clone(),
+            start: start("refs/heads/feature/topic", 'a'),
+        };
+        let check = |selection: &SelectedBranch, state: &RepositoryState, tip: &BranchStart| {
+            deletable_branch(selection, state, std::slice::from_ref(tip)).map(str::to_owned)
+        };
+        assert_eq!(
+            check(&selected, &state, &selected.start).unwrap(),
+            "feature/topic"
+        );
+        assert!(check(&selected, &state, &start(&selected.start.reference, 'b')).is_err());
+        assert!(deletable_branch(&selected, &state, &[]).is_err());
+        for reference in [
+            "refs/remotes/origin/feature/topic",
+            "refs/heads/main",
+            "refs/heads/occupied",
+        ] {
+            let invalid = SelectedBranch {
+                start: start(reference, 'a'),
+                ..selected.clone()
+            };
+            assert!(check(&invalid, &state, &invalid.start).is_err());
+        }
+        state.checked_out_branches.push("feature/topic".into());
+        assert!(check(&selected, &state, &selected.start).is_err());
+        state.checked_out_branches.clear();
+        state.current_branch = None;
+        assert!(check(&selected, &state, &selected.start).is_err());
+        state.current_branch = selected.current.clone();
+        state.root = "/other/worktree".into();
+        assert!(check(&selected, &state, &selected.start).is_err());
     }
 
     #[test]

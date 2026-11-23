@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui::dialogs::DialogWindowExt as _;
+use gpui_kit::component::menu::DropdownMenu as _;
 use pokarak_core::history::navigation::{Catalog, RefGroup, SearchResults};
 
 #[derive(Default)]
@@ -494,7 +495,8 @@ impl Pokarak {
                         let button = Button::new(("graph-reference", index))
                             .ghost()
                             .small()
-                            .w_full()
+                            .flex_1()
+                            .min_w_0()
                             .h(ui_px(29.))
                             .justify_start()
                             .accessibility_label(if tree.is_some() {
@@ -561,6 +563,8 @@ impl Pokarak {
                             .h(ui_px(30.))
                             .w_full()
                             .px_1()
+                            .flex()
+                            .items_center()
                             .child(button);
                         if reference
                             .is_some_and(|r| matches!(r.group, RefGroup::Local | RefGroup::Remote))
@@ -575,16 +579,31 @@ impl Pokarak {
                         if let Some(r) = reference
                             .filter(|r| matches!(r.group, RefGroup::Local | RefGroup::Remote))
                         {
-                            return Some(
-                                row.context_menu(crate::ui::git_actions::branch_context_menu(
-                                    weak.clone(),
-                                    root.clone(),
-                                    r.name.clone(),
-                                    current.clone(),
-                                    can_checkout,
-                                ))
-                                .into_any_element(),
+                            let menu = crate::ui::git_actions::branch_context_menu(
+                                weak.clone(),
+                                root.clone(),
+                                r.name.clone(),
+                                r.oid.clone(),
+                                current.clone(),
+                                can_checkout,
                             );
+                            if r.group == RefGroup::Local {
+                                let label = format!("{} 브랜치 작업", r.label);
+                                row = row.child(
+                                    Button::new(SharedString::from(format!(
+                                        "branch-actions-{}",
+                                        r.name
+                                    )))
+                                    .icon(IconName::Ellipsis)
+                                    .ghost()
+                                    .xsmall()
+                                    .size(ui_px(22.))
+                                    .accessibility_label(label.clone())
+                                    .tooltip(label)
+                                    .dropdown_menu(menu.clone()),
+                                );
+                            }
+                            return Some(row.context_menu(menu).into_any_element());
                         }
                         if let Some(t) = tree {
                             let target = weak.clone();

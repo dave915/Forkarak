@@ -295,6 +295,7 @@ impl RefBadges {
                 self.owner.clone(),
                 root.clone(),
                 reference.to_owned(),
+                oid.to_owned(),
                 self.current.clone(),
                 can_checkout,
             );

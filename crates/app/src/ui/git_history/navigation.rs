@@ -304,17 +304,14 @@ impl Pokarak {
         let trees = self.inventory.clone();
         let root = tree.path.clone();
         let current = (!tree.is_detached && !tree.head.is_empty()).then(|| tree.branch.clone());
+        let checked_out_ref = current
+            .as_ref()
+            .map(|branch| format!("refs/heads/{branch}"));
         let occupied: HashSet<_> = trees
             .iter()
             .filter(|t| !t.is_detached)
             .map(|t| t.branch.clone())
             .collect();
-        let wip = self.inline_commit_active();
-        let selected = self
-            .git_history
-            .detail
-            .as_ref()
-            .map(|d| d.commit.oid.clone());
         let scope = root.clone();
         let weak = cx.entity().downgrade();
         let sections = [
@@ -475,19 +472,18 @@ impl Pokarak {
                         let target = weak.clone();
                         let select_scope = scope.clone();
                         let jump = oid.clone();
-                        let selected = if wip {
-                            tree.is_some_and(|t| t.path == scope)
-                        } else {
-                            selected.as_ref() == Some(&oid)
-                        };
                         let open_worktree = tree.filter(|t| !t.is_prunable).map(|t| t.path.clone());
-                        let is_active = tree.is_some_and(|t| t.path == scope);
+                        let checked_out = reference
+                            .is_some_and(|r| checked_out_ref.as_deref() == Some(r.name.as_str()));
+                        let is_active = checked_out || tree.is_some_and(|t| t.path == scope);
                         let checkout = reference
                             .and_then(|r| checkout_target(&r.name, &occupied))
                             .map(str::to_owned);
                         let can_checkout = checkout.is_some();
                         let from = current.clone();
-                        let tip = if can_checkout {
+                        let tip = if checked_out {
+                            format!("{tip} · 현재 체크아웃")
+                        } else if can_checkout {
                             format!("{tip} · 더블클릭하여 체크아웃")
                         } else {
                             tip
@@ -501,6 +497,8 @@ impl Pokarak {
                             .justify_start()
                             .accessibility_label(if tree.is_some() {
                                 format!("워크트리 열기 · {label}")
+                            } else if checked_out {
+                                format!("현재 체크아웃 · {label} · 커밋으로 이동")
                             } else {
                                 format!("{} {label} 커밋으로 이동", group.title())
                             })
@@ -510,7 +508,7 @@ impl Pokarak {
                             } else {
                                 oid.is_empty() || catalog.is_none()
                             })
-                            .selected(if tree.is_some() { is_active } else { selected })
+                            .selected(is_active)
                             .child(
                                 div()
                                     .w_full()
@@ -519,9 +517,15 @@ impl Pokarak {
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .child(Icon::new(icon).size(ui_px(14.)).text_color(
-                                        palette.rgb(if selected { BLUE } else { MUTED }),
-                                    ))
+                                    .child(
+                                        Icon::new(if checked_out { IconName::Check } else { icon })
+                                            .size(ui_px(14.))
+                                            .text_color(palette.rgb(if is_active {
+                                                BLUE
+                                            } else {
+                                                MUTED
+                                            })),
+                                    )
                                     .child(div().min_w_0().text_ellipsis().child(label)),
                             )
                             .on_click(move |event, w, cx| {

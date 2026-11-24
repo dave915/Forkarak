@@ -102,7 +102,8 @@ pub(in crate::ui) fn branch_context_menu(
                     });
                 },
             ));
-            let occupied = !can_checkout || Some(local) == current_branch.as_deref();
+            let current = Some(local) == current_branch.as_deref();
+            let occupied = !can_checkout || current;
             let owner = weak.clone();
             menu = menu.item(
                 PopupMenuItem::new(if occupied {
@@ -120,14 +121,19 @@ pub(in crate::ui) fn branch_context_menu(
             let rename_root = root.clone();
             let rename_ref = reference.clone();
             let rename_weak = weak.clone();
+            let rename_blocked = occupied && !current;
             menu = menu.item(
-                PopupMenuItem::new(format!("{local} 이름 변경…"))
-                    .disabled(disabled)
-                    .on_click(move |_, w, cx| {
-                        let _ = rename_weak.update(cx, |app, cx| {
-                            app.open_branch_rename(rename_root.clone(), rename_ref.clone(), w, cx);
-                        });
-                    }),
+                PopupMenuItem::new(if rename_blocked {
+                    "이름 변경 · 다른 워크트리에서 사용 중".into()
+                } else {
+                    format!("{local} 이름 변경…")
+                })
+                .disabled(disabled || rename_blocked)
+                .on_click(move |_, w, cx| {
+                    let _ = rename_weak.update(cx, |app, cx| {
+                        app.open_branch_rename(rename_root.clone(), rename_ref.clone(), w, cx);
+                    });
+                }),
             );
             let branch = local.to_owned();
             let weak = weak.clone();
@@ -135,7 +141,7 @@ pub(in crate::ui) fn branch_context_menu(
             let current = current_branch.clone();
             menu = menu.item(
                 PopupMenuItem::new(format!("{branch} 체크아웃…"))
-                    .disabled(disabled || !can_checkout || Some(local) == current_branch.as_deref())
+                    .disabled(disabled || occupied)
                     .on_click(move |_, w, cx| {
                         let _ = weak.update(cx, |app, cx| {
                             app.review_branch_checkout(

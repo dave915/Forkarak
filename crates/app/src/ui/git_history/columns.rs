@@ -260,7 +260,7 @@ impl Pokarak {
 mod tests {
     use super::{
         Columns,
-        GraphColumn::{Author, Graph, Message, Refs},
+        GraphColumn::{Author, Message, Refs},
         SavedView,
     };
 

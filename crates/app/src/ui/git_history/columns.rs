@@ -6,6 +6,7 @@ use gpui_kit::component::{
     scroll::ScrollableElement,
 };
 
+use super::lanes::LANE_SPACING;
 use GraphColumn::*;
 
 impl GraphColumn {
@@ -38,7 +39,6 @@ impl GraphColumn {
 #[derive(Clone, Copy)]
 pub(super) struct Columns {
     widths: [f32; 6],
-    pub(super) lane_step: f32,
 }
 
 impl Columns {
@@ -56,7 +56,7 @@ impl Columns {
 
     fn new(viewport: f32, lanes: usize, saved: Option<&SavedView>) -> Self {
         let labels = (viewport * 0.18).clamp(84., 166.).round();
-        let graph = (lanes as f32 * 13. + 16.)
+        let graph = (lanes as f32 * LANE_SPACING + 16.)
             .clamp(50., (viewport * 0.14).clamp(60., 150.))
             .round();
         let author = (viewport * 0.10).clamp(58., 102.).round();
@@ -72,9 +72,7 @@ impl Columns {
                 widths[column as usize] = column.clamp(*width);
             }
         }
-        let lane_step =
-            ((widths[Graph as usize] - 16.) / lanes.saturating_sub(1).max(1) as f32).min(13.);
-        Self { widths, lane_step }
+        Self { widths }
     }
 
     pub(super) fn width(self, column: GraphColumn) -> f32 {
@@ -267,14 +265,13 @@ mod tests {
     };
 
     #[test]
-    fn automatic_widths_fit_the_pane_and_keep_lanes_inside_the_graph() {
+    fn automatic_widths_fit_the_pane_even_when_some_graph_lanes_overflow() {
         for viewport in [520., 700., 1200.] {
             for lanes in [1, 9, 84] {
                 let columns = Columns::new(viewport, lanes, None);
                 assert_eq!(columns.content_width(), viewport);
                 assert!(columns.width(Message) >= 96.);
                 assert!(columns.width(Author) >= 48.);
-                assert!(8. + (lanes - 1) as f32 * columns.lane_step <= columns.width(Graph) - 7.9);
             }
         }
     }

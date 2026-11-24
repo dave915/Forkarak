@@ -165,7 +165,6 @@ impl Pokarak {
                                 .child(graph_view(
                                     entry.graph.clone(),
                                     columns.width(GraphColumn::Graph),
-                                    columns.lane_step,
                                     index,
                                     trace.as_ref(),
                                     palette,

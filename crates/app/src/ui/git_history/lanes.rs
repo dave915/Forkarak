@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) const LANE_SPACING: f32 = 13.;
+
 /// The tip follows its first parent at a merge. Between commits the same path
 /// can move sideways as unrelated lanes start or end.
 #[derive(Clone, Copy, Default)]
@@ -66,7 +68,6 @@ fn inactive_color(color: Rgba, palette: Palette, node: bool) -> Rgba {
 pub(super) fn graph_view(
     row: GraphRow,
     width: f32,
-    step: f32,
     index: usize,
     trace: Option<&BranchTrace>,
     palette: Palette,
@@ -75,7 +76,7 @@ pub(super) fn graph_view(
     canvas(
         move |_, _, _| row,
         move |bounds, row, window, _| {
-            let x = |lane: usize| bounds.left() + ui_px(8. + lane as f32 * step);
+            let x = |lane: usize| bounds.left() + ui_px(8. + lane as f32 * LANE_SPACING);
             let top = bounds.top();
             let middle = top + bounds.size.height * 0.5;
             let bottom = bounds.bottom();
@@ -103,41 +104,43 @@ pub(super) fn graph_view(
                     }
                 }
             };
-            for (lane, &track) in row.incoming_tracks.iter().enumerate() {
-                stroke(
-                    point(x(lane), top),
-                    point(x(lane), middle),
-                    track,
-                    route.is_some_and(|(r, _)| r.incoming == Some(lane)),
-                    window,
-                );
-            }
-            for &(from, to) in &row.edges {
-                stroke(
-                    point(x(from), middle),
-                    point(x(to), bottom),
-                    row.outgoing_tracks[to],
-                    route.is_some_and(|(r, _)| r.outgoing == Some((from, to))),
-                    window,
-                );
-            }
-            let color = match route {
-                Some((r, color)) if r.node => color,
-                Some(_) => inactive_color(track_color(row.track, palette), palette, true),
-                None => track_color(row.track, palette),
-            };
-            let radius = ui_px(4.);
-            window.paint_quad(quad(
-                Bounds::new(
-                    point(x(row.lane) - radius, middle - radius),
-                    size(radius * 2., radius * 2.),
-                ),
-                radius,
-                palette.rgb(BG),
-                ui_px(1.8),
-                color,
-                BorderStyle::Solid,
-            ));
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                for (lane, &track) in row.incoming_tracks.iter().enumerate() {
+                    stroke(
+                        point(x(lane), top),
+                        point(x(lane), middle),
+                        track,
+                        route.is_some_and(|(r, _)| r.incoming == Some(lane)),
+                        window,
+                    );
+                }
+                for &(from, to) in &row.edges {
+                    stroke(
+                        point(x(from), middle),
+                        point(x(to), bottom),
+                        row.outgoing_tracks[to],
+                        route.is_some_and(|(r, _)| r.outgoing == Some((from, to))),
+                        window,
+                    );
+                }
+                let color = match route {
+                    Some((r, color)) if r.node => color,
+                    Some(_) => inactive_color(track_color(row.track, palette), palette, true),
+                    None => track_color(row.track, palette),
+                };
+                let radius = ui_px(4.);
+                window.paint_quad(quad(
+                    Bounds::new(
+                        point(x(row.lane) - radius, middle - radius),
+                        size(radius * 2., radius * 2.),
+                    ),
+                    radius,
+                    palette.rgb(BG),
+                    ui_px(1.8),
+                    color,
+                    BorderStyle::Solid,
+                ));
+            });
         },
     )
     .w(ui_px(width))

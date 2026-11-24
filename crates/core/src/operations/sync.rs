@@ -22,6 +22,12 @@ pub struct BranchSync {
     pub last_fetch: Option<SystemTime>,
 }
 
+struct BranchUpstream {
+    upstream: Upstream,
+    local_oid: String,
+    upstream_oid: Option<String>,
+}
+
 impl GitOperations {
     /// Reads only local refs/objects and FETCH_HEAD; never fetches or runs filters.
     pub fn branch_sync(&self) -> Result<BranchSync> {
@@ -47,6 +53,34 @@ impl GitOperations {
         let Some(branch) = &sync.branch else {
             return Ok(sync);
         };
+        if let Some(tracking) = self.read_branch_upstream(branch)? {
+            sync.upstream = Some(tracking.upstream);
+            if let Some(oid) = tracking.upstream_oid {
+                crate::history::validate_oid(&tracking.local_oid)?;
+                let range = format!("{}...{oid}", tracking.local_oid);
+                let counts = self.run(&["rev-list", "--left-right", "--count", &range, "--"])?;
+                if counts.code == Some(0) && !counts.truncated {
+                    let values: Vec<_> = std::str::from_utf8(&counts.stdout)?
+                        .split_whitespace()
+                        .collect();
+                    ensure!(values.len() == 2, "Invalid ahead/behind counts");
+                    sync.ahead = Some(values[0].parse()?);
+                    sync.behind = Some(values[1].parse()?);
+                }
+            }
+        }
+        Ok(sync)
+    }
+
+    /// Reads tracking metadata for a named local branch without checking it out.
+    pub fn branch_upstream(&self, branch: &str) -> Result<Option<Upstream>> {
+        self.validate_branch(branch)?;
+        Ok(self
+            .read_branch_upstream(branch)?
+            .map(|tracking| tracking.upstream))
+    }
+
+    fn read_branch_upstream(&self, branch: &str) -> Result<Option<BranchUpstream>> {
         let reference = format!("refs/heads/{branch}");
         let bytes = self.metadata(&[
             "for-each-ref",
@@ -60,29 +94,19 @@ impl GitOperations {
             if fields[0] != reference || fields[2].is_empty() {
                 continue;
             }
-            let oid = self.branch_commit(fields[2])?;
-            sync.upstream = Some(Upstream {
-                reference: fields[2].into(),
-                remote: fields[3].into(),
-                branch: fields[4].into(),
-                missing: oid.is_none(),
-            });
-            if let Some(oid) = oid {
-                crate::history::validate_oid(fields[1])?;
-                let range = format!("{}...{oid}", fields[1]);
-                let counts = self.run(&["rev-list", "--left-right", "--count", &range, "--"])?;
-                if counts.code == Some(0) && !counts.truncated {
-                    let values: Vec<_> = std::str::from_utf8(&counts.stdout)?
-                        .split_whitespace()
-                        .collect();
-                    ensure!(values.len() == 2, "Invalid ahead/behind counts");
-                    sync.ahead = Some(values[0].parse()?);
-                    sync.behind = Some(values[1].parse()?);
-                }
-            }
-            break;
+            let upstream_oid = self.branch_commit(fields[2])?;
+            return Ok(Some(BranchUpstream {
+                upstream: Upstream {
+                    reference: fields[2].into(),
+                    remote: fields[3].into(),
+                    branch: fields[4].into(),
+                    missing: upstream_oid.is_none(),
+                },
+                local_oid: fields[1].into(),
+                upstream_oid,
+            }));
         }
-        Ok(sync)
+        Ok(None)
     }
 
     /// Push one local branch to one explicitly named remote branch, without force.

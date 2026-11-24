@@ -11,24 +11,32 @@ fn sidebar_branch_push_uses_the_clicked_source_and_only_its_known_upstream() {
     let upstream = sync.upstream.as_mut().unwrap();
     upstream.remote = "team".into();
     upstream.reference = "refs/remotes/team/trunk".into();
-    let (source, defaults) = PushFormSource::Selected("main").defaults(&state, Some(&sync));
+    let (source, defaults) = PushFormSource::Selected {
+        name: "main",
+        upstream: None,
+    }
+    .defaults(&state, Some(&sync));
     assert_eq!(source, Some("main"));
     assert_eq!(defaults.remote.as_deref(), Some("team"));
     assert_eq!(defaults.branch, "trunk");
     assert!(!defaults.set_upstream);
 
-    let (source, defaults) = PushFormSource::Selected("unpublished").defaults(&state, Some(&sync));
+    let unpublished = || PushFormSource::Selected {
+        name: "unpublished",
+        upstream: None,
+    };
+    let (source, defaults) = unpublished().defaults(&state, Some(&sync));
     assert_eq!(source, Some("unpublished"));
     assert_eq!(defaults.remote.as_deref(), Some("origin"));
     assert_eq!(defaults.branch, "unpublished");
     assert!(!defaults.set_upstream);
     state.remotes[0].name = "fork".into();
-    let (_, ambiguous) = PushFormSource::Selected("unpublished").defaults(&state, Some(&sync));
+    let (_, ambiguous) = unpublished().defaults(&state, Some(&sync));
     assert_eq!(ambiguous.remote, None);
 }
 
 #[test]
-fn publish_form_previews_then_tracks_the_selected_worktree_branch() {
+fn publish_and_sidebar_push_use_the_selected_branch_destination() {
     // Isolate the operations layer's child Git processes without changing the test runner's environment.
     const FIXTURE: &str = "FORKARAK_PUBLISH_FIXTURE";
     let Some(directory) = env::var_os(FIXTURE) else {
@@ -59,7 +67,7 @@ fn publish_form_previews_then_tracks_the_selected_worktree_branch() {
     let directory = Path::new(&directory);
     let root = directory.join("main");
     let linked = directory.join("linked");
-    let bare = directory.join("team.git");
+    let bare = directory.join("origin.git");
     let git = |root: &Path, args: &[&str]| fixture_git(root, Path::new("/dev/null"), args);
     fs::create_dir(&root).unwrap();
     git(&root, &["init", "-b", "main", "--", "."]);
@@ -90,7 +98,7 @@ fn publish_form_previews_then_tracks_the_selected_worktree_branch() {
     git(&root, &["init", "--bare", "--", bare.to_str().unwrap()]);
     git(
         &root,
-        &["remote", "add", "--", "team", bare.to_str().unwrap()],
+        &["remote", "add", "--", "origin", bare.to_str().unwrap()],
     );
 
     let ops = GitOperations::open(&linked).unwrap();
@@ -100,7 +108,7 @@ fn publish_form_previews_then_tracks_the_selected_worktree_branch() {
     let (local, defaults) = PushFormSource::Current.defaults(&repo.state, repo.sync.as_ref().ok());
     assert_eq!(local, Some("feature/topic"));
     assert_eq!(defaults.branch, "feature/topic");
-    assert_eq!(defaults.remote.as_deref(), Some("team"));
+    assert_eq!(defaults.remote.as_deref(), Some("origin"));
     assert!(defaults.set_upstream);
     let target = PushTarget {
         local: local.unwrap().into(),
@@ -128,7 +136,7 @@ fn publish_form_previews_then_tracks_the_selected_worktree_branch() {
         PushTarget::configured(&after.state, after.sync.as_ref().unwrap())
             .unwrap()
             .destination(),
-        "team/feature/topic"
+        "origin/feature/topic"
     );
     assert!(
         GitOperations::open(&root)
@@ -138,4 +146,61 @@ fn publish_form_previews_then_tracks_the_selected_worktree_branch() {
             .upstream
             .is_none()
     );
+
+    let primary = GitOperations::open(&root).unwrap();
+    primary
+        .push_branch("origin", "main", "published/trunk", true)
+        .unwrap();
+    git(
+        &root,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "update main",
+        ],
+    );
+    let new_tip = git(&root, &["rev-parse", "--verify", "refs/heads/main"]);
+    let selected = ops.branch_upstream("main").unwrap().unwrap();
+    let (source, defaults) = PushFormSource::Selected {
+        name: "main",
+        upstream: Some(&selected),
+    }
+    .defaults(&after.state, after.sync.as_ref().ok());
+    assert_eq!(source, Some("main"));
+    assert_eq!(defaults.remote.as_deref(), Some("origin"));
+    assert_eq!(defaults.branch, "published/trunk");
+    assert!(!defaults.set_upstream);
+    let target = PushTarget {
+        local: source.unwrap().into(),
+        remote: defaults.remote.unwrap(),
+        branch: defaults.branch,
+        set_upstream: defaults.set_upstream,
+    };
+    let review = target
+        .review(&ops, &after.state, &ops.branch_starts().unwrap())
+        .unwrap();
+    let (ReviewSource::Operation(preview), Some(ReviewWrite::Push(confirmed))) =
+        (review.source, review.write)
+    else {
+        panic!("expected the sidebar Push confirmation");
+    };
+    ops.execute_push_preview(&preview, confirmed.set_upstream)
+        .unwrap();
+    assert_eq!(
+        git(
+            &bare,
+            &["rev-parse", "--verify", "refs/heads/published/trunk"]
+        ),
+        new_tip
+    );
+    assert_eq!(
+        git(&bare, &["for-each-ref", "--format=%(refname)"]),
+        "refs/heads/feature/topic\nrefs/heads/published/trunk"
+    );
+    assert_eq!(git(&linked, &["branch", "--show-current"]), "feature/topic");
 }

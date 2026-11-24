@@ -21,7 +21,10 @@ pub(in crate::ui::git_actions) struct PushTarget {
 
 enum PushFormSource<'a> {
     Current,
-    Selected(&'a str),
+    Selected {
+        name: &'a str,
+        upstream: Option<&'a Upstream>,
+    },
     Edit(&'a PushTarget),
 }
 
@@ -41,12 +44,18 @@ impl<'a> PushFormSource<'a> {
                 },
             );
         }
-        if let Self::Selected(name) = self {
-            let mut defaults = network_defaults(state, sync, Some(name));
-            if Some(name) != state.current_branch.as_deref() {
-                // An editable suggestion. branch_sync only knows the current branch's upstream.
-                defaults.remote = preferred_remote(&state.remotes);
-            }
+        if let Self::Selected { name, upstream } = self {
+            let defaults = if Some(name) == state.current_branch.as_deref() {
+                network_defaults(state, sync, Some(name))
+            } else if let Some(upstream) = upstream {
+                upstream_destination(state, upstream)
+            } else {
+                NetworkDefaults {
+                    remote: preferred_remote(&state.remotes),
+                    branch: name.to_owned(),
+                    set_upstream: false,
+                }
+            };
             return (Some(name), defaults);
         }
         let local = state.current_branch.as_deref().filter(|branch| {
@@ -180,10 +189,25 @@ impl Pokarak {
                 let name = selected
                     .local_name(&repository.state, &repository.starts)?
                     .to_owned();
-                Ok((repository, name))
+                let upstream = if Some(name.as_str()) == repository.state.current_branch.as_deref()
+                {
+                    None
+                } else {
+                    ops.branch_upstream(&name)?
+                };
+                Ok((repository, name, upstream))
             },
-            |app, (repository, name), w, cx| {
-                app.branch_push_form(repository, PushFormSource::Selected(&name), None, w, cx);
+            |app, (repository, name, upstream), w, cx| {
+                app.branch_push_form(
+                    repository,
+                    PushFormSource::Selected {
+                        name: &name,
+                        upstream: upstream.as_ref(),
+                    },
+                    None,
+                    w,
+                    cx,
+                );
             },
             window,
             cx,

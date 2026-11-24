@@ -3,7 +3,10 @@ use super::*;
 use crate::ui::dialogs::DialogWindowExt as _;
 use gpui_kit::component::checkbox::Checkbox;
 mod push;
-use pokarak_core::operations::{branches::BranchStart, sync::BranchSync};
+use pokarak_core::operations::{
+    branches::BranchStart,
+    sync::{BranchSync, Upstream},
+};
 pub(super) use push::PushTarget;
 
 type GitJob = Arc<dyn Fn(GitOperations) -> anyhow::Result<OperationOutput> + Send + Sync>;
@@ -42,34 +45,32 @@ fn network_defaults(
     let upstream = sync
         .filter(|_| current_source)
         .and_then(|s| s.upstream.as_ref());
-    let remote = if let Some(upstream) = upstream {
-        // '.' is a local tracking relationship, not a network destination.
-        if upstream.remote == "." {
-            None
-        } else {
-            state
-                .remotes
-                .iter()
-                .find(|r| r.name == upstream.remote)
-                .map(|r| r.name.clone())
-        }
-    } else if current_source {
-        preferred_remote(&state.remotes)
-    } else {
-        None
-    };
-    let branch = match upstream {
-        Some(upstream) => upstream
-            .branch
-            .strip_prefix("refs/heads/")
-            .unwrap_or_default(),
-        None => source.unwrap_or_default(),
+    if let Some(upstream) = upstream {
+        return upstream_destination(state, upstream);
     }
-    .to_owned();
+    NetworkDefaults {
+        remote: current_source
+            .then(|| preferred_remote(&state.remotes))
+            .flatten(),
+        branch: source.unwrap_or_default().to_owned(),
+        set_upstream: current_source,
+    }
+}
+
+fn upstream_destination(state: &RepositoryState, upstream: &Upstream) -> NetworkDefaults {
+    let remote = state
+        .remotes
+        .iter()
+        .find(|r| upstream.remote != "." && r.name == upstream.remote)
+        .map(|r| r.name.clone());
     NetworkDefaults {
         remote,
-        branch,
-        set_upstream: current_source && upstream.is_none(),
+        branch: upstream
+            .branch
+            .strip_prefix("refs/heads/")
+            .unwrap_or_default()
+            .to_owned(),
+        set_upstream: false,
     }
 }
 
